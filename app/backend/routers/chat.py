@@ -42,7 +42,7 @@ class MessageItem(BaseModel):
 # ── 路由 ──
 
 @router.post("")
-async def chat(
+async def send_message(
     req: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ):

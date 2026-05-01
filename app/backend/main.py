@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.backend.config import get_settings
 from app.backend.db.base import Base, init_db, get_engine
 from app.backend.models import *  # noqa — 确保所有模型注册到 Base
-from app.backend.routers import health, chat
+from app.backend.routers import health, chat, profile
 
 
 @asynccontextmanager
@@ -41,3 +41,4 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(profile.router, prefix="/api")

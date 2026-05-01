@@ -13,11 +13,11 @@ from app.backend.config import get_settings
 # 不设 LLM_MODEL 环境变量，代码内置路由
 _ROUTE_MAP: dict[str, str] = {
     "general_chat": "qwen-plus",        # 日常对话、通用问答
-    "career_planning": "qwen-max",      # 职业规划、路径生成（需强推理）
-    "resume_optimize": "qwen-max",      # 简历优化（需结构化输出）
-    "mock_interview": "qwen-max",       # 模拟面试（需追问逻辑）
+    "career_planning": "qwen-plus",      # 职业规划、路径生成（需强推理）
+    "resume_optimize": "qwen-plus",      # 简历优化（需结构化输出）
+    "mock_interview": "qwen-plus",       # 模拟面试（需追问逻辑）
     "skill_analysis": "qwen-plus",      # 技能分析（轻量）
-    "path_generation": "qwen-max",      # 路径生成（复杂）
+    "path_generation": "qwen-plus",      # 路径生成（复杂）
     "memory_summarize": "qwen-plus",    # 记忆摘要（轻量）
     "embedding": "text-embedding-v4",   # 向量化（专用模型）
 }
