@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.agent.orchestrator import classify, build_system_prompt
@@ -66,21 +67,22 @@ async def stream_chat(
         {"role": "user", "content": user_input}
     ]
 
-    # 3. 真流式生成
-    full_content = ""
-    async for token in chat_stream(task_type, messages):
-        full_content += token
-        yield _sse_token(token, conv.conversation_id)
-
-    # 保存用户消息
+    # 3. 保存用户消息（先落库，流中断不丢）
     db.add(Message(
         conversation_id=conv.conversation_id,
         role="user",
         content=user_input,
         intent=intent,
     ))
+    await db.flush()
 
-    # 保存 AI 回复
+    # 4. 真流式生成
+    full_content = ""
+    async for token in chat_stream(task_type, messages):
+        full_content += token
+        yield _sse_token(token, conv.conversation_id)
+
+    # 5. 保存 AI 回复
     db.add(Message(
         conversation_id=conv.conversation_id,
         role="assistant",
@@ -88,17 +90,19 @@ async def stream_chat(
         intent=intent,
     ))
 
-    # 更新会话
     conv.message_count = (conv.message_count or 0) + 2
-    conv.last_message_at = func.now()
+    conv.last_message_at = datetime.now(timezone.utc)
     await db.flush()
 
     yield _sse_done(conv.conversation_id)
 
 
 async def _load_user_profile(db: AsyncSession, user_id: str) -> dict | None:
-    """从 DB 加载用户画像"""
-    from app.backend.models.user import UserProfile
+    """从 DB 加载用户画像（含 nickname）"""
+    from app.backend.models.user import User, UserProfile
+
+    user_result = await db.execute(select(User).where(User.user_id == user_id))
+    user = user_result.scalar_one_or_none()
 
     result = await db.execute(
         select(UserProfile).where(UserProfile.user_id == user_id)
@@ -107,7 +111,7 @@ async def _load_user_profile(db: AsyncSession, user_id: str) -> dict | None:
     if profile is None:
         return None
     return {
-        "nickname": None,  # 需要关联 User 表查询
+        "nickname": user.nickname if user else None,
         "grade": profile.grade,
         "school_name": profile.school_name,
         "major": profile.major,

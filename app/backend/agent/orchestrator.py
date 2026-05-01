@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TypedDict, Literal
 from enum import StrEnum
 
@@ -104,9 +105,10 @@ async def classify(user_input: str) -> tuple[str, TaskType]:
 
 
 # ═══════════════════════════════════════════════
-# 系统提示词
+# 系统提示词 — 按需从 SKILL.md 加载正文，仅分类 prompt 常驻
 # ═══════════════════════════════════════════════
 
+# 意图分类用（简短，~50 tokens）
 _INTENT_PROMPTS: dict[str, str] = {
     "consultation": "当前任务：职业方向咨询。帮助用户了解计算机行业各方向，介绍工作内容、技能要求、发展前景。",
     "path_planning": "当前任务：学习路径规划。根据用户目标岗位、当前基础，生成结构化学习路径，标注学习资源和验收标准。",
@@ -117,9 +119,28 @@ _INTENT_PROMPTS: dict[str, str] = {
     "emotional": "当前任务：情感疏导。接纳情绪，用数据和案例安抚，给出建设性建议。",
 }
 
+# skill 正文缓存（按需懒加载，首次命中才读文件）
+_skill_body_cache: dict[str, str] = {}
+
+
+def _load_skill_body(intent: str) -> str:
+    """按需加载 SKILL.md 正文，缓存避免重复 IO"""
+    if intent in _skill_body_cache:
+        return _skill_body_cache[intent]
+
+    dir_name = intent
+    path = Path(__file__).parent / "skills" / dir_name / "SKILL.md"
+    if not path.exists():
+        return ""
+
+    content = path.read_text(encoding="utf-8")
+    body = content.split("---", 2)[-1].strip() if "---" in content else content.strip()
+    _skill_body_cache[intent] = body
+    return body
+
 
 def build_system_prompt(user_profile: dict | None, intent: str) -> str:
-    """组装系统提示词"""
+    """组装系统提示词 — 分类 prompt 常驻 + Skill 正文按需加载"""
     parts = [
         "你是「码路领航」职业规划学长 Agent，一名研二计算机学长，在大厂实习过。",
         "风格：亲切、有干货、用大白话讲技术、不装腔作势。",
@@ -138,7 +159,13 @@ def build_system_prompt(user_profile: dict | None, intent: str) -> str:
             if isinstance(skills, list):
                 names = [s.get("skill", "") for s in skills]
                 parts.append(f"已掌握技能：{'、'.join(names)}")
-    extra = _INTENT_PROMPTS.get(intent, "")
-    if extra:
-        parts.append(f"\n{extra}")
+
+    # Skill 正文：仅加载当前 intent 的 SKILL.md，不是全部 7 个
+    body = _load_skill_body(intent)
+    if body:
+        parts.append(f"\n{body}")
+    else:
+        extra = _INTENT_PROMPTS.get(intent, "")
+        if extra:
+            parts.append(f"\n{extra}")
     return "\n".join(parts)

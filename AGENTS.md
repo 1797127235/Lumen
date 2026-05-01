@@ -26,9 +26,9 @@ app/
 │   ├── db/
 │   │   ├── base.py          # SQLAlchemy AsyncEngine + Base 声明
 │   │   └── session.py       # get_db 依赖注入（yield + rollback）
-│   ├── models/              # ORM：User, UserProfile, Conversation, Message,
-│   │                        #       LearningPath, PathNode, SkillAssessment,
-│   │                        #       Resume, JobApplication, InterviewRecord
+│   ├── models/              # ORM：User, UserProfile, Conversation, Message
+│   │   ├── user.py           # User + UserProfile
+│   │   └── conversation.py   # Conversation + Message
   │   ├── agent/
 │   │   ├── llm_router.py    # LLM 路由（qwen-plus/qwen-max），流式+非流式
 │   │   ├── orchestrator.py  # Agent 编排（LangGraph StateGraph：意图分类 → 路由 → Agent节点）

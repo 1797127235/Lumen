@@ -18,32 +18,10 @@ class Settings(BaseSettings):
     # ── 核心鉴权 ──
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    jwt_secret_key: str = "career-planner-secret-key-2024"
-
-    # ── 外部 API ──
-    tavily_api_key: str = ""
-    firecrawl_api_key: str = ""
-
-    # ── 简历解析 SDK ──
-    resumesdk_appcode: str = ""
-    resumesdk_appkey: str = ""
-    resumesdk_appsecret: str = ""
-
-    # ── 讯飞（语音） ──
-    xfyun_app_id: str = ""
-    xfyun_api_key: str = ""
-    xfyun_api_secret: str = ""
+    jwt_secret_key: str = ""  # 生产环境必须通过 .env 设置
 
     # ── 模型配置 ──
     embedding_model: str = "text-embedding-v4"
-    # LLM_MODEL 不在此设 — 代码内置 qwen-plus / qwen-max 按用途路由
-
-    # ── PDF 导出 ──
-    pdf_export_engine: str = "playwright"
-    pdf_export_timeout_seconds: int = 60
-    pdf_export_page_format: str = "A4"
-    pdf_export_locale: str = "zh-CN"
-    pdf_export_fallback_to_reportlab: bool = True
 
     # ── 前端 ──
     frontend_url: str = "http://localhost:5173"

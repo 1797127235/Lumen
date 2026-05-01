@@ -46,8 +46,8 @@ class SimpleRAG:
 
         scores.sort(key=lambda x: x[0], reverse=True)
         results = []
-        for _, idx in scores[:top_k]:
-            results.append({**self._docs[idx], "_score": scores[idx][0]})
+        for score, idx in scores[:top_k]:
+            results.append({**self._docs[idx], "_score": score})
         return results
 
     def _cosine_sim(self, a: list[float], b: list[float]) -> float:
