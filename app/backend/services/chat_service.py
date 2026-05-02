@@ -122,21 +122,28 @@ async def stream_chat(
         ]
 
         full_content = ""
-        async for token in chat_stream(task_type, messages):
-            full_content += token
-            yield _sse_token(token, conv.conversation_id)
-
-        db.add(Message(
-            conversation_id=conv.conversation_id,
-            role="assistant",
-            content=full_content,
-            intent=intent,
-        ))
-        conv.message_count = (conv.message_count or 0) + 1
-        conv.last_message_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            async for token in chat_stream(task_type, messages):
+                full_content += token
+                yield _sse_token(token, conv.conversation_id)
+        finally:
+            # 无论正常完成还是客户端断开，都保存已生成的内容
+            if full_content:
+                db.add(Message(
+                    conversation_id=conv.conversation_id,
+                    role="assistant",
+                    content=full_content,
+                    intent=intent,
+                ))
+                conv.message_count = (conv.message_count or 0) + 1
+                conv.last_message_at = datetime.now(timezone.utc)
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    logger.warning("保存 AI 回复失败 (可能为部分): conversation_id=%s", conv.conversation_id)
     except Exception:
-        logger.exception("生成或保存 AI 回复失败: conversation_id=%s", conv.conversation_id)
+        logger.exception("生成 AI 回复失败: conversation_id=%s", conv.conversation_id)
         await db.rollback()
         yield _sse_error("生成回复失败，请稍后重试")
         return
