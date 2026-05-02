@@ -86,7 +86,7 @@ career-os/
 
 ## Key Architecture Decisions
 
-- **Agent 编排**：LangGraph StateGraph 实现意图分类 → `classify()` 返回 (intent, task_type)，流式生成绕开图直接走 `chat_stream`
+- **Agent 编排**：自发现 Skill 系统 + 纯函数编排。`discover_skills()` 扫描 `skills/` 目录自动生成意图分类 prompt 和映射表，`run_orchestrator()` 统一返回 (intent, task_type, system_prompt)。加新 Skill 只需建目录放 `SKILL.md`，零代码改动
 - **Skill 系统**：7 个 Skill 按需加载，`_load_skill_body()` 懒加载 SKILL.md，节省 token
 - **LLM 路由硬编码**：`llm_router.py` 的 `_ROUTE_MAP` 按任务类型选模型，不要设 `LLM_MODEL` 环境变量（注释里有说明）
 - **数据库**：开发阶段 SQLite（`career_os.db`），生产切 PostgreSQL — 切换方式：改 `.env` 中 `DATABASE_URL`

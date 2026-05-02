@@ -1,19 +1,15 @@
 """对话 API — SSE 流式对话 + 历史查询"""
-
 from __future__ import annotations
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.backend.db.session import get_db
 from app.backend.models.conversation import Conversation, Message
 from app.backend.services.chat_service import stream_chat
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
 
 # ── 请求/响应模型 ──
 

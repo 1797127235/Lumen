@@ -114,7 +114,7 @@ career-os/
 | 后端 | FastAPI + SQLAlchemy 2.0 | async，类型安全 |
 | 数据库 | SQLite → PostgreSQL | 开发用 SQLite，生产切 PG |
 | LLM | DashScope (qwen-plus) | 国内访问快，性价比高 |
-| Agent | LangGraph | 只做意图分类，不搞复杂编排 |
+| Agent | 自发现 Skill + 纯函数编排 | 扫描 skills/ 目录自动生成意图分类，统一编排入口返回 (intent, task_type, system_prompt) |
 | 前端 | React + Vite + Tailwind | shadcn/ui 组件，OKLCH 配色 |
 
 ---
