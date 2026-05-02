@@ -58,7 +58,7 @@ career-os/
 │   │   ├── profile_service.py  # 简历提取 + LLM 解析 + DB 写入 + 重置
 │   │   └── jd_service.py    # JD 诊断：画像 + JD → LLM → 匹配评分 + 缺口 + 建议
 │   └── agent/skills/        # 7 个 SKILL.md 目录（按意图目录名匹配）
-├── frontend/
+├── app/frontend/
 │   ├── src/
 │   │   ├── pages/
 │   │   │   ├── Chat.tsx     # SSE 流式对话 + 历史抽屉 + 空态示例

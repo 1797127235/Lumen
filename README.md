@@ -97,7 +97,7 @@ career-os/
 │   ├── models/          # ORM 模型
 │   ├── schemas/         # Pydantic 模型
 │   └── skills/          # Skill 定义（SKILL.md）
-├── frontend/
+├── app/frontend/
 │   └── src/pages/       # 对话、画像、JD 诊断三页
 ├── docs/                # 设计文档
 │   ├── 功能设计/        # 各功能详细设计

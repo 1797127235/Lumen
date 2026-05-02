@@ -11,7 +11,7 @@ pip install -r requirements.txt -q 2>$null
 Write-Host " OK"
 
 Write-Host "[2/3] Checking Frontend deps..." -NoNewline
-Push-Location frontend
+Push-Location app/frontend
 if (-not (Test-Path node_modules)) {
     npm install -q 2>$null
 }
@@ -27,7 +27,7 @@ Write-Host "Press Ctrl+C to stop"
 Write-Host "=============================="
 
 $backend = Start-Process -FilePath "python" -ArgumentList "-m","uvicorn","app.backend.main:app","--host","0.0.0.0","--port","8001","--reload" -WorkingDirectory $PSScriptRoot -PassThru -NoNewWindow
-$frontend = Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$PSScriptRoot\frontend" -PassThru -NoNewWindow
+$frontend = Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$PSScriptRoot\app/frontend" -PassThru -NoNewWindow
 
 try {
     while (-not $backend.HasExited -and -not $frontend.HasExited) {

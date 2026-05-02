@@ -2,7 +2,7 @@
 
 > 范围:对话 / 画像 / JD 诊断 三页端到端能用。
 > 风格:温柔学长 · 手写感 · 偏人文。仅深色。
-> 状态:**待你审阅**。批准后才开 `frontend/` 写代码。
+> 状态:**待你审阅**。批准后才开 `app/frontend/` 写代码。
 
 ---
 
@@ -374,7 +374,7 @@ xl:    26px   /* 区块标题 */
 
 按这个顺序,每步可独立验证：
 
-1. 在项目根新建 `frontend/`,初始化 Vite + React 18 + TS + Tailwind 3 + shadcn/ui ※
+1. 在 `app/frontend/` 初始化 Vite + React 18 + TS + Tailwind 3 + shadcn/ui ※
 2. 注入字体:LXGW WenKai 自托管(开源项目国内访问最稳),Alegreya / Iosevka / Caveat 用 `@fontsource` 包
 3. 把 OKLCH tokens 写到 `tailwind.config.ts` + `src/index.css` 的 `:root`,所有 shadcn/ui 默认色被覆盖
 4. 三页 + 顶部导航的静态版本(数据 mock)
