@@ -22,37 +22,32 @@ function isFilled(p: Profile | null): boolean {
 export default function JDPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => {
+    const jdText = (location.state as { jdText?: string })?.jdText
+    if (jdText) {
+      window.history.replaceState({}, '')
+    }
+    return jdText ?? ''
+  })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [profileFilled, setProfileFilled] = useState<boolean | null>(null)
   const [history, setHistory] = useState<JDHistoryItem[]>([])
-
-  // 从 JDReport 页"重新诊断"带回来的 jd_text
-  useEffect(() => {
-    const jdText = (location.state as { jdText?: string })?.jdText
-    if (jdText) {
-      setText(jdText)
-      // 清空 state，避免刷新时重复填充
-      window.history.replaceState({}, '')
-    }
-  }, [location.state])
 
   useEffect(() => {
     getProfile()
       .then((p) => setProfileFilled(isFilled(p)))
       .catch(() => setProfileFilled(false))
     loadHistory()
-  }, [])
-
-  async function loadHistory() {
-    try {
-      const res = await getJDHistory()
-      setHistory(res.items)
-    } catch {
-      // 静默失败
+    async function loadHistory() {
+      try {
+        const res = await getJDHistory()
+        setHistory(res.items)
+      } catch {
+        // 静默失败
+      }
     }
-  }
+  }, [])
 
   async function submit() {
     const trimmed = text.trim()

@@ -22,8 +22,6 @@ export default function JDReportPage() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
     getJDDiagnosis(id)
       .then((res) => {
         if (!cancelled) setData(res)

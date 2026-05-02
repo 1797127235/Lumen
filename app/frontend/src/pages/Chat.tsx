@@ -80,16 +80,20 @@ export default function Chat() {
   }
 
   async function loadConversation(id: string) {
-    const items = await getConversation(id)
-    setMessages(
-      items
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content ?? '',
-        })),
-    )
-    setConversationId(id)
+    try {
+      const items = await getConversation(id)
+      setMessages(
+        items
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content ?? '',
+          })),
+      )
+      setConversationId(id)
+    } catch (e) {
+      setError((e as Error).message || '加载会话失败')
+    }
   }
 
   function startNew() {
@@ -210,11 +214,10 @@ function UserBubble({ text }: { text: string }) {
 function HistoryDrawer({ onPick }: { onPick: (id: string) => void }) {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<ConversationSummary[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!open) return
-    setLoading(true)
     getChatHistory(20)
       .then(setItems)
       .catch(() => setItems([]))
