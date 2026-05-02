@@ -187,7 +187,6 @@ function HistoryItem({
         className="flex-1 flex items-center gap-md text-base text-text hover:text-ink"
       >
         <span className="flex-1 truncate">{item.jd_title}</span>
-        <span className="text-text-muted text-sm">{item.overall_score}分</span>
         <span className="text-text-subtle text-sm">{dateStr}</span>
       </Link>
       <button

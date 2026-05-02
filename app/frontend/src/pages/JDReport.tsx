@@ -48,7 +48,7 @@ export default function JDReportPage() {
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-[820px] px-md py-2xl">
+      <div className="mx-auto max-w-[820px] px-md py-xl">
         <div className="ink-progress mt-2xl" />
       </div>
     )
@@ -56,7 +56,7 @@ export default function JDReportPage() {
 
   if (error || !data) {
     return (
-      <div className="mx-auto max-w-[820px] px-md py-2xl flex flex-col gap-md">
+      <div className="mx-auto max-w-[820px] px-md py-xl flex flex-col gap-md">
         <p className="text-danger">{error || '诊断记录不存在'}</p>
         <Link to="/jd" className="text-ink hover:text-ink-deep">
           ← 返回 JD 诊断
@@ -66,7 +66,7 @@ export default function JDReportPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[820px] px-md py-2xl flex flex-col gap-2xl">
+    <div className="mx-auto max-w-[820px] px-md py-xl flex flex-col gap-xl">
       {/* 顶部导航 */}
       <div className="flex items-center justify-between">
         <Link
@@ -93,22 +93,15 @@ export default function JDReportPage() {
 
 function ReportContent({ data }: { data: JDDiagnoseResponse }) {
   return (
-    <div className="flex flex-col gap-2xl ink-fade-in">
-      {/* 标题 */}
-      <div>
+    <div className="flex flex-col gap-lg ink-fade-in">
+      {/* 标题 + 总结 */}
+      <div className="flex flex-col gap-xs">
         {data.jd_title ? (
           <h2 className="text-2xl">{data.jd_title}</h2>
         ) : null}
-      </div>
-
-      {/* 评分 */}
-      <div className="flex flex-col gap-xs">
-        <div className="font-mono text-3xl text-ink leading-none">
-          {data.overall_score}
-        </div>
-        <p className="text-sm text-text-muted">
-          / 100{data.summary ? ` · ${data.summary}` : ''}
-        </p>
+        {data.summary ? (
+          <p className="text-text-muted text-base">{data.summary}</p>
+        ) : null}
       </div>
 
       <div className="h-px w-full bg-border-soft" />
@@ -179,7 +172,7 @@ function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className="flex flex-col gap-md">
+    <section className="flex flex-col gap-sm">
       <h3 className="text-lg">{caption}</h3>
       {children}
     </section>
@@ -200,14 +193,13 @@ function BulletList({ items }: { items: string[] }) {
 }
 
 function GapItem({ g }: { g: GapSkill }) {
-  const right = g.suggested_hours
-    ? `约 ${g.suggested_hours} 小时`
-    : (PRIORITY_HINT[g.priority] ?? g.priority)
+  const hint = PRIORITY_HINT[g.priority] ?? g.priority
+  const color = g.priority === 'high' ? 'text-ink' : 'text-text-muted'
   return (
     <li className="flex items-baseline gap-sm text-base text-text">
       <span className="text-text-subtle">·</span>
       <span className="flex-1">{g.skill}</span>
-      <span className="text-text-muted text-sm shrink-0">{right}</span>
+      <span className={`text-xs shrink-0 ${color}`}>{hint}</span>
     </li>
   )
 }

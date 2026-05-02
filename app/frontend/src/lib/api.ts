@@ -25,7 +25,6 @@ export type ResumeUploadResponse = {
 export type GapSkill = {
   skill: string;
   priority: string;
-  suggested_hours: number | null;
 };
 
 export type JDDiagnoseResponse = {

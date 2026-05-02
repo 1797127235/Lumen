@@ -12,7 +12,6 @@ class JDDiagnoseRequest(BaseModel):
 class GapSkill(BaseModel):
     skill: str
     priority: str = "medium"  # high / medium / low
-    suggested_hours: int | None = None
 
 
 class JDDiagnoseResponse(BaseModel):
