@@ -5,19 +5,19 @@ const FEEDBACK_URL = 'https://github.com/1797127235/CareerOS/issues'
 function App() {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="h-[52px] flex items-center justify-between px-md md:px-lg border-b border-border-soft">
+      <header className="h-[64px] flex items-center justify-between px-md md:px-lg border-b border-border">
         <NavLink
           to="/"
           end
           className="flex items-baseline gap-xs text-text hover:opacity-100"
         >
-          <span className="text-lg font-han">码路</span>
+          <span className="text-xl font-han text-ink">码路</span>
           <span className="text-xs text-text-subtle font-latin tracking-wide">
             codepilot
           </span>
         </NavLink>
 
-        <nav className="flex items-center gap-lg text-sm">
+        <nav className="flex items-center gap-lg text-base">
           <NavItem to="/" end>对话</NavItem>
           <NavItem to="/profile">画像</NavItem>
           <NavItem to="/jd">JD 诊断</NavItem>
@@ -53,7 +53,7 @@ function NavItem({
       to={to}
       end={end}
       className={({ isActive }) =>
-        isActive ? 'text-ink' : 'text-text-muted hover:text-text'
+        isActive ? 'text-ink underline underline-offset-[6px] decoration-1' : 'text-text-muted hover:text-text'
       }
     >
       {children}

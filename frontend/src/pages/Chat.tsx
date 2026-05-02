@@ -101,7 +101,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="mx-auto max-w-[680px] px-md py-xl flex flex-col min-h-[calc(100vh-52px)]">
+    <div className="mx-auto max-w-[680px] px-md py-xl flex flex-col min-h-[calc(100vh-64px)]">
       <div className="flex justify-end gap-md text-xs text-text-subtle mb-lg">
         <button
           onClick={startNew}
@@ -116,10 +116,10 @@ export default function Chat() {
       <div className="flex-1 flex flex-col gap-xl">
         {messages.length === 0 && !streaming ? (
           <div className="mt-2xl flex flex-col gap-md ink-fade-in">
-            <p className="text-text-muted text-base">
+            <p className="text-text text-lg">
               我是码路 — 帮你看简历、对岗位、理方向.
             </p>
-            <p className="text-text-muted text-base">我在等你说第一句.</p>
+            <p className="text-text text-lg">我在等你说第一句.</p>
             <ul className="flex flex-col gap-2xs mt-md">
               {EXAMPLES.map((q) => (
                 <li key={q} className="flex items-baseline gap-sm">
@@ -155,7 +155,7 @@ export default function Chat() {
         <div ref={endRef} />
       </div>
 
-      <div className="mt-xl pt-md border-t border-border-soft">
+      <div className="mt-xl pt-md border-t border-border">
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
