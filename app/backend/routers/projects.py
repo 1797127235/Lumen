@@ -124,9 +124,13 @@ async def delete(
 ):
     """删除项目经历"""
     try:
-        await delete_project(db, project_id)
+        ok = await delete_project(db, project_id, user_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="项目不存在或无权删除")
         await db.commit()
         return {"deleted": True}
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("删除项目失败: project_id=%s", project_id)
         raise HTTPException(status_code=500, detail="删除项目失败")

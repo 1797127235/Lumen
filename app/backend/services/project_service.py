@@ -62,9 +62,10 @@ async def update_project(
 async def delete_project(
     db: AsyncSession,
     project_id: str,
+    user_id: str,
 ) -> bool:
-    """删除项目经历"""
-    result = await db.execute(select(Project).where(Project.id == project_id))
+    """删除项目经历 — 校验所有权"""
+    result = await db.execute(select(Project).where(Project.id == project_id, Project.user_id == user_id))
     project = result.scalar_one_or_none()
     if not project:
         return False

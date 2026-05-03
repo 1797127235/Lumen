@@ -87,6 +87,16 @@ def _refresh_retriever() -> None:
     _retriever = index.as_retriever(similarity_top_k=5)
 
 
+def _clear_collection() -> None:
+    """清空记忆 collection 并释放缓存"""
+    global _retriever, _vector_store
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    with contextlib.suppress(Exception):
+        client.delete_collection(COLLECTION)
+    _vector_store = None
+    _retriever = None
+
+
 # ─── 用户数据 → LlamaIndex Document ────────────────────────
 
 
@@ -147,7 +157,7 @@ def _projects_to_docs(projects: list) -> list[LlamaDocument]:
     for proj in projects:
         parts = [f"项目：{proj.title}"]
         if proj.tech_stack:
-            parts.append(f"技术栈：{', '.join(proj.tech_stack)}")
+            parts.append(f"技术栈：{proj.tech_stack}")
         if proj.role:
             parts.append(f"角色：{proj.role}")
         if proj.period:
@@ -177,19 +187,21 @@ def _conversations_to_docs(messages: list) -> list[LlamaDocument]:
     return docs
 
 
-# ─── 公开 API ─────────────────────────────────────────────
+# ─── 用户记忆索引 ──────────────────────────────────────────
 
 
 async def ingest_user_memory(db: AsyncSession, user_id: str) -> int:
     """从用户的个人数据构建记忆索引
 
     读取：画像 + 技能记录 + 项目经历 + 对话历史
-    写入：Chroma 向量库
+    写入：Chroma 向量库（先清空旧数据，避免重复）
 
     Returns: 索引的文档数
     """
-    global _retriever
     _ensure_settings()
+
+    # 清空旧用户记忆，避免重复索引
+    _clear_collection()
 
     ldocs: list[LlamaDocument] = []
 
@@ -215,11 +227,16 @@ async def ingest_user_memory(db: AsyncSession, user_id: str) -> int:
     result = await db.execute(select(Project).where(Project.user_id == user_id))
     ldocs.extend(_projects_to_docs(result.scalars().all()))
 
-    # 4. 对话历史（最近 50 条）
-    from app.backend.models.conversation import Message
+    # 4. 对话历史（最近 50 条，限定当前用户）
+    from app.backend.models.conversation import Conversation, Message
 
     result = await db.execute(
-        select(Message).where(Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(50)
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.conversation_id)
+        .where(Conversation.user_id == user_id)
+        .where(Message.role.in_(["user", "assistant"]))
+        .order_by(Message.created_at.desc())
+        .limit(50)
     )
     messages = list(result.scalars().all())
     ldocs.extend(_conversations_to_docs(messages))
@@ -241,6 +258,9 @@ async def ingest_user_memory(db: AsyncSession, user_id: str) -> int:
 
     logger.info("用户 %s 记忆索引完成：%d 条文档", user_id, len(ldocs))
     return len(ldocs)
+
+
+# ─── 语义检索 ──────────────────────────────────────────────
 
 
 async def search(query: str, top_k: int = 5) -> list[dict[str, Any]]:

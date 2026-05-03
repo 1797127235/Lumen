@@ -60,9 +60,10 @@ async def update_skill(
 async def delete_skill(
     db: AsyncSession,
     skill_id: str,
+    user_id: str,
 ) -> bool:
-    """删除技能记录"""
-    result = await db.execute(select(SkillRecord).where(SkillRecord.id == skill_id))
+    """删除技能记录 — 校验所有权"""
+    result = await db.execute(select(SkillRecord).where(SkillRecord.id == skill_id, SkillRecord.user_id == user_id))
     skill = result.scalar_one_or_none()
     if not skill:
         return False

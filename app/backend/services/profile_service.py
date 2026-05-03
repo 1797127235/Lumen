@@ -22,6 +22,7 @@ from app.backend.schemas.profile import (
     SkillItem,
     WorkExperienceItem,
 )
+from app.backend.services.skill_service import create_skill
 from app.backend.utils.date_utils import restore_dates
 from app.backend.utils.json_utils import extract_json
 
@@ -690,6 +691,26 @@ async def process_resume(db: AsyncSession, user_id: str, file: UploadFile) -> Re
     except Exception as e:
         logger.exception("[3/4] 画像保存失败")
         raise HTTPException(status_code=500, detail=f"数据保存失败: {e}")
+
+    # 3.5 同步简历技能到 SkillRecord 表
+    skills = data.get("current_skills")
+    if isinstance(skills, list) and skills:
+        synced = 0
+        for s in skills:
+            if isinstance(s, dict):
+                name = s.get("name") or s.get("skill") or ""
+                if name:
+                    await create_skill(
+                        db,
+                        user_id=user_id,
+                        skill_name=name,
+                        proficiency=s.get("level"),
+                        context=s.get("context"),
+                        source="resume",
+                    )
+                    synced += 1
+        if synced:
+            logger.info("[3/4] 技能同步到 SkillRecord: %d 条", synced)
 
     # 4. 返回结果
     preview = raw_text[:_PREVIEW_LENGTH].replace("\n", " ")

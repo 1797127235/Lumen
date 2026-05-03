@@ -116,9 +116,13 @@ async def delete(
 ):
     """删除技能记录"""
     try:
-        await delete_skill(db, skill_id)
+        ok = await delete_skill(db, skill_id, user_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="技能不存在或无权删除")
         await db.commit()
         return {"deleted": True}
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("删除技能失败: skill_id=%s", skill_id)
         raise HTTPException(status_code=500, detail="删除技能失败")
