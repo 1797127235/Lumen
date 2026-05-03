@@ -51,6 +51,9 @@ logs/
 # Firecrawl
 .firecrawl/
 
+# gitnexus 本地工具状态
+.gitnexus/
+
 # OS
 .DS_Store
 Thumbs.db
