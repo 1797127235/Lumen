@@ -11,6 +11,8 @@ import Chat from './pages/Chat.tsx'
 import Profile from './pages/Profile.tsx'
 import JD from './pages/JD.tsx'
 import JDReport from './pages/JDReport.tsx'
+import Targets from './pages/Targets.tsx'
+import TargetDetail from './pages/TargetDetail.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -21,6 +23,8 @@ createRoot(document.getElementById('root')!).render(
           <Route path="profile" element={<Profile />} />
           <Route path="jd" element={<JD />} />
           <Route path="jd/:id" element={<JDReport />} />
+          <Route path="targets" element={<Targets />} />
+          <Route path="targets/:id" element={<TargetDetail />} />
         </Route>
       </Routes>
     </BrowserRouter>

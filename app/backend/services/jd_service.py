@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.agent.llm_router import chat as llm_chat
-from app.backend.models.jd import JDDiagnosis
+from app.backend.models.jd_diagnosis import JDDiagnosis
 from app.backend.models.user import UserProfile
 from app.backend.schemas.jd import JDDiagnoseResponse, GapSkill
 from app.backend.utils.json_utils import parse_llm_json as _parse_json

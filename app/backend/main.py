@@ -7,7 +7,7 @@ from sqlalchemy import text
 from app.backend.config import get_settings
 from app.backend.db.base import Base, init_db, get_engine
 from app.backend.models import *  # noqa — 确保所有模型注册到 Base
-from app.backend.routers import health, chat, profile, jd
+from app.backend.routers import health, chat, profile, jd, targets
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"] if settings.debug else ["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["*"] if settings.debug else ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"] if settings.debug else ["Authorization", "Content-Type"],
 )
 
@@ -58,3 +58,4 @@ app.include_router(health.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(jd.router, prefix="/api")
+app.include_router(targets.router, prefix="/api")

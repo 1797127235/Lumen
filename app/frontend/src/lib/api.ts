@@ -67,6 +67,67 @@ export type JDHistoryItem = {
   created_at: string;
 };
 
+export type TargetStatus =
+  | "interested"
+  | "applied"
+  | "test"
+  | "interview"
+  | "offer"
+  | "rejected"
+  | "abandoned";
+
+export type TargetCard = {
+  target_id: string;
+  company: string;
+  title: string;
+  status: TargetStatus;
+  interview_round?: string | null;
+  match_score?: number | null;
+  agent_advice?: string | null;
+  location?: string | null;
+  created_at: string;
+};
+
+export type TargetDetail = TargetCard & {
+  jd_text?: string | null;
+  jd_url?: string | null;
+  salary?: string | null;
+  notes?: string | null;
+  diagnosis?: JDDiagnoseResponse | null;
+};
+
+export type TargetCreatePayload = {
+  company: string;
+  title: string;
+  location?: string | null;
+  salary?: string | null;
+  jd_text?: string | null;
+  jd_url?: string | null;
+  diagnosis_id?: string | null;
+  notes?: string | null;
+};
+
+export type TargetUpdatePayload = {
+  company?: string;
+  title?: string;
+  status?: TargetStatus;
+  interview_round?: string | null;
+  location?: string | null;
+  salary?: string | null;
+  notes?: string | null;
+};
+
+export type BoardStats = {
+  total: number;
+  avg_score: number;
+  common_gaps: string[];
+};
+
+export type BoardResponse = {
+  columns: Record<string, TargetCard[]>;
+  stats: BoardStats;
+};
+
 export type ConversationSummary = {
   conversation_id: string;
   title: string | null;
@@ -167,6 +228,58 @@ export function getJDHistory(): Promise<{ items: JDHistoryItem[] }> {
 export function deleteJDDiagnosis(diagnosisId: string): Promise<{ deleted: boolean }> {
   return http<{ deleted: boolean }>(
     `/api/jd/${encodeURIComponent(diagnosisId)}?user_id=${encodeURIComponent(getUserId())}`,
+    { method: "DELETE" },
+  );
+}
+
+export function getBoard(): Promise<BoardResponse> {
+  return http<BoardResponse>(
+    `/api/targets/board?user_id=${encodeURIComponent(getUserId())}`,
+  );
+}
+
+export function getTarget(targetId: string): Promise<TargetDetail> {
+  return http<TargetDetail>(
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
+  );
+}
+
+/** 排队后台重新生成行动建议；返回当前详情，需轮询 getTarget 直至 agent_advice 更新 */
+export function regenerateTargetAdvice(targetId: string): Promise<TargetDetail> {
+  return http<TargetDetail>(
+    `/api/targets/${encodeURIComponent(targetId)}/regenerate-advice?user_id=${encodeURIComponent(getUserId())}`,
+    { method: "POST" },
+  );
+}
+
+export function createTarget(payload: TargetCreatePayload): Promise<TargetDetail> {
+  return http<TargetDetail>(
+    `/api/targets?user_id=${encodeURIComponent(getUserId())}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function updateTarget(
+  targetId: string,
+  patch: TargetUpdatePayload,
+): Promise<TargetDetail> {
+  return http<TargetDetail>(
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+export function deleteTarget(targetId: string): Promise<{ deleted: boolean }> {
+  return http<{ deleted: boolean }>(
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
     { method: "DELETE" },
   );
 }
