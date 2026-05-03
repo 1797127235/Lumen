@@ -13,6 +13,7 @@ import JD from './pages/JD.tsx'
 import JDReport from './pages/JDReport.tsx'
 import Targets from './pages/Targets.tsx'
 import TargetDetail from './pages/TargetDetail.tsx'
+import Settings from './pages/Settings.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -25,6 +26,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="jd/:id" element={<JDReport />} />
           <Route path="targets" element={<Targets />} />
           <Route path="targets/:id" element={<TargetDetail />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

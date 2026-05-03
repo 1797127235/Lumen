@@ -1,0 +1,14 @@
+services:
+  career-os:
+    image: ghcr.io/1797127235/career-os:latest
+    build: .
+    container_name: career-os
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - career-data:/root/.careeros
+    restart: unless-stopped
+
+volumes:
+  career-data:
+    driver: local

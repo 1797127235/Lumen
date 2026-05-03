@@ -1,4 +1,10 @@
-"""RAG 知识库检索 — 基于 LlamaIndex + Chroma + DashScope
+"""RAG 记忆检索 — 基于 LlamaIndex + Chroma + DashScope
+
+用户的个人数据就是 RAG 的数据源：
+- UserProfile：画像、目标、技能
+- SkillRecord：技能成长时间线
+- Project：项目经历
+- Conversation：对话历史摘要
 
 架构：
 - 向量化：DashScopeEmbedding (text-embedding-v4)
@@ -11,8 +17,7 @@
 from __future__ import annotations
 
 import contextlib
-import json
-from pathlib import Path
+import logging
 from typing import Any
 
 import chromadb
@@ -22,13 +27,15 @@ from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.dashscope import DashScopeEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.backend.config import get_settings
+from app.backend.config import USER_DATA_DIR, get_settings
+
+logger = logging.getLogger(__name__)
 
 # 配置
-DATA_DIR = Path(__file__).parents[3] / "data"
-CHROMA_DIR = "./chroma_db"
-COLLECTION = "career_os_knowledge"
+CHROMA_DIR = str(USER_DATA_DIR / "chroma_db")
+COLLECTION = "career_os_memory"
 CHUNK_SIZE = 600
 CHUNK_OVERLAP = 50
 
@@ -72,35 +79,154 @@ def _get_retriever():
     return _retriever
 
 
+def _refresh_retriever() -> None:
+    """刷新检索器（索引变更后调用）"""
+    global _retriever
+    vs = _get_vector_store()
+    index = VectorStoreIndex.from_vector_store(vs)
+    _retriever = index.as_retriever(similarity_top_k=5)
+
+
+# ─── 用户数据 → LlamaIndex Document ────────────────────────
+
+
+def _profile_to_docs(profile) -> list[LlamaDocument]:
+    """将用户画像转为可索引的文档"""
+    docs: list[LlamaDocument] = []
+    parts: list[str] = []
+
+    if profile.school_name:
+        parts.append(f"学校：{profile.school_name}（{profile.school_level or ''}）")
+    if profile.major:
+        parts.append(f"专业：{profile.major}")
+    if profile.grade:
+        parts.append(f"年级：{profile.grade}")
+    if profile.target_direction:
+        parts.append(f"目标方向：{profile.target_direction}")
+    if profile.target_company_level:
+        parts.append(f"目标公司层级：{profile.target_company_level}")
+    if profile.current_skills:
+        skills_str = ", ".join(
+            f"{s['name']}({s.get('level', '')})" if isinstance(s, dict) else str(s) for s in profile.current_skills
+        )
+        parts.append(f"当前技能：{skills_str}")
+    if profile.graduation_year:
+        parts.append(f"毕业年份：{profile.graduation_year}")
+
+    if parts:
+        docs.append(
+            LlamaDocument(
+                text="\n".join(parts),
+                metadata={"type": "profile", "user_id": profile.user_id},
+            )
+        )
+    return docs
+
+
+def _skills_to_docs(skills: list) -> list[LlamaDocument]:
+    """将技能记录转为可索引的文档"""
+    docs: list[LlamaDocument] = []
+    for skill in skills:
+        parts = [f"技能：{skill.skill_name}"]
+        parts.append(f"掌握程度：{skill.proficiency}")
+        if skill.context:
+            parts.append(f"来源：{skill.context}")
+        parts.append(f"记录时间：{skill.created_at.strftime('%Y-%m-%d') if skill.created_at else '未知'}")
+        docs.append(
+            LlamaDocument(
+                text="\n".join(parts),
+                metadata={"type": "skill", "skill_name": skill.skill_name},
+            )
+        )
+    return docs
+
+
+def _projects_to_docs(projects: list) -> list[LlamaDocument]:
+    """将项目经历转为可索引的文档"""
+    docs: list[LlamaDocument] = []
+    for proj in projects:
+        parts = [f"项目：{proj.title}"]
+        if proj.tech_stack:
+            parts.append(f"技术栈：{', '.join(proj.tech_stack)}")
+        if proj.role:
+            parts.append(f"角色：{proj.role}")
+        if proj.period:
+            parts.append(f"时间：{proj.period}")
+        if proj.description:
+            parts.append(f"描述：{proj.description}")
+        docs.append(
+            LlamaDocument(
+                text="\n".join(parts),
+                metadata={"type": "project", "title": proj.title},
+            )
+        )
+    return docs
+
+
+def _conversations_to_docs(messages: list) -> list[LlamaDocument]:
+    """将对话历史转为可索引的文档（最近的消息）"""
+    docs: list[LlamaDocument] = []
+    for msg in messages:
+        if msg.role in ("user", "assistant") and msg.content:
+            docs.append(
+                LlamaDocument(
+                    text=f"[{msg.role}] {msg.content[:500]}",
+                    metadata={"type": "conversation", "role": msg.role},
+                )
+            )
+    return docs
+
+
 # ─── 公开 API ─────────────────────────────────────────────
 
 
-def ingest_knowledge_base(data_dir: Path = DATA_DIR) -> int:
-    """一键导入：加载 data/*.json → Chunking → 向量化 → Chroma
+async def ingest_user_memory(db: AsyncSession, user_id: str) -> int:
+    """从用户的个人数据构建记忆索引
 
-    Returns: 导入的文档数
+    读取：画像 + 技能记录 + 项目经历 + 对话历史
+    写入：Chroma 向量库
+
+    Returns: 索引的文档数
     """
     global _retriever
     _ensure_settings()
 
-    # 1. 加载 JSON → LlamaIndex Document
-    ldocs = []
-    for fp in sorted(data_dir.glob("*.json")):
-        items = json.loads(fp.read_text(encoding="utf-8"))
-        for item in items:
-            ldocs.append(
-                LlamaDocument(
-                    text=item.get("content", ""),
-                    metadata={
-                        "title": item.get("title", ""),
-                        "category": item.get("category", ""),
-                        "subcategory": item.get("subcategory", ""),
-                        "source_file": fp.name,
-                    },
-                )
-            )
+    ldocs: list[LlamaDocument] = []
 
-    # 2. Chunking + 向量化 + 写入 Chroma
+    # 1. 用户画像
+    from sqlalchemy.future import select
+
+    from app.backend.models.user import UserProfile
+
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+    profile = result.scalar_one_or_none()
+    if profile:
+        ldocs.extend(_profile_to_docs(profile))
+
+    # 2. 技能记录（待实现）
+    # from app.backend.models.skill_record import SkillRecord
+    # result = await db.execute(select(SkillRecord).where(SkillRecord.user_id == user_id))
+    # ldocs.extend(_skills_to_docs(result.scalars().all()))
+
+    # 3. 项目经历（待实现）
+    # from app.backend.models.project import Project
+    # result = await db.execute(select(Project).where(Project.user_id == user_id))
+    # ldocs.extend(_projects_to_docs(result.scalars().all()))
+
+    # 4. 对话历史（最近 50 条）
+    from app.backend.models.conversation import Message
+
+    result = await db.execute(
+        select(Message).where(Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(50)
+    )
+    messages = list(result.scalars().all())
+    ldocs.extend(_conversations_to_docs(messages))
+
+    if not ldocs:
+        logger.info("用户 %s 暂无个人数据可索引", user_id)
+        return 0
+
+    # Chunking + 向量化 + 写入 Chroma
     vs = _get_vector_store()
     pipeline = IngestionPipeline(
         transformations=[
@@ -109,16 +235,14 @@ def ingest_knowledge_base(data_dir: Path = DATA_DIR) -> int:
         vector_store=vs,
     )
     pipeline.run(documents=ldocs)
+    _refresh_retriever()
 
-    # 3. 刷新 retriever
-    index = VectorStoreIndex.from_vector_store(vs)
-    _retriever = index.as_retriever(similarity_top_k=5)
-
+    logger.info("用户 %s 记忆索引完成：%d 条文档", user_id, len(ldocs))
     return len(ldocs)
 
 
 async def search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
-    """语义检索 — 返回 top_k 条匹配的文本块"""
+    """语义检索 — 从用户记忆中返回 top_k 条匹配"""
     retriever = _get_retriever()
     retriever.similarity_top_k = top_k
     nodes = retriever.retrieve(query)
@@ -126,8 +250,7 @@ async def search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
     return [
         {
             "content": node.text,
-            "title": node.metadata.get("title", ""),
-            "category": node.metadata.get("category", ""),
+            "type": node.metadata.get("type", ""),
             "score": round(node.score or 0, 4),
         }
         for node in nodes
@@ -135,7 +258,7 @@ async def search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
 
 
 def reset_index() -> None:
-    """清空向量库并重置 retriever"""
+    """清空记忆索引并重置检索器"""
     global _retriever, _vector_store
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     with contextlib.suppress(Exception):
@@ -144,11 +267,11 @@ def reset_index() -> None:
     _retriever = None
 
 
-# ─── 向后兼容别名 ─────────────────────────────────────────
+# ─── 向后兼容 ─────────────────────────────────────────────
 
 
 class SimpleRAG:
-    """向后兼容适配器：对外暴露与旧版一致的 search() 接口"""
+    """兼容适配器：对外暴露与旧版一致的 search() 接口"""
 
     def __init__(self) -> None:
         _ensure_settings()
@@ -159,19 +282,3 @@ class SimpleRAG:
 
 def get_rag() -> SimpleRAG:
     return SimpleRAG()
-
-
-def init_rag(kb_path: str | None = None) -> None:
-    """初始化 RAG（首次调用时加载 data/ 目录）"""
-    global _retriever
-    if kb_path:
-        data_dir = Path(kb_path) if Path(kb_path).is_dir() else Path(kb_path).parent
-    else:
-        data_dir = DATA_DIR
-    # 如果 Chroma 为空，执行首次导入
-    _ensure_settings()
-    vs = _get_vector_store()
-    if vs._collection.count() == 0:
-        ingest_knowledge_base(data_dir)
-    else:
-        _get_retriever()  # 加载已有索引

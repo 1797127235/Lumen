@@ -370,3 +370,22 @@ export async function chatStream(
     }
   }
 }
+
+// ── Config ──
+
+export type Config = {
+  dashscope_api_key: string;
+  has_api_key: boolean;
+};
+
+export async function getConfig(): Promise<Config> {
+  return http<Config>("/api/config");
+}
+
+export async function updateConfig(data: { dashscope_api_key?: string }): Promise<Config> {
+  return http<Config>("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}

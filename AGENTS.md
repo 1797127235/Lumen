@@ -2,33 +2,24 @@
 
 ## What This Is
 
-CodePilot · 码路领航 — AI职业规划智能体。FastAPI + SQLAlchemy + DashScope (qwen-plus/qwen-max) + LlamaIndex + Chroma + SQLite。前端 React + Vite + Tailwind + shadcn/ui。
+CareerOS — 面向中国 CS 学生的自托管 AI 职业规划助手。FastAPI + SQLAlchemy + DashScope (qwen-plus/qwen-max) + LlamaIndex + Chroma + SQLite。前端 React + Vite + Tailwind + shadcn/ui。
 
 ## How to Run
 
 ```bash
-# 安装后端依赖
+# 方式一：Docker（推荐）
+docker compose up -d
+# 打开 http://localhost:3000
+
+# 方式二：本地开发
 pip install -r requirements.txt
-
-# 安装前端依赖
 cd frontend && npm install && cd ..
-
-# 导入知识库（首次运行必需）
-python scripts/import_knowledge_base.py
-
-# 方式一：一键启动（推荐）
 # Windows: 双击 run.bat
 # PowerShell: .\run.ps1
-
-# 方式二：手动启动
-# 终端 1：后端
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8001 --reload
-
-# 终端 2：前端
-cd frontend && npm run dev
+# 打开 http://localhost:5173
 ```
 
-启动后自动建表（SQLite `career_os.db`），无需手动迁移。
+启动后自动建表（SQLite），无需手动迁移。首次启动自动构建用户记忆索引。
 
 ## Project Structure
 
@@ -74,10 +65,14 @@ career-os/
 │   │   │   └── JD.tsx       # JD 诊断页
 │   │   └── lib/api.ts       # 后端 API 调用 + SSE 解析
 │   └── vite.config.ts       # Vite + Tailwind + proxy → 8001
-├── data/                    # 知识库 JSON 数据源
 ├── tests/                   # pytest 测试用例
-├── scripts/                 # 工具脚本（知识库导入）
 ├── docs/                    # 设计文档
+│   ├── 功能设计/            # 各功能详细设计
+│   ├── 架构/                # 系统架构
+│   └── 需求/                # 需求文档
+├── .github/workflows/       # CI/CD（lint + test + build）
+├── Dockerfile               # 多阶段构建（node + python）
+├── docker-compose.yml       # 单服务 + 持久化 volume
 ├── pyproject.toml           # ruff + pytest 配置
 └── run.ps1                  # 一键启动后端 + 前端
 ```
@@ -99,6 +94,8 @@ career-os/
 | `POST` | `/api/targets?user_id=` | 新建岗位目标卡片 |
 | `PATCH` | `/api/targets/{target_id}?user_id=` | 更新卡片（含阶段流转） |
 | `DELETE` | `/api/targets/{target_id}?user_id=` | 删除卡片 |
+| `GET`  | `/api/config` | 获取当前用户配置 |
+| `POST` | `/api/config` | 更新用户配置（API Key 等） |
 
 ## Key Architecture Decisions
 
@@ -106,7 +103,7 @@ career-os/
 - **Skill 系统**：7 个 Skill 按需加载，`_load_skill_body()` 懒加载 SKILL.md，节省 token
 - **LLM 路由硬编码**：`llm_router.py` 的 `_ROUTE_MAP` 按任务类型选模型，不要设 `LLM_MODEL` 环境变量（注释里有说明）
 - **数据库**：开发阶段 SQLite（`career_os.db`），生产切 PostgreSQL — 切换方式：改 `.env` 中 `DATABASE_URL`
-- **知识库**：LlamaIndex + Chroma 向量检索。`ingest_knowledge_base()` 一键导入 data/*.json → SentenceSplitter 切割 → DashScopeEmbedding 向量化 → ChromaVectorStore 持久化。`search()` 返回 top_k 语义匹配块。SQL 层存 Document/Chunk 表做审计，与 Chroma 解耦。
+- **记忆层**：LlamaIndex + Chroma 向量检索。`ingest_user_memory()` 从用户个人数据（画像+对话+技能+项目）构建向量索引，`search()` 返回 top_k 语义匹配块。SQL 层存元数据，与 Chroma 解耦
 - **ORM 建表**：`lifespan` 中 `Base.metadata.create_all`，无需 Alembic 迁移
 - **画像数据模型**：扩展字段（GPA/排名/获奖/技能场景）存入 `profile_data` JSON 列，双写方案，零 ORM 列新增
 - **会话上下文**：加载最近 20 条消息做上下文窗口，无滑动窗口或摘要（后续迭代）

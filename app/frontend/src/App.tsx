@@ -11,10 +11,7 @@ function App() {
           end
           className="flex items-baseline gap-xs text-text hover:opacity-100"
         >
-          <span className="text-xl font-han text-ink">码路</span>
-          <span className="text-xs text-text-subtle font-latin tracking-wide">
-            codepilot
-          </span>
+          <span className="text-xl font-han text-ink">CareerOS</span>
         </NavLink>
 
         <nav className="flex items-center gap-lg text-base">
@@ -22,6 +19,7 @@ function App() {
           <NavItem to="/profile">画像</NavItem>
           <NavItem to="/jd">JD 诊断</NavItem>
           <NavItem to="/targets">岗位追踪</NavItem>
+          <NavItem to="/settings">设置</NavItem>
           <a
             href={FEEDBACK_URL}
             target="_blank"
