@@ -25,7 +25,7 @@
 
 **目标用户**：计算机相关专业在校生（本科/研究生）
 
-**技术栈**：FastAPI + SQLAlchemy + DashScope (qwen-plus) + React + Vite
+**技术栈**：FastAPI + SQLAlchemy + DashScope (qwen-plus/qwen-max) + LlamaIndex + Chroma + React + Vite
 
 ---
 
@@ -34,8 +34,10 @@
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | 智能对话 | ✅ | SSE 流式输出，7 大意图分类 |
+| 知识库检索 | ✅ | LlamaIndex + Chroma 向量检索，覆盖职位/面试/技能/行业知识 |
 | 用户画像 | ✅ | 上传简历 → LLM 自动提取 → 手动修正 |
 | JD 诊断 | ✅ | 画像 vs 岗位要求 → 匹配评分 + 缺口分析 |
+| 岗位追踪 | ✅ | 拖拽看板管理求职进度 |
 | 学习路径 | 🚧 | 根据目标岗位生成学习路线 |
 | 模拟面试 | 🚧 | 八股/算法/系统设计面试练习 |
 | 简历优化 | 🚧 | STAR 法则改写、关键词匹配 |
@@ -65,6 +67,9 @@ cd frontend && npm install && cd ..
 # 配置
 cp .env.example .env
 # 编辑 .env，填入 DASHSCOPE_API_KEY
+
+# 导入知识库（首次运行必需）
+python scripts/import_knowledge_base.py
 ```
 
 ### 启动
@@ -91,18 +96,25 @@ cd frontend && npm run dev
 ```
 career-os/
 ├── app/backend/
-│   ├── agent/           # AI 核心（意图分类、LLM 路由、Skill 系统）
+│   ├── agent/           # AI 核心（RAG 检索、意图分类、LLM 路由、Skill 系统）
 │   ├── routers/         # API 路由
 │   ├── services/        # 业务逻辑
 │   ├── models/          # ORM 模型
 │   ├── schemas/         # Pydantic 模型
 │   └── skills/          # Skill 定义（SKILL.md）
 ├── app/frontend/
-│   └── src/pages/       # 对话、画像、JD 诊断三页
+│   └── src/pages/       # 对话、画像、JD 诊断、岗位看板
+├── data/                # 知识库 JSON 数据源（职位/面试/技能/行业/案例）
+├── chroma_db/           # Chroma 向量库持久化目录
+├── scripts/             # 工具脚本（知识库导入等）
+├── tests/               # pytest 测试用例
 ├── docs/                # 设计文档
 │   ├── 功能设计/        # 各功能详细设计
-│   └── 架构/            # 系统架构
-└── run.ps1              # 启动脚本
+│   ├── 架构/            # 系统架构
+│   └── 需求/            # 需求文档
+├── .github/workflows/   # CI/CD（lint + test + build）
+├── pyproject.toml       # ruff + pytest 配置
+└── run.ps1 / run.bat    # 启动脚本
 ```
 
 ---
@@ -113,9 +125,27 @@ career-os/
 |------|------|------|
 | 后端 | FastAPI + SQLAlchemy 2.0 | async，类型安全 |
 | 数据库 | SQLite → PostgreSQL | 开发用 SQLite，生产切 PG |
-| LLM | DashScope (qwen-plus) | 国内访问快，性价比高 |
-| Agent | 自发现 Skill + 纯函数编排 | 扫描 skills/ 目录自动生成意图分类，统一编排入口返回 (intent, task_type, system_prompt) |
+| LLM | DashScope (qwen-plus/qwen-max) | 国内访问快，性价比高 |
+| Agent | 自发现 Skill + 纯函数编排 | 扫描 skills/ 目录自动生成意图分类 |
+| RAG | LlamaIndex + Chroma | 向量检索 + 块切割 + DashScope embedding |
 | 前端 | React + Vite + Tailwind | shadcn/ui 组件，OKLCH 配色 |
+| CI/CD | GitHub Actions | ruff lint + format + pytest + frontend build |
+
+---
+
+## 知识库
+
+知识库覆盖 5 个类别、175 条文档，存储在 `data/` 目录：
+
+| 分类 | 文件 | 内容 |
+|------|------|------|
+| 职位数据 | `knowledge_base.json` | 前端/后端/算法/数据/测试等岗位介绍、技能要求、职级薪资 |
+| 面试题库 | `interview_qa.json` | 算法八股、系统设计、HR 面常见问题 |
+| 技能图谱 | `skill_graph.json` | 分岗位、分阶段的学习路线和工具栈推荐 |
+| 行业报告 | `industry_report.json` | 薪资行情、城市差异、技术趋势 |
+| 用户案例 | `user_cases.json` | 真实转行故事 |
+
+首次运行需导入：`python scripts/import_knowledge_base.py`。之后 Chroma 会自动从 `chroma_db/` 加载索引。
 
 ---
 
@@ -123,13 +153,28 @@ career-os/
 
 - **Skill 系统**：7 个 Skill 按需加载，节省 token，加新 Skill 只需建目录放 SKILL.md
 - **画像驱动**：所有功能都基于用户画像，上传简历一次，后续对话/诊断都能用
-- **渐进式**：MVP 先跑通核心流程，后续按需加功能
+- **框架优先**：能用成熟方案不手写 — RAG 用 LlamaIndex 而非自研向量检索
+- **解耦设计**：Chroma（向量检索）与 SQL（元数据审计）独立存储，互不依赖
 
 ---
 
-## 参与贡献
+## 开发规范
 
-欢迎提 Issue、建议功能、提交 PR。
+### 代码质量
+
+```bash
+# Lint + 格式化
+ruff check . && ruff format --check .
+
+# 测试
+pytest
+
+# 提交前自动检查（已配置 pre-commit hook）
+```
+
+CI 会在每次 push 时自动运行：ruff check → ruff format → pytest → frontend build。
+
+### 分支与提交
 
 ```bash
 git checkout -b feat/your-feature
@@ -137,8 +182,6 @@ git commit -m "feat: add something"
 git push origin feat/your-feature
 # 然后在 GitHub 上创建 PR
 ```
-
-### 开发规范
 
 - Python 3.11+，类型提示
 - SQLAlchemy 2.0 async 风格
@@ -152,8 +195,8 @@ git push origin feat/your-feature
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `DASHSCOPE_API_KEY` | ✅ | DashScope API Key |
-| `DATABASE_URL` | ❌ | 默认 SQLite |
-| `FRONTEND_URL` | ❌ | CORS 白名单 |
+| `DATABASE_URL` | ❌ | 默认 SQLite（`sqlite+aiosqlite:///career_os.db`） |
+| `FRONTEND_URL` | ❌ | CORS 白名单，默认 `http://localhost:5173` |
 
 完整配置见 `.env.example`。
 
