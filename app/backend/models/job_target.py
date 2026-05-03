@@ -21,12 +21,8 @@ class JobTarget(Base):
     __tablename__ = "job_targets"
 
     # ── 主键与归属 ─────────────────────────────────────
-    target_id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.user_id"), index=True
-    )
+    target_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.user_id"), index=True)
     # 建索引：按 user_id 拉取整板数据是最常见查询
 
     # ── 岗位展示信息（用户填写或从 JD 摘要）────────────
@@ -66,12 +62,8 @@ class JobTarget(Base):
 
     # ── 时间戳 ─────────────────────────────────────────
     # 仅当 status 变更时由业务代码更新；避免把「只改 notes」当成状态时间线
-    status_changed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )  # 任意字段更新都会刷新；若要做「距上次改状态」应用 status_changed_at

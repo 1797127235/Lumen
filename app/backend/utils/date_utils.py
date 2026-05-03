@@ -31,8 +31,7 @@ _DATE_RE = re.compile(
 
 _YEAR_ONLY_RE = re.compile(r"\d{4}")
 _MONTH_RE = re.compile(
-    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|"
-    r"\d{4}[\.\-/]\d{1,2})",
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|" r"\d{4}[\.\-/]\d{1,2})",
     re.IGNORECASE,
 )
 

@@ -3,14 +3,15 @@
 与 ORM JobTarget 对应：创建/更新用入参模型，看板与详情用出参模型。
 状态合法值在 VALID_STATUSES 中集中定义，与数据库中存英文字符串一致。
 """
+
 from __future__ import annotations
+
 from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 # 看板列与 PATCH 可写入的 status 白名单（扩展新状态时需同步前端列配置）
-VALID_STATUSES = Literal[
-    "interested", "applied", "test", "interview", "offer", "rejected", "abandoned"
-]
+VALID_STATUSES = Literal["interested", "applied", "test", "interview", "offer", "rejected", "abandoned"]
 
 
 class TargetCreate(BaseModel):
@@ -34,7 +35,7 @@ class TargetCreate(BaseModel):
     notes: str | None = None
 
     @model_validator(mode="after")
-    def _check_diagnosis_source(self) -> "TargetCreate":
+    def _check_diagnosis_source(self) -> TargetCreate:
         if self.diagnosis_id and self.jd_text:
             raise ValueError("diagnosis_id 和 jd_text 不能同时传")
         return self

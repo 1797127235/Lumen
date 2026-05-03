@@ -20,7 +20,8 @@ from typing import cast
 
 import yaml
 
-from app.backend.agent.llm_router import chat as llm_chat, TaskType
+from app.backend.agent.llm_router import TaskType
+from app.backend.agent.llm_router import chat as llm_chat
 
 logger = logging.getLogger(__name__)
 
@@ -121,13 +122,14 @@ def _sanitize_summary(text: str) -> str:
     不清洗时模型容易误以为要在对话里读取本地文件。
     """
     # 去掉方括号或中文括号包裹的、带常见文档扩展名的片段
-    text = re.sub(r'[\[【].*?\.(?:pdf|docx?|png|jpg|txt)[\]】]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r"[\[【].*?\.(?:pdf|docx?|png|jpg|txt)[\]】]", "", text, flags=re.IGNORECASE)
     # 去掉 "[PDF N]" 类页码/引用标记
-    text = re.sub(r'\[PDF\s*\d+\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r"\[PDF\s*\d+\]", "", text, flags=re.IGNORECASE)
     return text
 
 
 # ── 意图分类 ──
+
 
 def _validate_task_type(raw: str) -> TaskType:
     """
@@ -238,11 +240,7 @@ def build_system_prompt(
         # current_skills 在 ORM 里可能是 list[dict]，每项含 skill 名字段
         skills_data = p.get("current_skills")
         if skills_data and isinstance(skills_data, list):
-            names = [
-                s.get("skill", "")
-                for s in skills_data
-                if isinstance(s, dict) and s.get("skill")
-            ]
+            names = [s.get("skill", "") for s in skills_data if isinstance(s, dict) and s.get("skill")]
             if names:
                 parts.append(f"已掌握技能：{'、'.join(names)}")
 

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel
 
 # ── 技能条目 ──
+
 
 class SkillItem(BaseModel):
     name: str
@@ -15,6 +15,7 @@ class SkillItem(BaseModel):
 
 # ── 实习/工作经历条目 ──
 
+
 class WorkExperienceItem(BaseModel):
     company: str
     role: str
@@ -23,6 +24,7 @@ class WorkExperienceItem(BaseModel):
 
 
 # ── 项目经历条目 ──
+
 
 class ProjectItem(BaseModel):
     title: str
@@ -34,12 +36,14 @@ class ProjectItem(BaseModel):
 
 # ── 作品集链接条目 ──
 
+
 class PortfolioLink(BaseModel):
     label: str
     url: str
 
 
 # ── 画像响应 ──
+
 
 class ProfileResponse(BaseModel):
     nickname: str | None = None
@@ -67,12 +71,14 @@ class ProfileResponse(BaseModel):
 
 # ── 简历上传响应 ──
 
+
 class ResumeUploadResponse(BaseModel):
     profile: ProfileResponse
     raw_text_preview: str = ""  # 简历文本前 500 字符，供前端展示确认
 
 
 # ── 画像局部更新 ──
+
 
 class ProfileUpdate(BaseModel):
     nickname: str | None = None

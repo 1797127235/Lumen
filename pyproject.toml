@@ -1,0 +1,52 @@
+[project]
+name = "career-os"
+version = "0.1.0"
+description = "码路领航 — AI 职业规划智能体"
+requires-python = ">=3.11"
+
+[tool.ruff]
+# Ruff 配置：lint + format 一体化
+target-version = "py311"
+line-length = 120
+exclude = [
+    ".claude/skills",
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (由 formatter 处理)
+    "B008",   # function call in default argument (FastAPI Depends)
+    "B904",   # raise from in except (存量代码，逐步修复)
+    "SIM108", # ternary operator (可读性优先)
+    "RUF001", # ambiguous unicode in string (中文标点)
+    "RUF002", # ambiguous unicode in docstring (中文括号)
+    "RUF003", # ambiguous unicode in comment (中文标点)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

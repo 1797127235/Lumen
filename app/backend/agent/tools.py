@@ -8,6 +8,7 @@ from typing import Any
 async def knowledge_search(query: str) -> list[dict[str, Any]]:
     """知识库检索"""
     from app.backend.agent.rag import get_rag
+
     return await get_rag().search(query)
 
 
@@ -15,11 +16,12 @@ async def generate_learning_path(params: dict) -> dict:
     """学习路径生成（M-02）"""
     # MVP: 调用 LLM 生成，后续独立路径引擎
     from app.backend.agent.llm_router import chat
+
     prompt = f"""你是一个学习路径规划专家。请根据以下信息生成定制化的学习路径：
-目标岗位：{params.get('target_role')}
-当前基础：{params.get('current_level')}
-每日可用时间：{params.get('daily_time_hours')}小时
-目标公司：{params.get('target_company')}
+目标岗位：{params.get("target_role")}
+当前基础：{params.get("current_level")}
+每日可用时间：{params.get("daily_time_hours")}小时
+目标公司：{params.get("target_company")}
 
 请返回 JSON 格式的路径，每个节点包含：node_name, description, estimated_hours, acceptance_criteria"""
     result = await chat("path_generation", [{"role": "user", "content": prompt}])

@@ -1,8 +1,8 @@
 """通用工具 — JSON 鲁棒解析与截断检测"""
 
 import json
-import re
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,4 @@ def _appears_truncated(data: dict) -> bool:
     """检测 JSON 是否可能被截断：核心字段为空的列表。"""
     if not isinstance(data, dict):
         return False
-    for key in _TRUNCATION_SENSITIVE_KEYS:
-        if key in data and data[key] == []:
-            return True
-    return False
+    return any(key in data and data[key] == [] for key in _TRUNCATION_SENSITIVE_KEYS)

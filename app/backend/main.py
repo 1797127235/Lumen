@@ -1,15 +1,19 @@
 """CodePilot 后端入口"""
+
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+
 from app.backend.config import get_settings
-from app.backend.db.base import Base, init_db, get_engine
+from app.backend.db.base import Base, get_engine, init_db
 from app.backend.models import *  # noqa — 确保所有模型注册到 Base
-from app.backend.routers import health, chat, profile, jd, targets
+from app.backend.routers import chat, health, jd, profile, targets
 
 logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

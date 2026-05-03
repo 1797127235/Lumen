@@ -1,9 +1,13 @@
 """RAG 基础设施 — 知识库检索（MVP 简化版：不依赖向量库）"""
+
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
+
 from app.backend.agent.llm_router import embed
+
 
 class SimpleRAG:
     """简化版 RAG：本地 JSON 知识库 + 向量相似度检索
@@ -47,7 +51,7 @@ class SimpleRAG:
         return results
 
     def _cosine_sim(self, a: list[float], b: list[float]) -> float:
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
         na = sum(x * x for x in a) ** 0.5
         nb = sum(x * x for x in b) ** 0.5
         return dot / (na * nb) if na and nb else 0.0

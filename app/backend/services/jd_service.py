@@ -1,4 +1,5 @@
 """JD 诊断服务 — 画像 + JD → LLM → 结构化诊断"""
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.agent.llm_router import chat as llm_chat
 from app.backend.models.jd_diagnosis import JDDiagnosis
 from app.backend.models.user import UserProfile
-from app.backend.schemas.jd import JDDiagnoseResponse, GapSkill
+from app.backend.schemas.jd import GapSkill, JDDiagnoseResponse
 from app.backend.utils.json_utils import parse_llm_json as _parse_json
 
 logger = logging.getLogger(__name__)
@@ -64,9 +65,7 @@ def _to_response(diagnosis: JDDiagnosis) -> JDDiagnoseResponse:
     )
 
 
-async def diagnose_jd(
-    db: AsyncSession, user_id: str, jd_text: str
-) -> JDDiagnoseResponse:
+async def diagnose_jd(db: AsyncSession, user_id: str, jd_text: str) -> JDDiagnoseResponse:
     """诊断岗位匹配度"""
 
     # 1. 加载画像
@@ -121,9 +120,7 @@ async def diagnose_jd(
     return _to_response(diagnosis)
 
 
-async def get_diagnosis(
-    db: AsyncSession, user_id: str, diagnosis_id: str
-) -> JDDiagnoseResponse:
+async def get_diagnosis(db: AsyncSession, user_id: str, diagnosis_id: str) -> JDDiagnoseResponse:
     """获取单条诊断详情（校验用户归属）"""
     result = await db.execute(
         select(JDDiagnosis).where(
@@ -138,15 +135,10 @@ async def get_diagnosis(
     return _to_response(diagnosis)
 
 
-async def get_history(
-    db: AsyncSession, user_id: str, limit: int = 50
-) -> list[dict]:
+async def get_history(db: AsyncSession, user_id: str, limit: int = 50) -> list[dict]:
     """获取诊断历史（LIMIT 50，不做分页）"""
     result = await db.execute(
-        select(JDDiagnosis)
-        .where(JDDiagnosis.user_id == user_id)
-        .order_by(JDDiagnosis.created_at.desc())
-        .limit(limit)
+        select(JDDiagnosis).where(JDDiagnosis.user_id == user_id).order_by(JDDiagnosis.created_at.desc()).limit(limit)
     )
     diagnoses = result.scalars().all()
     return [
@@ -160,9 +152,7 @@ async def get_history(
     ]
 
 
-async def delete_diagnosis(
-    db: AsyncSession, user_id: str, diagnosis_id: str
-) -> bool:
+async def delete_diagnosis(db: AsyncSession, user_id: str, diagnosis_id: str) -> bool:
     """硬删除单条诊断（校验用户归属）"""
     result = await db.execute(
         select(JDDiagnosis).where(
@@ -181,9 +171,7 @@ async def delete_diagnosis(
 
 async def _load_profile_summary(db: AsyncSession, user_id: str) -> str:
     """加载用户画像摘要，供 prompt 使用"""
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == user_id)
-    )
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
     profile = result.scalar_one_or_none()
 
     if not profile:
@@ -196,8 +184,13 @@ async def _load_profile_summary(db: AsyncSession, user_id: str) -> str:
         parts.append(f"专业：{profile.major}")
     if profile.grade:
         grade_map = {
-            "freshman": "大一", "sophomore": "大二", "junior": "大三", "senior": "大四",
-            "graduate1": "研一", "graduate2": "研二", "graduate3": "研三",
+            "freshman": "大一",
+            "sophomore": "大二",
+            "junior": "大三",
+            "senior": "大四",
+            "graduate1": "研一",
+            "graduate2": "研二",
+            "graduate3": "研三",
         }
         parts.append(f"年级：{grade_map.get(profile.grade, profile.grade)}")
     if profile.target_direction:
@@ -208,10 +201,7 @@ async def _load_profile_summary(db: AsyncSession, user_id: str) -> str:
 
     skills = profile.current_skills
     if skills and isinstance(skills, list):
-        skill_names = [
-            s.get("skill", s.get("name", "")) for s in skills
-            if isinstance(s, dict)
-        ]
+        skill_names = [s.get("skill", s.get("name", "")) for s in skills if isinstance(s, dict)]
         if skill_names:
             parts.append(f"技能：{', '.join(skill_names)}")
 

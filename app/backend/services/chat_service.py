@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backend.agent.llm_router import TaskType, chat_stream
+from app.backend.agent.llm_router import chat as llm_chat
 from app.backend.agent.orchestrator import run_orchestrator
-from app.backend.agent.llm_router import chat_stream, chat as llm_chat, TaskType
 from app.backend.models.conversation import Conversation, Message
-from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -82,17 +83,12 @@ async def stream_chat(
         .limit(20)
     )
     recent = history_result.scalars().all()
-    history_messages = [
-        {"role": msg.role, "content": msg.content or ""}
-        for msg in reversed(recent)
-    ]
+    history_messages = [{"role": msg.role, "content": msg.content or ""} for msg in reversed(recent)]
 
     # 1. 加载画像 + 意图分类 + 组装 prompt（失败不落库，无孤儿消息）
     try:
         user_profile = await _load_user_profile(db, user_id)
-        intent, task_type, system = await run_orchestrator(
-            user_input, user_profile, conv.summary
-        )
+        intent, task_type, system = await run_orchestrator(user_input, user_profile, conv.summary)
     except Exception:
         logger.exception("编排失败: conversation_id=%s", conv.conversation_id)
         yield _sse_error("服务暂不可用，请稍后重试")
@@ -106,7 +102,7 @@ async def stream_chat(
     )
     db.add(user_message)
     conv.message_count = (conv.message_count or 0) + 1
-    conv.last_message_at = datetime.now(timezone.utc)
+    conv.last_message_at = datetime.now(UTC)
     try:
         await db.commit()
     except Exception:
@@ -117,9 +113,7 @@ async def stream_chat(
 
     # 2. 流式生成 + 保存 AI 回复
     try:
-        messages = [{"role": "system", "content": system}] + history_messages + [
-            {"role": "user", "content": user_input}
-        ]
+        messages = [{"role": "system", "content": system}, *history_messages, {"role": "user", "content": user_input}]
 
         full_content = ""
         try:
@@ -129,14 +123,16 @@ async def stream_chat(
         finally:
             # 无论正常完成还是客户端断开，都保存已生成的内容
             if full_content:
-                db.add(Message(
-                    conversation_id=conv.conversation_id,
-                    role="assistant",
-                    content=full_content,
-                    intent=intent,
-                ))
+                db.add(
+                    Message(
+                        conversation_id=conv.conversation_id,
+                        role="assistant",
+                        content=full_content,
+                        intent=intent,
+                    )
+                )
                 conv.message_count = (conv.message_count or 0) + 1
-                conv.last_message_at = datetime.now(timezone.utc)
+                conv.last_message_at = datetime.now(UTC)
                 try:
                     await db.commit()
                 except Exception:
@@ -163,9 +159,7 @@ async def _load_user_profile(db: AsyncSession, user_id: str) -> dict | None:
     user_result = await db.execute(select(User).where(User.user_id == user_id))
     user = user_result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == user_id)
-    )
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
     profile = result.scalar_one_or_none()
     if profile is None:
         return None
@@ -210,10 +204,12 @@ async def _fetch_old_messages(db: AsyncSession, conv: Conversation) -> list[Mess
 def _format_messages(messages: list[Message]) -> str:
     """消息列表 → user: xxx\nassistant: xxx，清洗文件名引用防止 LLM 误读。"""
     import re
+
     def _clean(content: str) -> str:
-        content = re.sub(r'[\[【].*?\.(?:pdf|docx?|png|jpg|txt)[\]】]', '', content, flags=re.IGNORECASE)
-        content = re.sub(r'\[PDF\s*\d+\]', '', content, flags=re.IGNORECASE)
+        content = re.sub(r"[\[【].*?\.(?:pdf|docx?|png|jpg|txt)[\]】]", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"\[PDF\s*\d+\]", "", content, flags=re.IGNORECASE)
         return content
+
     return "\n".join(
         f"{'user' if msg.role == 'user' else 'assistant'}: {_clean((msg.content or '')[:_MAX_MSG_CHARS])}"
         for msg in messages

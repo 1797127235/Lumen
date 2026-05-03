@@ -10,10 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.db.session import get_db
 from app.backend.schemas.jd import JDDiagnoseRequest, JDDiagnoseResponse
 from app.backend.services.jd_service import (
+    delete_diagnosis,
     diagnose_jd,
     get_diagnosis,
     get_history,
-    delete_diagnosis,
 )
 
 logger = logging.getLogger(__name__)

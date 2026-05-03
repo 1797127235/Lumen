@@ -1,10 +1,13 @@
 """对话 API — SSE 流式对话 + 历史查询"""
+
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.backend.db.session import get_db
 from app.backend.models.conversation import Conversation, Message
 from app.backend.services.chat_service import stream_chat
@@ -12,6 +15,7 @@ from app.backend.services.chat_service import stream_chat
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # ── 请求/响应模型 ──
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -36,6 +40,7 @@ class MessageItem(BaseModel):
 
 
 # ── 路由 ──
+
 
 @router.post("")
 async def send_message(
@@ -90,9 +95,7 @@ async def get_conversation_messages(
         raise HTTPException(status_code=403, detail="无权访问该会话")
 
     result = await db.execute(
-        select(Message)
-        .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
+        select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
     )
     messages = result.scalars().all()
     return [

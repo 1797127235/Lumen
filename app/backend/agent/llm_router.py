@@ -1,6 +1,7 @@
 """LLM 路由 — 按用途自动选择模型（LiteLLM 统一抽象层）"""
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import Literal
@@ -12,25 +13,30 @@ from app.backend.config import get_settings
 logger = logging.getLogger(__name__)
 
 # LiteLLM 全局配置
-litellm.drop_params = True   # 丢弃不支持的参数，避免报错
+litellm.drop_params = True  # 丢弃不支持的参数，避免报错
 litellm.modify_params = True  # 自动修改参数
 
 # ── 任务类型 → 模型映射 ──
 _ROUTE_MAP: dict[str, str] = {
-    "general_chat": "qwen-plus",        # 日常对话、通用问答
-    "career_planning": "qwen-plus",      # 职业规划、路径生成（需强推理）
-    "resume_optimize": "qwen-plus",      # 简历优化（需结构化输出）
-    "mock_interview": "qwen-plus",       # 模拟面试（需追问逻辑）
-    "skill_analysis": "qwen-plus",      # 技能分析（轻量）
-    "path_generation": "qwen-plus",      # 路径生成（复杂）
-    "memory_summarize": "qwen-plus",    # 记忆摘要（轻量）
-    "embedding": "text-embedding-v4",   # 向量化（专用模型）
+    "general_chat": "qwen-plus",  # 日常对话、通用问答
+    "career_planning": "qwen-plus",  # 职业规划、路径生成（需强推理）
+    "resume_optimize": "qwen-plus",  # 简历优化（需结构化输出）
+    "mock_interview": "qwen-plus",  # 模拟面试（需追问逻辑）
+    "skill_analysis": "qwen-plus",  # 技能分析（轻量）
+    "path_generation": "qwen-plus",  # 路径生成（复杂）
+    "memory_summarize": "qwen-plus",  # 记忆摘要（轻量）
+    "embedding": "text-embedding-v4",  # 向量化（专用模型）
 }
 
 TaskType = Literal[
-    "general_chat", "career_planning", "resume_optimize",
-    "mock_interview", "skill_analysis", "path_generation",
-    "memory_summarize", "embedding",
+    "general_chat",
+    "career_planning",
+    "resume_optimize",
+    "mock_interview",
+    "skill_analysis",
+    "path_generation",
+    "memory_summarize",
+    "embedding",
 ]
 
 
@@ -72,7 +78,7 @@ async def chat_stream(
         except Exception as e:
             if attempt < retries:
                 logger.warning("LLM stream failed (attempt %d/%d): %s", attempt + 1, retries + 1, e)
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             logger.error("LLM stream failed after %d retries: %s", retries + 1, e)
             raise
@@ -106,7 +112,7 @@ async def chat(
         except Exception as e:
             if attempt < retries:
                 logger.warning("LLM chat failed (attempt %d/%d): %s", attempt + 1, retries + 1, e)
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             logger.error("LLM chat failed after %d retries: %s", retries + 1, e)
             raise

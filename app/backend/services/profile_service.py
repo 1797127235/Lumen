@@ -1,25 +1,29 @@
 """画像服务 — 简历文本提取 + LLM 解析 + 写 DB"""
+
 from __future__ import annotations
+
 import asyncio
 import logging
 import re
 from datetime import datetime
-from fastapi import UploadFile, HTTPException
-from sqlalchemy import select, delete
+
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.backend.agent.llm_router import chat as llm_chat
 from app.backend.models.user import User, UserProfile
 from app.backend.schemas.profile import (
+    PortfolioLink,
     ProfileResponse,
     ProfileUpdate,
+    ProjectItem,
     ResumeUploadResponse,
     SkillItem,
-    PortfolioLink,
-    ProjectItem,
     WorkExperienceItem,
 )
-from app.backend.utils.json_utils import extract_json
 from app.backend.utils.date_utils import restore_dates
+from app.backend.utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,7 @@ _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 _LLM_TEMPERATURE = 0.1
 _LLM_MAX_TOKENS = 4096
 _LLM_TRUNCATION_LENGTH = 5000  # 截断过长文本（前 N 字符信息密度最高）
-_MAX_RETRIES = 3               # JSON 截断时重试次数
+_MAX_RETRIES = 3  # JSON 截断时重试次数
 
 # ── 预览 ──
 _PREVIEW_LENGTH = 500  # 简历文本预览长度
@@ -55,6 +59,7 @@ def _extract_with_markitdown(content: bytes, filename: str) -> str:
     """使用 markitdown 将文件转为 Markdown 文本。"""
     import tempfile
     from pathlib import Path
+
     from markitdown import MarkItDown
 
     suffix = Path(filename).suffix.lower() or ".tmp"
@@ -206,7 +211,10 @@ async def _llm_extract(raw_text: str) -> dict:
         result = await llm_chat(
             task_type="skill_analysis",
             messages=[
-                {"role": "system", "content": "You are a JSON extraction engine. Output only valid JSON, no explanations."},
+                {
+                    "role": "system",
+                    "content": "You are a JSON extraction engine. Output only valid JSON, no explanations.",
+                },
                 {"role": "user", "content": user_content},
             ],
             temperature=_LLM_TEMPERATURE,
@@ -249,7 +257,7 @@ def _extract_projects_from_project_section(raw_text: str) -> list[dict]:
             end = i
             break
 
-    section = lines[start + 1:end]
+    section = lines[start + 1 : end]
     projects: list[dict] = []
     i = 0
     while i < len(section):
@@ -272,20 +280,18 @@ def _extract_projects_from_project_section(raw_text: str) -> list[dict]:
             j += 1
 
         tech_stack = _extract_labeled_value(body, "技术栈")
-        description_parts = [
-            _clean_project_line(part)
-            for part in body
-            if not part.startswith("【源码地址】")
-        ]
+        description_parts = [_clean_project_line(part) for part in body if not part.startswith("【源码地址】")]
         description = " ".join(part for part in description_parts if part).strip()
         if title and description:
-            projects.append({
-                "title": title,
-                "tech_stack": tech_stack,
-                "role": role,
-                "period": period,
-                "description": description,
-            })
+            projects.append(
+                {
+                    "title": title,
+                    "tech_stack": tech_stack,
+                    "role": role,
+                    "period": period,
+                    "description": description,
+                }
+            )
         i = j
 
     return projects
@@ -316,6 +322,7 @@ def _clean_project_line(value: str) -> str:
 # ═══════════════════════════════════════════════
 # DB 读写
 # ═══════════════════════════════════════════════
+
 
 def _set_if_exists(obj, field: str, value):
     """仅当 value 非 None 时才设置字段，防止空数据覆盖已有值"""
@@ -354,9 +361,7 @@ async def _save_profile(db: AsyncSession, user_id: str, data: dict) -> ProfileRe
         user.nickname = data["name"]
 
     # 2. 更新或创建 UserProfile
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == user_id)
-    )
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
     profile = result.scalar_one_or_none()
 
     if profile is None:
@@ -386,10 +391,12 @@ async def _save_profile(db: AsyncSession, user_id: str, data: dict) -> ProfileRe
                     normalized.append({"skill": s, "level": _DEFAULT_SKILL_LEVEL})
                 elif isinstance(s, dict):
                     name = s.get("name") or s.get("skill") or ""
-                    normalized.append({
-                        "skill": name,
-                        "level": s.get("level", _DEFAULT_SKILL_LEVEL),
-                    })
+                    normalized.append(
+                        {
+                            "skill": name,
+                            "level": s.get("level", _DEFAULT_SKILL_LEVEL),
+                        }
+                    )
                     ctx = s.get("context")
                     if name and ctx:
                         skills_context[name] = ctx
@@ -430,8 +437,13 @@ def _map_grade(grade: str | None) -> str | None:
     if not grade:
         return None
     valid = {
-        "freshman", "sophomore", "junior", "senior",
-        "graduate1", "graduate2", "graduate3",
+        "freshman",
+        "sophomore",
+        "junior",
+        "senior",
+        "graduate1",
+        "graduate2",
+        "graduate3",
     }
     return grade if grade in valid else None
 
@@ -446,9 +458,7 @@ def _map_direction(direction: str | None) -> str | None:
 
 async def get_profile(db: AsyncSession, user_id: str) -> ProfileResponse:
     """读取用户画像"""
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == user_id)
-    )
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
     profile = result.scalar_one_or_none()
 
     # 同时查 nickname
@@ -458,13 +468,9 @@ async def get_profile(db: AsyncSession, user_id: str) -> ProfileResponse:
     return _profile_to_response(profile, nickname) if profile else ProfileResponse(nickname=nickname)
 
 
-async def update_profile(
-    db: AsyncSession, user_id: str, patch: ProfileUpdate
-) -> ProfileResponse:
+async def update_profile(db: AsyncSession, user_id: str, patch: ProfileUpdate) -> ProfileResponse:
     """局部更新用户画像"""
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == user_id)
-    )
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
     profile = result.scalar_one_or_none()
 
     if profile is None:
@@ -473,9 +479,18 @@ async def update_profile(
 
     set_fields = patch.model_fields_set
     indirect = {
-        "current_skills", "nickname", "gpa", "ranking", "awards",
-        "bio", "city", "english_level", "expected_salary",
-        "portfolio_links", "projects", "work_experience",
+        "current_skills",
+        "nickname",
+        "gpa",
+        "ranking",
+        "awards",
+        "bio",
+        "city",
+        "english_level",
+        "expected_salary",
+        "portfolio_links",
+        "projects",
+        "work_experience",
     }
     patch_data = patch.model_dump(exclude_unset=True, exclude=indirect)
 
@@ -486,9 +501,7 @@ async def update_profile(
 
     if "current_skills" in set_fields:
         skills = patch.current_skills or []
-        profile.current_skills = [
-            {"skill": s.name, "level": s.level} for s in skills
-        ]
+        profile.current_skills = [{"skill": s.name, "level": s.level} for s in skills]
         existing_ctx = pdata.get("skills_context") or {}
         new_ctx = {s.name: s.context for s in skills if s.context}
         merged = {**existing_ctx, **new_ctx}
@@ -523,12 +536,17 @@ async def update_profile(
     _list_serializers = {
         "portfolio_links": lambda p: {"label": p.label, "url": p.url},
         "projects": lambda p: {
-            "title": p.title, "tech_stack": p.tech_stack, "role": p.role,
-            "period": p.period, "description": p.description,
+            "title": p.title,
+            "tech_stack": p.tech_stack,
+            "role": p.role,
+            "period": p.period,
+            "description": p.description,
         },
         "work_experience": lambda w: {
-            "company": w.company, "role": w.role,
-            "period": w.period, "description": w.description,
+            "company": w.company,
+            "role": w.role,
+            "period": w.period,
+            "description": w.description,
         },
     }
     for key, serializer in _list_serializers.items():
@@ -575,37 +593,40 @@ def _profile_to_response(profile: UserProfile | None, nickname: str | None) -> P
         for s in raw_skills:
             if isinstance(s, dict):
                 name = s.get("skill") or s.get("name") or ""
-                skills.append(SkillItem(
-                    name=name,
-                    level=s.get("level", _DEFAULT_SKILL_LEVEL),
-                    context=skills_ctx.get(name) if name else None,
-                ))
+                skills.append(
+                    SkillItem(
+                        name=name,
+                        level=s.get("level", _DEFAULT_SKILL_LEVEL),
+                        context=skills_ctx.get(name) if name else None,
+                    )
+                )
 
     awards = edu.get("awards") if isinstance(edu.get("awards"), list) else None
 
     # ── 扩展字段：直接从 profile_data 读，不做任何字段名映射 ──
     portfolio_links = _build_list_from_pdata(
-        pdata, "portfolio_links",
-        lambda p: PortfolioLink(label=p.get("label", ""), url=p.get("url", ""))
+        pdata, "portfolio_links", lambda p: PortfolioLink(label=p.get("label", ""), url=p.get("url", ""))
     )
     projects = _build_list_from_pdata(
-        pdata, "projects",
+        pdata,
+        "projects",
         lambda p: ProjectItem(
             title=p.get("title", ""),
             tech_stack=p.get("tech_stack"),
             role=p.get("role"),
             period=p.get("period", ""),
             description=p.get("description", ""),
-        )
+        ),
     )
     work_experience = _build_list_from_pdata(
-        pdata, "work_experience",
+        pdata,
+        "work_experience",
         lambda w: WorkExperienceItem(
             company=w.get("company", ""),
             role=w.get("role", ""),
             period=w.get("period", ""),
             description=w.get("description", ""),
-        )
+        ),
     )
 
     return ProfileResponse(
@@ -635,9 +656,8 @@ def _profile_to_response(profile: UserProfile | None, nickname: str | None) -> P
 # 主流程：上传 → 提取 → 解析 → 保存
 # ═══════════════════════════════════════════════
 
-async def process_resume(
-    db: AsyncSession, user_id: str, file: UploadFile
-) -> ResumeUploadResponse:
+
+async def process_resume(db: AsyncSession, user_id: str, file: UploadFile) -> ResumeUploadResponse:
     """完整管线：上传简历 → 返回画像"""
     filename = file.filename or "unknown"
 
