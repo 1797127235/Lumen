@@ -296,6 +296,13 @@ export function getConversation(conversation_id: string): Promise<MessageItem[]>
   );
 }
 
+export function deleteConversation(conversation_id: string): Promise<{ deleted: boolean }> {
+  return http<{ deleted: boolean }>(
+    `/api/chat/${encodeURIComponent(conversation_id)}?user_id=${encodeURIComponent(getUserId())}`,
+    { method: "DELETE" },
+  );
+}
+
 export type ChatStreamHandlers = {
   onToken: (delta: string, conversationId: string) => void;
   onDone: (conversationId: string) => void;

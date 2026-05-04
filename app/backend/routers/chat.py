@@ -108,3 +108,24 @@ async def get_conversation_messages(
         )
         for m in messages
     ]
+
+
+@router.delete("/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str = Query("demo_user"),
+    db: AsyncSession = Depends(get_db),
+):
+    """删除单条会话及其消息"""
+    conv = await db.get(Conversation, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if conv.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权删除该会话")
+
+    await db.execute(
+        Message.__table__.delete().where(Message.conversation_id == conversation_id)
+    )
+    await db.delete(conv)
+    await db.commit()
+    return {"deleted": True}
