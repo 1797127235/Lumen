@@ -65,3 +65,7 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# BMAD-METHOD
+_bmad-output/
+_bmad/_memory/
