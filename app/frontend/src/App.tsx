@@ -5,7 +5,7 @@ const FEEDBACK_URL = 'https://github.com/1797127235/CareerOS/issues'
 function App() {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="h-[64px] flex items-center justify-between px-md md:px-lg border-b border-border">
+      <header className="sticky top-0 z-50 h-[64px] flex items-center justify-between px-md md:px-lg border-b border-border bg-bg/80 backdrop-blur-md">
         <NavLink
           to="/"
           end

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -38,7 +37,7 @@ async def db(setup_db) -> AsyncGenerator[AsyncSession, None]:
 
 @pytest.fixture
 async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
-    """异步 HTTP 测试客户端，覆盖 DB 依赖 + mock 后台任务"""
+    """异步 HTTP 测试客户端，覆盖 DB 依赖"""
 
     async def _override_get_db():
         async with TestSessionLocal() as session:
@@ -54,12 +53,10 @@ async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
     # 先应用依赖覆盖
     app.dependency_overrides[get_db] = _override_get_db
 
-    # Mock 后台任务，避免调用 get_async_session_maker()
-    with patch("app.backend.routers.targets.generate_advice", new_callable=AsyncMock):
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-        ) as ac:
-            yield ac
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as ac:
+        yield ac
 
     app.dependency_overrides.clear()

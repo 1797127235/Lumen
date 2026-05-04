@@ -31,11 +31,3 @@ async def test_chat_history_empty(client: AsyncClient):
     data = r.json()
     assert isinstance(data, list)
     assert len(data) == 0
-
-
-@pytest.mark.asyncio
-async def test_targets_list(client: AsyncClient):
-    """岗位列表端点可访问"""
-    r = await client.get("/api/targets", params={"user_id": "nonexistent"})
-    # 可能返回 200 或 405 (如果方法不允许)
-    assert r.status_code in (200, 405)
