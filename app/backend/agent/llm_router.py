@@ -57,11 +57,11 @@ def _get_model_identifier(task_type: TaskType) -> str:
 
 
 def _get_api_key(for_embedding: bool = False) -> str:
-    """获取 API Key — fallback 链：专用 key → LLM key → 旧 dashscope key"""
+    """获取 API Key — 专用 key → LLM key（无 fallback 到 dashscope_api_key）"""
     settings = get_settings()
     if for_embedding:
-        return settings.embedding_api_key or settings.llm_api_key or settings.dashscope_api_key
-    return settings.llm_api_key or settings.dashscope_api_key
+        return settings.embedding_api_key or settings.llm_api_key
+    return settings.llm_api_key
 
 
 def _get_base_url(for_embedding: bool = False) -> str | None:

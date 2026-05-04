@@ -131,4 +131,12 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
             else:
                 applied[key] = cfg[key]
 
+    # 一次性迁移：旧用户 dashscope_api_key → llm_api_key
+    # 条件：llm_provider 是 dashscope（或未设置）且 llm_api_key 为空且 dashscope_api_key 非空
+    if settings.llm_provider in ("dashscope", "") and not settings.llm_api_key and settings.dashscope_api_key:
+        settings.llm_api_key = settings.dashscope_api_key
+        # 同步写入 config.json，避免下次重启重复迁移
+        save_user_config({"llm_api_key": settings.dashscope_api_key})
+        applied["llm_api_key"] = "***（从 dashscope_api_key 迁移）"
+
     return applied

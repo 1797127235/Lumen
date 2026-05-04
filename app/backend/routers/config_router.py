@@ -111,20 +111,13 @@ async def get_config() -> ConfigResponse:
     user_config = load_user_config()
     settings = get_settings()
 
-    # API Key 判断 — fallback 到旧 dashscope_api_key
-    has_llm_key = bool(
-        user_config.get("llm_api_key")
-        or settings.llm_api_key
-        or user_config.get("dashscope_api_key")
-        or settings.dashscope_api_key
-    )
+    # API Key 判断 — 不 fallback 到 dashscope_api_key
+    has_llm_key = bool(user_config.get("llm_api_key") or settings.llm_api_key)
     has_embedding_key = bool(
         user_config.get("embedding_api_key")
         or settings.embedding_api_key
         or user_config.get("llm_api_key")
         or settings.llm_api_key
-        or user_config.get("dashscope_api_key")
-        or settings.dashscope_api_key
     )
     has_api_key = bool(user_config.get("dashscope_api_key") or settings.dashscope_api_key)
 
@@ -171,13 +164,21 @@ async def test_config(body: ConfigTestRequest) -> ConfigTestResponse:
     from app.backend.agent.llm_router import chat
 
     start = time.time()
+
+    # 如果用户没有输入 API key，使用已保存的 key
+    api_key = body.api_key
+    if not api_key:
+        user_config = load_user_config()
+        settings = get_settings()
+        api_key = user_config.get("llm_api_key") or settings.llm_api_key
+
     try:
         await chat(
             "general_chat",
             messages=[{"role": "user", "content": "hi"}],
             temperature=0.7,
             max_tokens=10,
-            api_key=body.api_key,
+            api_key=api_key,
             base_url=body.base_url or None,
             model=f"{body.provider}/{body.model}" if body.provider != "openai" else body.model,
         )
