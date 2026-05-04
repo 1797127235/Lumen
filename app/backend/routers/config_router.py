@@ -111,9 +111,21 @@ async def get_config() -> ConfigResponse:
     user_config = load_user_config()
     settings = get_settings()
 
-    # API Key 判断
-    has_llm_key = bool(user_config.get("llm_api_key") or settings.llm_api_key)
-    has_embedding_key = bool(user_config.get("embedding_api_key") or settings.embedding_api_key or has_llm_key)
+    # API Key 判断 — fallback 到旧 dashscope_api_key
+    has_llm_key = bool(
+        user_config.get("llm_api_key")
+        or settings.llm_api_key
+        or user_config.get("dashscope_api_key")
+        or settings.dashscope_api_key
+    )
+    has_embedding_key = bool(
+        user_config.get("embedding_api_key")
+        or settings.embedding_api_key
+        or user_config.get("llm_api_key")
+        or settings.llm_api_key
+        or user_config.get("dashscope_api_key")
+        or settings.dashscope_api_key
+    )
     has_api_key = bool(user_config.get("dashscope_api_key") or settings.dashscope_api_key)
 
     def mask_key(val: str) -> str:

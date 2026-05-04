@@ -164,7 +164,7 @@ export default function Settings() {
       const result = await testConfig({
         provider: llmProvider,
         model: llmModel,
-        api_key: llmApiKey || "***", // 用已保存的 key
+        api_key: llmApiKey.trim(), // 空字符串 → 后端 fallback 到已保存配置
         base_url: llmBaseUrl,
       });
       setTestResult(result);
@@ -306,20 +306,6 @@ export default function Settings() {
             {saving ? "保存中..." : saved ? "已保存" : "保存配置"}
           </button>
           {saved && <span className="text-sm text-green">✓ 配置已保存</span>}
-        </div>
-
-        {/* 数据存储卡片 */}
-        <div className="border border-border rounded-lg p-lg bg-surface-elevated">
-          <h2 className="text-base font-medium text-text mb-sm">数据存储</h2>
-          <div className="bg-surface rounded p-sm font-mono text-sm text-text-muted mb-sm">
-            <div>~/.careeros/</div>
-            <div className="pl-sm">├── career_os.db</div>
-            <div className="pl-sm">├── chroma_db/</div>
-            <div className="pl-sm">└── config.json</div>
-          </div>
-          <p className="text-xs text-text-muted">
-            所有对话、画像、岗位数据均存储在此目录。备份或迁移只需复制整个 ~/.careeros 文件夹。
-          </p>
         </div>
       </div>
     </div>
