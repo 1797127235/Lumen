@@ -17,7 +17,7 @@ class Conversation(Base):
     title: Mapped[str | None] = mapped_column(String(200))
     topic_type: Mapped[str | None] = mapped_column(
         String(30)
-    )  # career_consult | learning | resume | interview | emotional | technical_qa
+    )  # career_consult | learning | resume | emotional | technical_qa
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | closed | archived
     context_snapshot: Mapped[dict | None] = mapped_column(JSON)
     message_count: Mapped[int] = mapped_column(default=0)

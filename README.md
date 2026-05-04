@@ -22,7 +22,7 @@
 
 **核心价值**：数据在本地、自己部署、用四年——不是一次性工具，是一个越用越懂你的系统。
 
-**技术栈**：FastAPI + SQLAlchemy + DashScope (qwen-plus/qwen-max) + LlamaIndex + Chroma + React + Vite
+**技术栈**：FastAPI + SQLAlchemy + LiteLLM（多 Provider 路由）+ LlamaIndex + Chroma + React + Vite
 
 ---
 
@@ -31,14 +31,13 @@
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | 智能对话 | ✅ | SSE 流式输出，7 大意图分类 |
-| 记忆检索 | ✅ | LlamaIndex + Chroma，从用户自己的数据中检索相关上下文 |
+| 记忆检索 | ⚠️ | 用户数据已索引（LlamaIndex + Chroma），对话中尚未调用检索 |
 | 用户画像 | ✅ | 上传简历 → LLM 自动提取 → 手动修正 |
 | JD 诊断 | ✅ | 画像 vs 岗位要求 → 匹配评分 + 缺口分析 |
 | 岗位追踪 | ✅ | 拖拽看板管理求职进度 |
-| 技能记录 | ✅ | 对话中自动识别技能，用户确认后入库 |
-| 项目经历 | ✅ | 项目经历库，AI 从对话中提取并确认 |
-| 学习路径 | 🚧 | 根据目标岗位生成学习路线 |
-| 模拟面试 | 🚧 | 八股/算法/系统设计面试练习 |
+| 技能记录 | ✅ | 表单管理 + 简历自动同步 |
+| 项目经历 | ✅ | 表单管理 + AI 从对话中提取 |
+| 学习路径 | 🚧 | 对话意图可用，暂无独立页面 |
 
 ---
 
@@ -52,7 +51,7 @@ cd CareerOS
 docker compose up -d
 ```
 
-打开 `http://localhost:3000`，在设置页填入 DashScope API Key，开始使用。
+打开 `http://localhost:3000`，在设置页选择 LLM Provider 并填入 API Key，开始使用。
 
 ### 方式二：本地开发
 
@@ -65,7 +64,7 @@ cd frontend && npm install && cd ..
 
 # 配置
 cp .env.example .env
-# 编辑 .env，填入 DASHSCOPE_API_KEY
+# 编辑 .env，配置 API Key（或在浏览器设置页填写）
 
 # 启动
 # Windows: 双击 run.bat
@@ -130,9 +129,9 @@ JD/岗位（我投过什么） → JD 诊断结果、岗位看板
 |------|------|------|
 | 后端 | FastAPI + SQLAlchemy 2.0 | async，类型安全 |
 | 数据库 | SQLite（单文件） | 自托管首选，零运维 |
-| LLM | DashScope (qwen-plus/qwen-max) | 国内访问快，性价比高 |
+| LLM | LiteLLM（DashScope / OpenAI / DeepSeek / Anthropic / Gemini / Ollama / OpenRouter）| 多 Provider 统一路由，用户自选 |
 | Agent | 自发现 Skill + 纯函数编排 | 扫描 skills/ 目录自动生成意图分类 |
-| 记忆层 | LlamaIndex + Chroma | 向量检索用户个人数据，DashScope embedding |
+| 记忆层 | LlamaIndex + Chroma | 向量检索用户个人数据，Provider 原生 Embedding |
 | 前端 | React + Vite + Tailwind | shadcn/ui 组件，OKLCH 配色 |
 | 部署 | Docker Compose | 单容器，单端口，持久化 volume |
 

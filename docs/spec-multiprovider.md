@@ -195,7 +195,6 @@ _ROUTE_MAP: dict[str, str] = {
     "general_chat": "qwen-plus",
     "career_planning": "qwen-plus",
     "resume_optimize": "qwen-plus",
-    "mock_interview": "qwen-plus",
     "skill_analysis": "qwen-plus",
     "path_generation": "qwen-plus",
     "memory_summarize": "qwen-plus",

@@ -21,7 +21,6 @@ _ROUTE_MAP: dict[str, str] = {
     "general_chat": "qwen-plus",  # 日常对话、通用问答
     "career_planning": "qwen-plus",  # 职业规划、路径生成（需强推理）
     "resume_optimize": "qwen-plus",  # 简历优化（需结构化输出）
-    "mock_interview": "qwen-plus",  # 模拟面试（需追问逻辑）
     "skill_analysis": "qwen-plus",  # 技能分析（轻量）
     "path_generation": "qwen-plus",  # 路径生成（复杂）
     "memory_summarize": "qwen-plus",  # 记忆摘要（轻量）
@@ -32,7 +31,6 @@ TaskType = Literal[
     "general_chat",
     "career_planning",
     "resume_optimize",
-    "mock_interview",
     "skill_analysis",
     "path_generation",
     "memory_summarize",
