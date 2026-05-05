@@ -34,7 +34,6 @@ career-os/
 │   ├── models/
 │   │   ├── user.py           # User + UserProfile（含 profile_data JSON）
 │   │   ├── conversation.py   # Conversation + Message
-│   │   ├── skill_record.py   # SkillRecord 技能成长记录
 │   │   └── agent_trace.py    # AgentTrace 可观测性
 │   ├── agent/
 │   │   ├── pydantic_agent.py  # PydanticAI Agent 定义 + 动态系统提示词
@@ -46,7 +45,6 @@ career-os/
 │   │   ├── chat.py           # POST /api/chat (SSE), GET /api/chat/history, DELETE /api/chat/{id}
 │   │   ├── profile.py        # POST /api/profile/resume, GET/PATCH/DELETE /api/profile/me
 │   │   ├── memory.py         # GET /api/memory/stats, /api/memory/list, POST /api/memory/reset
-│   │   ├── skills.py         # GET/POST/PATCH/DELETE /api/skills
 │   │   └── config_router.py  # GET/POST /api/config
 │   ├── schemas/
 │   │   └── profile.py        # ProfileResponse, ProfileUpdate, SkillItem（含 context）
@@ -93,10 +91,6 @@ career-os/
 | `GET`  | `/api/memory/stats?user_id=` | 记忆统计（状态、数量） |
 | `GET`  | `/api/memory/list?user_id=` | 记忆列表 |
 | `POST` | `/api/memory/reset?user_id=` | 重置记忆 |
-| `GET`  | `/api/skills?user_id=` | 获取用户所有技能记录 |
-| `POST` | `/api/skills?user_id=` | 创建技能记录 |
-| `PATCH` | `/api/skills/{skill_id}?user_id=` | 更新技能记录 |
-| `DELETE` | `/api/skills/{skill_id}?user_id=` | 删除技能记录 |
 | `GET`  | `/api/config` | 获取当前用户配置 |
 | `POST` | `/api/config` | 更新用户配置（API Key 等） |
 

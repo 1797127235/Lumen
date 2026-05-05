@@ -32,7 +32,12 @@ class ProfileUpdate(BaseModel):
 @router.get("/me", response_model=ProfileResponse)
 async def get_my_profile(user_id: str = Query("demo_user")):
     try:
-        return ProfileResponse(content=read_memory())
+        content = read_memory()
+        if not content.strip():
+            projected = await sync_user_md_projection(user_id)
+            if projected:
+                content = read_memory()
+        return ProfileResponse(content=content)
     except Exception:
         logger.exception("Read profile failed: user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="读取画像失败")
