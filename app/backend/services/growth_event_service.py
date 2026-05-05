@@ -159,6 +159,7 @@ async def create_growth_event_with_dedup(
 ) -> GrowthEvent | None:
     """创建成长事件（带去重）
 
+    使用 UNIQUE 约束防止 TOCTOU 竞态。
     如果存在相同 dedupe_key 的事件，则跳过创建。
 
     Args:
@@ -173,27 +174,32 @@ async def create_growth_event_with_dedup(
     Returns:
         创建的 GrowthEvent 实例，如果重复则返回 None
     """
+    from sqlalchemy.exc import IntegrityError
+
     dedupe_key = _make_dedupe_key(event_type, entity_type, entity_id)
 
-    # 检查是否重复
-    if await check_duplicate(db, user_id, dedupe_key):
+    try:
+        # 尝试创建事件，如果 dedupe_key 重复会触发 IntegrityError
+        event = await create_growth_event(
+            db=db,
+            user_id=user_id,
+            event_type=event_type,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            payload=payload,
+            source=source,
+            dedupe_key=dedupe_key,
+        )
+        return event
+    except IntegrityError:
+        # UNIQUE 约束触发，说明是重复事件
+        await db.rollback()
         logger.debug(
-            "跳过重复事件: user_id=%s, dedupe_key=%s",
+            "跳过重复事件（UNIQUE 约束）: user_id=%s, dedupe_key=%s",
             user_id,
             dedupe_key,
         )
         return None
-
-    return await create_growth_event(
-        db=db,
-        user_id=user_id,
-        event_type=event_type,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload=payload,
-        source=source,
-        dedupe_key=dedupe_key,
-    )
 
 
 async def mark_projected_md(db: AsyncSession, event_id: str) -> None:
@@ -208,6 +214,8 @@ async def mark_projected_md(db: AsyncSession, event_id: str) -> None:
     if event:
         event.projected_md_at = datetime.utcnow()
         await db.flush()
+    else:
+        logger.warning("Event not found for projection marking (md): %s", event_id)
 
 
 async def mark_projected_cognee(db: AsyncSession, event_id: str) -> None:
@@ -222,6 +230,8 @@ async def mark_projected_cognee(db: AsyncSession, event_id: str) -> None:
     if event:
         event.projected_cognee_at = datetime.utcnow()
         await db.flush()
+    else:
+        logger.warning("Event not found for projection marking (cognee): %s", event_id)
 
 
 async def get_unprojected_md_events(db: AsyncSession, user_id: str) -> list[GrowthEvent]:

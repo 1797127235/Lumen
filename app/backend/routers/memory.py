@@ -67,22 +67,17 @@ async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
 
 @router.post("/reset", response_model=MemoryResetResponse)
 async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse:
-    """清空指定用户的长期记忆（SQLite + .md + Cognee）"""
+    """清空指定用户的长期记忆（.md + SQLite + Cognee）
+
+    执行顺序：
+    1. 先写 .md 文件（确保文件系统有内容）
+    2. 再删除 SQLite（提交后生效）
+    3. 最后清空 Cognee（可选）
+    """
     _validate_user_id(user_id)
 
     try:
-        # 1. 删除 SQLite 中的 growth_events
-        from sqlalchemy import delete, func, select
-
-        from app.backend.db.session import get_db
-        from app.backend.models.growth_event import GrowthEvent
-
-        async for db in get_db():
-            result = await db.execute(select(func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
-            count = result.scalar() or 0
-            await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
-
-        # 2. 清空 .md 文件（重置为空模板）
+        # 1. 先写 .md 文件（确保文件系统有内容）
         from app.backend.services.memory_service import (
             _default_entity_template,
             _default_memory_template,
@@ -95,6 +90,18 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
         write_memory(_default_memory_template())
         for entity_type in ["skills", "experiences", "preferences", "goals", "decisions", "relationships", "status"]:
             write_entity(entity_type, _default_entity_template(entity_type))
+
+        # 2. 删除 SQLite 中的 growth_events
+        from sqlalchemy import delete, func, select
+
+        from app.backend.db.session import get_db
+        from app.backend.models.growth_event import GrowthEvent
+
+        count = 0
+        async for db in get_db():
+            result = await db.execute(select(func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
+            count = result.scalar() or 0
+            await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
 
         # 3. 尝试清空 Cognee 索引
         index_cleared = False
@@ -225,6 +232,9 @@ async def search_memories(
 
         results: list[MemoryItem] = []
 
+        # 转义 SQL LIKE 通配符
+        escaped_query = query.replace("%", "\\%").replace("_", "\\_")
+
         # 1. 从 SQLite events 搜索
         async for db in get_db():
             result = await db.execute(
@@ -232,9 +242,9 @@ async def search_memories(
                 .where(
                     GrowthEvent.user_id == user_id,
                     or_(
-                        GrowthEvent.payload_json.contains(query),
-                        GrowthEvent.event_type.contains(query),
-                        GrowthEvent.entity_type.contains(query),
+                        GrowthEvent.payload_json.contains(escaped_query),
+                        GrowthEvent.event_type.contains(escaped_query),
+                        GrowthEvent.entity_type.contains(escaped_query),
                     ),
                 )
                 .order_by(GrowthEvent.created_at.desc())

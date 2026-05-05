@@ -271,8 +271,16 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
                 await db.commit()
 
         task = asyncio.create_task(_create_resume_events())
-        # 存储任务引用，防止被垃圾回收
-        _ = task
+
+        # 添加异常回调，记录任务失败
+        def _task_done_callback(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error("简历事件创建任务失败: %s", exc)
+
+        task.add_done_callback(_task_done_callback)
         logger.info("[3/3] 成长事件已创建")
     except Exception as e:
         # 成长事件创建失败不影响简历上传

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.backend.db.base import Base
@@ -31,6 +31,8 @@ class GrowthEvent(Base):
         Index("ix_growth_events_dedupe", "user_id", "dedupe_key"),
         Index("ix_growth_events_unprojected_md", "user_id", "projected_md_at"),
         Index("ix_growth_events_unprojected_cognee", "user_id", "projected_cognee_at"),
+        # 唯一约束：防止 TOCTOU 竞态导致的重复事件
+        UniqueConstraint("user_id", "dedupe_key", name="uq_growth_events_user_dedupe"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

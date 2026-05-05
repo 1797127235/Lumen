@@ -162,7 +162,11 @@ async def save_extracted_events(
                 except Exception as e:
                     logger.warning("保存事件失败: %s", e)
 
-            await db.commit()
+            try:
+                await db.commit()
+            except Exception as e:
+                logger.error("事务提交失败: %s", e)
+                return 0
 
         logger.info(
             "对话记忆保存: user_id=%s, conversation_id=%s, saved=%d",

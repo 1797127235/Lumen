@@ -44,6 +44,11 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
                 如果不指定，搜索所有类型
         """
         logger.info("工具调用: memory_search, query=%s, entity_types=%s", query, entity_types)
+
+        # 空查询检查
+        if not query or not query.strip():
+            return "请提供搜索关键词。"
+
         from app.backend.services.memory_service import read_entity, search_memory
 
         # 如果指定了实体类型，只搜索这些类型
@@ -99,9 +104,15 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             "preferences": "preference_learned",
             "goals": "goal_updated",
             "decisions": "decision_made",
+            "relationships": "profile_updated",
             "status": "status_changed",
         }
-        event_type = event_type_map.get(entity_type, "profile_updated")
+
+        # 验证 entity_type
+        if entity_type not in event_type_map:
+            return f"未知的实体类型: {entity_type}。支持的类型: {', '.join(event_type_map.keys())}"
+
+        event_type = event_type_map[entity_type]
 
         # 构建 payload
         payload = {
@@ -158,9 +169,15 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             "preferences": "preference_learned",
             "goals": "goal_updated",
             "decisions": "decision_made",
+            "relationships": "profile_updated",
             "status": "status_changed",
         }
-        event_type = event_type_map.get(entity_type, "profile_updated")
+
+        # 验证 entity_type
+        if entity_type not in event_type_map:
+            return f"未知的实体类型: {entity_type}。支持的类型: {', '.join(event_type_map.keys())}"
+
+        event_type = event_type_map[entity_type]
 
         # 构建 payload
         payload = {

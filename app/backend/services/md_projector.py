@@ -26,20 +26,40 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.models.growth_event import GrowthEvent
-from app.backend.services.memory_service import (
-    ensure_memory_dirs,
-    write_entity,
-    write_memory,
-)
+from app.backend.services.memory_service import ensure_memory_dirs
 
 logger = logging.getLogger(__name__)
+
+
+# ── 辅助函数 ─────────────────────────────────────────
+
+
+def _deep_merge(base: dict, update: dict) -> dict:
+    """递归深合并两个字典
+
+    Args:
+        base: 基础字典
+        update: 更新字典
+
+    Returns:
+        合并后的字典
+    """
+    result = base.copy()
+    for key, value in update.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            # 递归合并嵌套字典
+            result[key] = _deep_merge(result[key], value)
+        else:
+            # 直接覆盖
+            result[key] = value
+    return result
 
 
 # ── 合并规则实现 ─────────────────────────────────────
 
 
 def _merge_profile_events(events: list[GrowthEvent]) -> dict:
-    """合并 profile_updated 事件（字段级合并，最新值覆盖）
+    """合并 profile_updated 事件（递归深合并，最新值覆盖）
 
     Args:
         events: profile_updated 事件列表
@@ -53,8 +73,8 @@ def _merge_profile_events(events: list[GrowthEvent]) -> dict:
             continue
         try:
             payload = json.loads(event.payload_json)
-            # 字段级合并，最新值覆盖
-            profile.update(payload)
+            # 递归深合并，保留嵌套结构
+            profile = _deep_merge(profile, payload)
         except json.JSONDecodeError:
             continue
     return profile
@@ -470,6 +490,26 @@ def _generate_decisions_md(decisions: list[dict]) -> str:
 # ── 核心投影函数 ─────────────────────────────────────
 
 
+def _write_md_file_safe(path: str, content: str) -> None:
+    """安全写入 .md 文件（先写临时文件，再 rename）
+
+    Args:
+        path: 目标文件路径
+        content: 文件内容
+    """
+    import os
+    import tempfile
+
+    # 写入临时文件
+    dir_name = os.path.dirname(path)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=dir_name, suffix=".tmp", delete=False) as f:
+        f.write(content)
+        temp_path = f.name
+
+    # 原子 rename
+    os.replace(temp_path, path)
+
+
 async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
     """从 growth_events 全量重建用户的 .md 文件
 
@@ -477,7 +517,7 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
     1. 读取用户的所有 growth_events
     2. 按事件类型聚合
     3. 应用合并规则
-    4. 生成并写入 .md 文件
+    4. 生成并写入 .md 文件（先写临时文件，再 rename）
     5. 标记事件已投影
 
     Args:
@@ -522,14 +562,19 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
         goals_md = _generate_goals_md(goals)
         decisions_md = _generate_decisions_md(decisions)
 
-        # 写入 .md 文件
+        # 写入 .md 文件（先写临时文件，再 rename，确保原子性）
+        from app.backend.config import USER_DATA_DIR
+
         ensure_memory_dirs()
-        write_memory(memory_md)
-        write_entity("skills", skills_md)
-        write_entity("experiences", experiences_md)
-        write_entity("preferences", preferences_md)
-        write_entity("goals", goals_md)
-        write_entity("decisions", decisions_md)
+        memory_dir = USER_DATA_DIR / "memory"
+        entities_dir = memory_dir / "entities"
+
+        _write_md_file_safe(str(memory_dir / "memory.md"), memory_md)
+        _write_md_file_safe(str(entities_dir / "skills.md"), skills_md)
+        _write_md_file_safe(str(entities_dir / "experiences.md"), experiences_md)
+        _write_md_file_safe(str(entities_dir / "preferences.md"), preferences_md)
+        _write_md_file_safe(str(entities_dir / "goals.md"), goals_md)
+        _write_md_file_safe(str(entities_dir / "decisions.md"), decisions_md)
 
         # 标记所有事件已投影
         now = datetime.utcnow()
