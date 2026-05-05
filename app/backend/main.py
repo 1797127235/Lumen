@@ -43,6 +43,16 @@ async def _migrate_sqlite(conn):
     for sql in [
         "DROP TABLE IF EXISTS jd_diagnoses",
         "ALTER TABLE conversations ADD COLUMN summary TEXT",
+        "ALTER TABLE growth_events ADD COLUMN dedupe_key VARCHAR(128)",
+        "ALTER TABLE growth_events ADD COLUMN payload_hash VARCHAR(64)",
+        "ALTER TABLE growth_events ADD COLUMN projected_md_at DATETIME",
+        "ALTER TABLE growth_events ADD COLUMN projected_cognee_at DATETIME",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_user_event ON growth_events (user_id, event_type)",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_user_entity ON growth_events (user_id, entity_type, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_dedupe ON growth_events (user_id, dedupe_key)",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_unprojected_md ON growth_events (user_id, projected_md_at)",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_unprojected_cognee ON growth_events (user_id, projected_cognee_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_growth_events_user_dedupe ON growth_events (user_id, dedupe_key)",
     ]:
         try:
             await conn.execute(text(sql))

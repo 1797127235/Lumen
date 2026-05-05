@@ -1,4 +1,4 @@
-"""记忆管理路由 — Cognee 状态查询与重置"""
+"""Memory management routes."""
 
 from __future__ import annotations
 
@@ -6,203 +6,147 @@ import logging
 import re
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, or_, select
 
 from app.backend.agent.cognee_client import get_cognee_status
+from app.backend.db.base import get_async_session_maker
+from app.backend.models.growth_event import GrowthEvent
 from app.backend.services import cognee_service
+from app.backend.services.cognee_projector import project_all_events
+from app.backend.services.md_projector import project_user_to_md, sync_user_md_projection
+from app.backend.services.memory_service import search_memory
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
-# user_id 验证：只允许字母、数字、下划线、连字符，长度 1-64
 _USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 class MemoryStats(BaseModel):
-    status: str  # ready / not_installed / error / not_initialized
+    status: str
     count: int
 
 
 class MemoryResetResponse(BaseModel):
     deleted: int
+    index_cleared: bool = False
 
 
 class MemoryItem(BaseModel):
     id: str
     memory: str
     created_at: str | None = None
-    categories: list[str] = []
+    categories: list[str] = Field(default_factory=list)
 
 
 def _validate_user_id(user_id: str) -> str:
-    """验证 user_id 格式"""
     if not _USER_ID_PATTERN.match(user_id):
-        raise HTTPException(status_code=400, detail="user_id 格式无效，只允许字母、数字、下划线、连字符，长度 1-64")
+        raise HTTPException(
+            status_code=400,
+            detail="user_id 格式无效，只允许字母、数字、下划线和连字符，长度 1-64",
+        )
     return user_id
 
 
 @router.get("/stats", response_model=MemoryStats)
 async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
-    """查询当前记忆状态和条数（基于 SQLite growth_events）"""
     _validate_user_id(user_id)
     status = get_cognee_status()
 
     try:
-        # 从 SQLite 查询 growth_events 数量（不依赖 Cognee 状态）
-        from sqlalchemy import func, select
-
-        from app.backend.db.session import get_db
-        from app.backend.models.growth_event import GrowthEvent
-
-        # 使用 FastAPI DI 获取 session
-        async for db in get_db():
+        async with get_async_session_maker()() as db:
             result = await db.execute(select(func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
             count = result.scalar() or 0
-            return MemoryStats(status=status, count=count)
-    except Exception as e:
-        logger.error("记忆条数查询失败: %s", e)
+        return MemoryStats(status=status, count=count)
+    except Exception as exc:
+        logger.error("Memory stats failed: %s", exc)
         return MemoryStats(status=status, count=0)
 
 
 @router.post("/reset", response_model=MemoryResetResponse)
 async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse:
-    """清空指定用户的长期记忆（.md + SQLite + Cognee）
-
-    执行顺序：
-    1. 先写 .md 文件（确保文件系统有内容）
-    2. 再删除 SQLite（提交后生效）
-    3. 最后清空 Cognee（可选）
-    """
     _validate_user_id(user_id)
 
     try:
-        # 1. 先写 .md 文件（确保文件系统有内容）
-        from app.backend.services.memory_service import (
-            _default_entity_template,
-            _default_memory_template,
-            ensure_memory_dirs,
-            write_entity,
-            write_memory,
-        )
-
-        ensure_memory_dirs()
-        write_memory(_default_memory_template())
-        for entity_type in ["skills", "experiences", "preferences", "goals", "decisions", "relationships", "status"]:
-            write_entity(entity_type, _default_entity_template(entity_type))
-
-        # 2. 删除 SQLite 中的 growth_events
-        from sqlalchemy import delete, func, select
-
-        from app.backend.db.session import get_db
-        from app.backend.models.growth_event import GrowthEvent
-
-        count = 0
-        async for db in get_db():
+        async with get_async_session_maker()() as db:
             result = await db.execute(select(func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
             count = result.scalar() or 0
             await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
+            await db.commit()
 
-        # 3. 尝试清空 Cognee 索引
+        await sync_user_md_projection(user_id)
+
         index_cleared = False
         if get_cognee_status() == "ready":
             try:
                 index_cleared = await cognee_service.clear_user_index(user_id)
-            except Exception as cognee_exc:
-                logger.warning("Cognee clear_user_index failed after SQLite reset: %s", cognee_exc)
+            except Exception as exc:
+                logger.warning("Cognee clear failed after reset: %s", exc)
 
-        logger.info("记忆已重置: user_id=%s, deleted=%d, index_cleared=%s", user_id, count, index_cleared)
-        return MemoryResetResponse(deleted=count)
-
+        logger.info("Memory reset: user_id=%s, deleted=%d, index_cleared=%s", user_id, count, index_cleared)
+        return MemoryResetResponse(deleted=count, index_cleared=index_cleared)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("记忆重置失败: %s", e)
+    except Exception as exc:
+        logger.error("Memory reset failed: %s", exc)
         raise HTTPException(status_code=500, detail="清空失败，请查看日志")
 
 
 @router.get("/list", response_model=list[MemoryItem])
 async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItem]:
-    """返回用户所有记忆条目，按 created_at 倒序（基于 SQLite growth_events）"""
     _validate_user_id(user_id)
-
     try:
-        from sqlalchemy import select
-
-        from app.backend.db.session import get_db
-        from app.backend.models.growth_event import GrowthEvent
-
-        # 使用 FastAPI DI 获取 session（不依赖 Cognee 状态）
-        async for db in get_db():
+        async with get_async_session_maker()() as db:
             result = await db.execute(
                 select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
             )
             events = result.scalars().all()
-
-            memories: list[MemoryItem] = []
-            for event in events:
-                # 确保 id 是字符串
-                memories.append(
-                    MemoryItem(
-                        id=str(event.id),
-                        memory=event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
-                        created_at=event.created_at.isoformat() if event.created_at else None,
-                        categories=[event.event_type] if event.event_type else [],
-                    )
-                )
-
-            return memories
-    except Exception as e:
-        logger.error("记忆列表查询失败: %s", e)
+        return [
+            MemoryItem(
+                id=str(event.id),
+                memory=event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
+                created_at=event.created_at.isoformat() if event.created_at else None,
+                categories=[event.event_type] if event.event_type else [],
+            )
+            for event in events
+        ]
+    except Exception as exc:
+        logger.error("Memory list failed: %s", exc)
         return []
 
 
 @router.post("/rebuild")
 async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
-    """从 SQLite 重建 .md 和 Cognee 索引
-
-    流程：
-    1. 清空 .md 文件（重置为空模板）
-    2. 从 SQLite 重建 .md 文件
-    3. 清空 Cognee 索引
-    4. 从 SQLite 重建 Cognee 索引
-    """
     _validate_user_id(user_id)
     status = get_cognee_status()
-    if status != "ready":
-        raise HTTPException(status_code=503, detail="记忆服务未就绪")
 
     try:
-        # 1. 从 SQLite 重建 .md 文件
-        from app.backend.db.base import get_async_session_maker
-        from app.backend.services.md_projector import project_user_to_md
-
         async with get_async_session_maker()() as db:
             md_success = await project_user_to_md(db, user_id)
+            if md_success:
+                await db.commit()
+            else:
+                await db.rollback()
 
-        # 2. 清空 Cognee 索引
-        cognee_success = False
+        cognee_success = status != "ready"
+        index_cleared = False
         if status == "ready":
-            try:
-                await cognee_service.clear_user_index(user_id)
-            except Exception as e:
-                logger.warning("清空 Cognee 索引失败: %s", e)
+            index_cleared = await cognee_service.clear_user_index(user_id)
+            cognee_success = index_cleared and await project_all_events(user_id)
 
-        # 3. 从 SQLite 重建 Cognee 索引
-        from app.backend.services.cognee_projector import project_all_events
-
-        cognee_success = await project_all_events(user_id)
-
-        if md_success and cognee_success:
-            return {"message": "重建成功", "user_id": user_id}
-        elif md_success:
-            return {"message": ".md 重建成功，Cognee 重建失败", "user_id": user_id}
-        else:
-            raise HTTPException(status_code=500, detail="重建失败")
+        return {
+            "message": "重建成功" if md_success and cognee_success else ".md 已重建，但 Cognee 重建失败",
+            "user_id": user_id,
+            "md_success": md_success,
+            "cognee_success": cognee_success,
+            "index_cleared": index_cleared,
+        }
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("记忆重建失败: %s", e)
+    except Exception as exc:
+        logger.error("Memory rebuild failed: %s", exc)
         raise HTTPException(status_code=500, detail="重建失败，请查看日志")
 
 
@@ -212,31 +156,13 @@ async def search_memories(
     query: str = Query(...),
     limit: int = Query(10),
 ) -> list[MemoryItem]:
-    """搜索记忆（同时查 .md 和 events）
-
-    Args:
-        user_id: 用户 ID
-        query: 搜索关键词
-        limit: 返回数量限制
-
-    Returns:
-        匹配的记忆列表
-    """
     _validate_user_id(user_id)
 
     try:
-        from sqlalchemy import or_, select
-
-        from app.backend.db.session import get_db
-        from app.backend.models.growth_event import GrowthEvent
-
         results: list[MemoryItem] = []
-
-        # 转义 SQL LIKE 通配符
         escaped_query = query.replace("%", "\\%").replace("_", "\\_")
 
-        # 1. 从 SQLite events 搜索
-        async for db in get_db():
+        async with get_async_session_maker()() as db:
             result = await db.execute(
                 select(GrowthEvent)
                 .where(
@@ -252,21 +178,17 @@ async def search_memories(
             )
             events = result.scalars().all()
 
-            for event in events:
-                results.append(
-                    MemoryItem(
-                        id=str(event.id),
-                        memory=event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
-                        created_at=event.created_at.isoformat() if event.created_at else None,
-                        categories=[event.event_type] if event.event_type else [],
-                    )
+        for event in events:
+            results.append(
+                MemoryItem(
+                    id=str(event.id),
+                    memory=event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
+                    created_at=event.created_at.isoformat() if event.created_at else None,
+                    categories=[event.event_type] if event.event_type else [],
                 )
+            )
 
-        # 2. 从 .md 文件搜索
-        from app.backend.services.memory_service import search_memory
-
-        md_results = search_memory(query)
-        for md_result in md_results:
+        for md_result in search_memory(query):
             results.append(
                 MemoryItem(
                     id=f"md:{md_result['file']}",
@@ -276,17 +198,16 @@ async def search_memories(
                 )
             )
 
-        # 去重并限制数量
-        seen = set()
-        unique_results = []
+        unique_results: list[MemoryItem] = []
+        seen: set[str] = set()
         for item in results:
-            if item.id not in seen:
-                seen.add(item.id)
-                unique_results.append(item)
-                if len(unique_results) >= limit:
-                    break
-
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            unique_results.append(item)
+            if len(unique_results) >= limit:
+                break
         return unique_results
-    except Exception as e:
-        logger.error("记忆搜索失败: %s", e)
+    except Exception as exc:
+        logger.error("Memory search failed: %s", exc)
         return []

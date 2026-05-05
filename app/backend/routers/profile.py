@@ -1,7 +1,4 @@
-"""画像 API — 简历上传解析 + 画像查询/更新
-
-注意：已迁移到 .md 文件存储，UserProfile 表已废弃。
-"""
+"""Profile routes backed by growth events and markdown projection."""
 
 from __future__ import annotations
 
@@ -9,42 +6,35 @@ import logging
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import delete
 
-from app.backend.services.memory_service import read_memory, write_memory
+from app.backend.db.base import get_async_session_maker
+from app.backend.models.growth_event import GrowthEvent
+from app.backend.services.cognee_projector import project_all_events, project_event_ids
+from app.backend.services.cognee_service import clear_user_index
+from app.backend.services.growth_event_service import create_growth_event_with_dedup
+from app.backend.services.md_projector import sync_user_md_projection
+from app.backend.services.memory_service import read_memory
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 
-# ── 响应模型 ────────────────────────────────────────
-
-
 class ProfileResponse(BaseModel):
-    """画像响应"""
-
-    content: str  # memory.md 的完整内容
+    content: str
 
 
 class ProfileUpdate(BaseModel):
-    """画像更新请求"""
-
-    content: str  # 要更新的内容
-
-
-# ── API 端点 ────────────────────────────────────────
+    content: str
 
 
 @router.get("/me", response_model=ProfileResponse)
-async def get_my_profile(
-    user_id: str = Query("demo_user"),
-):
-    """获取当前用户画像（从 memory.md 读取）"""
+async def get_my_profile(user_id: str = Query("demo_user")):
     try:
-        content = read_memory()
-        return ProfileResponse(content=content)
+        return ProfileResponse(content=read_memory())
     except Exception:
-        logger.exception("读取画像失败: user_id=%s", user_id)
+        logger.exception("Read profile failed: user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="读取画像失败")
 
 
@@ -53,28 +43,58 @@ async def patch_my_profile(
     patch: ProfileUpdate,
     user_id: str = Query("demo_user"),
 ):
-    """局部更新用户画像（写入 memory.md）"""
     try:
-        write_memory(patch.content)
-        return ProfileResponse(content=patch.content)
+        async with get_async_session_maker()() as db:
+            event = await create_growth_event_with_dedup(
+                db=db,
+                user_id=user_id,
+                event_type="profile_updated",
+                entity_type="profile",
+                entity_id="memory_md",
+                payload={"memory_md": patch.content},
+                source="用户主动",
+            )
+            await db.commit()
+
+        projected = await sync_user_md_projection(user_id)
+        if not projected:
+            raise HTTPException(status_code=500, detail="画像事件已保存，但 markdown 投影失败")
+
+        if event:
+            await project_event_ids([str(event.id)])
+
+        return ProfileResponse(content=read_memory())
+    except HTTPException:
+        raise
     except Exception:
-        logger.exception("更新画像失败: user_id=%s", user_id)
+        logger.exception("Patch profile failed: user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="更新画像失败")
 
 
 @router.delete("/me", response_model=ProfileResponse)
-async def reset_my_profile(
-    user_id: str = Query("demo_user"),
-):
-    """清空用户画像（重置 memory.md）"""
+async def reset_my_profile(user_id: str = Query("demo_user")):
     try:
-        from app.backend.services.memory_service import _default_memory_template
+        async with get_async_session_maker()() as db:
+            await db.execute(
+                delete(GrowthEvent).where(
+                    GrowthEvent.user_id == user_id,
+                    GrowthEvent.entity_type == "profile",
+                )
+            )
+            await db.commit()
 
-        default_content = _default_memory_template()
-        write_memory(default_content)
-        return ProfileResponse(content=default_content)
+        projected = await sync_user_md_projection(user_id)
+        if not projected:
+            raise HTTPException(status_code=500, detail="画像已重置，但 markdown 投影失败")
+
+        if await clear_user_index(user_id):
+            await project_all_events(user_id)
+
+        return ProfileResponse(content=read_memory())
+    except HTTPException:
+        raise
     except Exception:
-        logger.exception("重置画像失败: user_id=%s", user_id)
+        logger.exception("Reset profile failed: user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="重置画像失败")
 
 
@@ -83,14 +103,12 @@ async def upload_resume(
     file: UploadFile = File(...),
     user_id: str = Query("demo_user"),
 ):
-    """上传简历（PDF/DOCX/TXT/MD），LLM 解析后直接写入 memory.md"""
     try:
         from app.backend.services.profile_service import process_resume_to_memory
 
-        result = await process_resume_to_memory(file, user_id=user_id)
-        return result
+        return await process_resume_to_memory(file, user_id=user_id)
     except HTTPException:
         raise
     except Exception:
-        logger.exception("简历上传解析失败: user_id=%s", user_id)
+        logger.exception("Resume upload failed: user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="解析失败，请稍后重试")

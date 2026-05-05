@@ -1,8 +1,12 @@
-"""Cognee 记忆服务 — remember/recall/improve/forget 封装"""
+"""Cognee wrapper with SQLite fallback."""
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -14,21 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 def _cognee_metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """合并写入 Cognee 的 metadata；dataset 由配置固定，便于单实例共用图谱。"""
     return {**(extra or {}), "dataset": get_settings().cognee_dataset}
 
 
 async def remember(user_id: str, content: str, metadata: dict[str, Any] | None = None) -> bool:
-    """记忆：将内容写入 Cognee
-
-    Args:
-        user_id: 用户 ID
-        content: 要记忆的内容
-        metadata: 元数据（可选）
-
-    Returns:
-        bool: 是否成功
-    """
     try:
         import cognee
 
@@ -41,60 +34,25 @@ async def remember(user_id: str, content: str, metadata: dict[str, Any] | None =
 
 
 async def recall(user_id: str, query: str, limit: int = 10) -> list[str]:
-    """检索：先尝试 Cognee 语义召回，失败降级 SQLite
-
-    Args:
-        user_id: 用户 ID
-        query: 查询文本
-        limit: 返回结果数量限制
-
-    Returns:
-        list[str]: 检索结果列表
-    """
-    # 先尝试 Cognee 语义召回
     try:
         import cognee
 
-        # 使用 Cognee 语义搜索
         results = await cognee.search(query, limit=limit)
-
-        if results:
-            # 过滤出属于该用户的结果
-            user_results = []
-            for result in results:
-                # 检查 metadata 中的 user_id
-                if hasattr(result, "metadata") and result.metadata:
-                    if result.metadata.get("user_id") == user_id:
-                        user_results.append(result.text if hasattr(result, "text") else str(result))
-                else:
-                    # 如果没有 metadata，可能是全局结果，跳过
-                    continue
-
-            if user_results:
-                logger.debug("Cognee recall: user_id=%s, query=%s, results=%d", user_id, query, len(user_results))
-                return user_results[:limit]
-
-        # Cognee 返回空结果，降级到 SQLite
-        logger.debug("Cognee recall returned empty, falling back to SQLite: user_id=%s", user_id)
-
+        user_results: list[str] = []
+        for result in results or []:
+            metadata = getattr(result, "metadata", None) or {}
+            if metadata.get("user_id") != user_id:
+                continue
+            user_results.append(getattr(result, "text", str(result)))
+        if user_results:
+            return user_results[:limit]
     except Exception as exc:
-        # Cognee 不可用，降级到 SQLite
-        logger.warning("Cognee recall failed, falling back to SQLite: user_id=%s, error=%s", user_id, exc)
+        logger.warning("Cognee recall failed, fallback to SQLite: user_id=%s, error=%s", user_id, exc)
 
-    # 降级：从 SQLite 查询
     return await _recall_from_sqlite(user_id, query, limit)
 
 
 async def improve(user_id: str, feedback: str) -> bool:
-    """改进：根据反馈改进记忆
-
-    Args:
-        user_id: 用户 ID
-        feedback: 反馈内容
-
-    Returns:
-        bool: 是否成功
-    """
     try:
         import cognee
 
@@ -107,73 +65,35 @@ async def improve(user_id: str, feedback: str) -> bool:
 
 
 async def forget(user_id: str, content: str) -> bool:
-    """遗忘：从 Cognee 删除指定记忆
-
-    注意：此函数只删除 Cognee 索引，不删除 SQLite 真相源。
-    SQLite 的删除由调用方负责。
-
-    Args:
-        user_id: 用户 ID
-        content: 要遗忘的内容（"all" 表示删除该用户所有记忆）
-
-    Returns:
-        bool: 是否成功
-    """
-    try:
-        # 此函数只删除 Cognee 索引
-        # SQLite 的删除由调用方负责
-        logger.debug("Cognee forget: user_id=%s, content=%s", user_id, content)
-        return True
-    except Exception as exc:
-        logger.error("Cognee forget failed: user_id=%s, error=%s", user_id, exc)
-        return False
+    logger.debug("Cognee forget requested: user_id=%s, content=%s", user_id, content)
+    return True
 
 
 async def clear_user_index(user_id: str) -> bool:
-    """清空用户的 Cognee 索引
-
-    注意：当前实现为占位，实际未清空 Cognee 索引。
-    调用方应检查返回值，如果为 False，需要手动处理索引清理。
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        bool: 是否成功清空索引（当前固定返回 False）
-    """
     try:
-        # 当前实现：只记录日志，实际未清空 Cognee 索引
-        # 原因：Cognee API 不支持按 user_id 过滤删除
-        # 后续实现：需要重建整个索引或使用 Cognee 的 metadata 过滤功能
-        logger.warning(
-            "Cognee clear_user_index: 当前为占位实现，未实际清空索引。"
-            "user_id=%s。建议使用 /api/memory/rebuild 重建索引。",
-            user_id,
-        )
-        return False
+        from app.backend.agent.cognee_client import USER_DATA_DIR, init_cognee
+
+        removed_any = False
+        for name in ("kuzu", "lancedb"):
+            path = Path(USER_DATA_DIR) / name
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=False)
+                removed_any = True
+
+        init_cognee()
+        logger.info("Cognee index cleared: user_id=%s, removed_any=%s", user_id, removed_any)
+        return True
     except Exception as exc:
         logger.error("Cognee clear_user_index failed: user_id=%s, error=%s", user_id, exc)
         return False
 
 
 async def rebuild_from_sqlite(user_id: str) -> bool:
-    """从 SQLite 重建 Cognee 图谱
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        bool: 是否成功
-    """
     try:
         import cognee
 
         from app.backend.models.growth_event import GrowthEvent
 
-        # 不要调用 forget_all()，这会删除所有用户的数据
-        # 只重建指定用户的数据
-
-        # 从 growth_events 重建
         async with get_async_session_maker()() as db:
             result = await db.execute(
                 select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at)
@@ -182,7 +102,6 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
 
             for event in events:
                 content = event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}"
-                # 构建包含 user_id/event_id 的 metadata
                 metadata = {
                     "user_id": event.user_id,
                     "event_id": str(event.id),
@@ -193,6 +112,9 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
                     "created_at": event.created_at.isoformat() if event.created_at else None,
                 }
                 await cognee.remember(content, metadata=_cognee_metadata(metadata))
+                event.projected_cognee_at = datetime.utcnow()
+
+            await db.commit()
 
         logger.info("Cognee rebuilt from SQLite: user_id=%s, events=%d", user_id, len(events))
         return True
@@ -202,10 +124,7 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
 
 
 async def _recall_from_sqlite(user_id: str, query: str, limit: int) -> list[str]:
-    """降级：从 SQLite 查询 growth_events
-
-    当 Cognee 不可用时，直接查询 SQLite 作为降级方案。
-    """
+    del query
     try:
         from app.backend.models.growth_event import GrowthEvent
 
@@ -217,30 +136,30 @@ async def _recall_from_sqlite(user_id: str, query: str, limit: int) -> list[str]
                 .limit(limit)
             )
             events = result.scalars().all()
-            # 返回人类可读的摘要，而不是原始 JSON
-            memories = []
-            for e in events:
-                if e.payload_json:
-                    try:
-                        import json
 
-                        payload = json.loads(e.payload_json)
-                        # 构建人类可读的摘要
-                        if e.event_type == "skill_added":
-                            skill = payload.get("skill_name", e.entity_id or "未知技能")
-                            level = payload.get("level", "未知水平")
-                            memories.append(f"掌握了 {skill}（{level}）")
-                        elif e.event_type == "profile_updated":
+        memories: list[str] = []
+        for event in events:
+            if event.payload_json:
+                try:
+                    payload = json.loads(event.payload_json)
+                    if event.event_type == "skill_added":
+                        skill = payload.get("skill_name") or payload.get("name") or event.entity_id or "未知技能"
+                        level = payload.get("level", "未知水平")
+                        memories.append(f"掌握了 {skill}（{level}）")
+                    elif event.event_type == "profile_updated":
+                        if payload.get("memory_md"):
+                            memories.append("更新了核心画像")
+                        else:
                             school = payload.get("school_name", "未知学校")
                             major = payload.get("major", "未知专业")
                             memories.append(f"更新了画像：{school} {major}")
-                        else:
-                            memories.append(f"{e.event_type}: {json.dumps(payload, ensure_ascii=False)}")
-                    except json.JSONDecodeError:
-                        memories.append(f"{e.event_type}: {e.payload_json}")
-                else:
-                    memories.append(f"{e.event_type}: {e.entity_type or 'unknown'}")
-            return memories
+                    else:
+                        memories.append(f"{event.event_type}: {json.dumps(payload, ensure_ascii=False)}")
+                except json.JSONDecodeError:
+                    memories.append(f"{event.event_type}: {event.payload_json}")
+            else:
+                memories.append(f"{event.event_type}: {event.entity_type or 'unknown'}")
+        return memories
     except Exception as exc:
         logger.error("SQLite recall failed: user_id=%s, error=%s", user_id, exc)
         return []
