@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from pydantic import BaseModel
+from pydantic_ai import Agent
 
+from app.backend.agent.llm_router import _get_model_identifier
 from app.backend.agent.llm_router import chat as llm_chat
 
 logger = logging.getLogger(__name__)
@@ -107,7 +109,6 @@ async def _extract_with_markitdown(content: bytes, filename: str) -> str:
 async def _llm_extract_to_markdown(raw_text: str) -> str:
     truncated = raw_text[:_LLM_TRUNCATION_LENGTH]
     prompt = _PROFILE_EXTRACT_PROMPT.format(
-        current_year=datetime.now().year,
         resume_text=truncated,
     )
     result = await llm_chat(
@@ -128,6 +129,45 @@ async def _llm_extract_to_markdown(raw_text: str) -> str:
         md_start = next((i for i, line in enumerate(lines) if line.startswith("#")), 0)
         result = "\n".join(lines[md_start:])
     return result
+
+
+# ── 简历结构化拆解 ──
+
+
+class _ResumeSkill(BaseModel):
+    name: str
+    level: str = "familiar"
+    context: str = ""
+
+
+class _ResumeExperience(BaseModel):
+    title: str
+    description: str = ""
+    period: str = ""
+    tech_stack: str = ""
+    role: str = ""
+
+
+class _ResumeDecomposition(BaseModel):
+    skills: list[_ResumeSkill] = []
+    experiences: list[_ResumeExperience] = []
+
+
+_resume_decompose_agent = Agent(
+    _get_model_identifier("skill_analysis"),
+    result_type=_ResumeDecomposition,
+    system_prompt="从简历 markdown 中提取技能列表和经历列表。只提取明确提到的内容，不要编造。",
+)
+
+
+async def _decompose_resume(markdown: str) -> _ResumeDecomposition:
+    """用 PydanticAI Agent 从简历 markdown 拆解技能和经历。失败返回空。"""
+    try:
+        result = await _resume_decompose_agent.run(markdown[:_LLM_TRUNCATION_LENGTH])
+        return result.data
+    except Exception:
+        logger.warning("Resume decomposition failed, continuing without skills/experiences")
+        return _ResumeDecomposition()
 
 
 async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user") -> dict:
@@ -154,13 +194,36 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
         raise HTTPException(status_code=502, detail=f"AI 解析失败: {exc}")
 
     try:
+        # [2.5/3] 结构化拆解
+        decomp = await _decompose_resume(markdown_content)
+        from app.backend.services.memory_service import _extract_profile_fields
+
+        profile_fields = _extract_profile_fields(markdown_content)
+        logger.info(
+            "[2.5/3] Decomposition: %d skills, %d experiences, %d profile fields",
+            len(decomp.skills),
+            len(decomp.experiences),
+            len(profile_fields),
+        )
+    except Exception as exc:
+        logger.warning("[2.5/3] Decomposition skipped: %s", exc)
+        decomp = _ResumeDecomposition()
+        profile_fields = {}
+
+    try:
         from app.backend.db.base import get_async_session_maker
+        from app.backend.schemas.memory_events import (
+            ExperiencePayload,
+            ProfilePayload,
+            SkillPayload,
+        )
         from app.backend.services.cognee_projector import project_event_ids
         from app.backend.services.growth_event_service import create_growth_event_with_dedup
         from app.backend.services.md_projector import sync_user_md_projection
 
         event_ids: list[str] = []
         async with get_async_session_maker()() as db:
+            # resume_uploaded 审计事件
             uploaded_event = await create_growth_event_with_dedup(
                 db=db,
                 user_id=user_id,
@@ -173,17 +236,64 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
             if uploaded_event:
                 event_ids.append(str(uploaded_event.id))
 
-            profile_event = await create_growth_event_with_dedup(
-                db=db,
-                user_id=user_id,
-                event_type="profile_updated",
-                entity_type="profile",
-                entity_id="memory_md",
-                payload={"memory_md": markdown_content, "source": "简历解析"},
-                source="简历提取",
-            )
-            if profile_event:
-                event_ids.append(str(profile_event.id))
+            # profile_updated：结构化字段
+            if profile_fields:
+                profile_payload = ProfilePayload(**profile_fields).model_dump(exclude_none=True)
+                profile_event = await create_growth_event_with_dedup(
+                    db=db,
+                    user_id=user_id,
+                    event_type="profile_updated",
+                    entity_type="profile",
+                    entity_id="resume_fields",
+                    payload=profile_payload,
+                    source="简历提取",
+                )
+                if profile_event:
+                    event_ids.append(str(profile_event.id))
+
+            # skill_added × N
+            _valid_levels = {"familiar", "proficient", "expert"}
+            for skill in decomp.skills:
+                level = skill.level if skill.level in _valid_levels else "familiar"
+                payload = SkillPayload(
+                    name=skill.name,
+                    level=level,
+                    context=skill.context,
+                    source="简历解析",
+                ).model_dump()
+                skill_event = await create_growth_event_with_dedup(
+                    db=db,
+                    user_id=user_id,
+                    event_type="skill_added",
+                    entity_type="skill",
+                    entity_id=skill.name,
+                    payload=payload,
+                    source="简历提取",
+                )
+                if skill_event:
+                    event_ids.append(str(skill_event.id))
+
+            # experience_added × N
+            for exp in decomp.experiences:
+                payload = ExperiencePayload(
+                    title=exp.title,
+                    description=exp.description,
+                    period=exp.period,
+                    tech_stack=exp.tech_stack,
+                    role=exp.role,
+                    source="简历解析",
+                ).model_dump()
+                exp_event = await create_growth_event_with_dedup(
+                    db=db,
+                    user_id=user_id,
+                    event_type="experience_added",
+                    entity_type="experience",
+                    entity_id=exp.title,
+                    payload=payload,
+                    source="简历提取",
+                )
+                if exp_event:
+                    event_ids.append(str(exp_event.id))
 
             await db.commit()
 

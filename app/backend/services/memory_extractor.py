@@ -1,33 +1,70 @@
-"""从单轮对话中提取长期记忆事件。"""
+"""从单轮对话中提取长期记忆事件（PydanticAI 约束输出）。"""
 
 from __future__ import annotations
 
-import json
 import logging
+from typing import Literal
 
-from app.backend.agent.llm_router import chat as llm_chat
+from pydantic import BaseModel, ValidationError
+from pydantic_ai import Agent
+
+from app.backend.agent.llm_router import _get_model_identifier
+from app.backend.schemas.memory_events import EVENT_PAYLOAD_MAP
 
 logger = logging.getLogger(__name__)
 
-_EXTRACT_PROMPT = """从以下对话中提取适合长期记忆的新增信息，只返回 JSON 数组。
+_EXTRACT_PROMPT = """从以下对话中提取适合长期记忆的新增信息。
 
 用户：{user_input}
 AI：{assistant_reply}
 
-格式：
-[
-  {{
-    "event_type": "profile_updated|skill_added|skill_level_changed|goal_updated|preference_learned|decision_made|status_changed|experience_added",
-    "entity_type": "profile|skill|goal|preference|decision|status|experience",
-    "entity_id": "可选实体ID",
-    "payload": {{}},
-    "source": "conversation",
-    "confidence": 0.0
-  }}
-]
-
-如果没有新增信息，返回 []。不要输出任何解释。
+如果没有新增信息，events 返回空列表。不要编造。
 """
+
+
+# ── PydanticAI 结构化输出 ──
+
+
+class ExtractedEvent(BaseModel):
+    event_type: Literal[
+        "profile_updated",
+        "skill_added",
+        "skill_level_changed",
+        "goal_updated",
+        "preference_learned",
+        "decision_made",
+        "status_changed",
+        "experience_added",
+    ]
+    entity_type: str = ""
+    entity_id: str = ""
+    payload: dict = {}
+    confidence: float = 0.0
+
+
+class MemoryExtraction(BaseModel):
+    events: list[ExtractedEvent] = []
+
+
+_extract_agent = Agent(
+    _get_model_identifier("memory_summarize"),
+    result_type=MemoryExtraction,
+    system_prompt="从对话中提取可长期存储的信息。只提取明确表达的内容，不要编造。",
+)
+
+
+def _validate_event_payload(event: ExtractedEvent) -> ExtractedEvent | None:
+    """校验 payload 是否匹配对应 event_type 的 schema。不匹配则丢弃。"""
+    schema = EVENT_PAYLOAD_MAP.get(event.event_type)
+    if schema is None:
+        return None
+    try:
+        validated = schema.model_validate(event.payload)
+        event.payload = validated.model_dump()
+        return event
+    except ValidationError:
+        logger.warning("Extractor event rejected: type=%s", event.event_type)
+        return None
 
 
 async def extract_memory_from_conversation(
@@ -42,36 +79,21 @@ async def extract_memory_from_conversation(
             user_input=user_input,
             assistant_reply=assistant_reply,
         )
-        result = await llm_chat(
-            task_type="memory_extract",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000,
-        )
+        result = await _extract_agent.run(prompt)
+        events = result.data.events
 
-        if isinstance(result, str):
-            json_start = result.find("[")
-            json_end = result.rfind("]") + 1
-            if json_start >= 0 and json_end > json_start:
-                result = result[json_start:json_end]
-            events = json.loads(result)
-        else:
-            events = result
-
-        filtered_events = []
+        filtered_events: list[dict] = []
         for event in events:
-            if event.get("confidence", 0) < 0.7:
+            if event.confidence < 0.7:
                 continue
-            if not event.get("event_type"):
+            validated = _validate_event_payload(event)
+            if validated is None:
                 continue
-            filtered_events.append(event)
+            filtered_events.append(validated.model_dump())
 
         return filtered_events
-    except json.JSONDecodeError as exc:
-        logger.warning("Conversation memory JSON parse failed: %s", exc)
-        return []
     except Exception as exc:
-        logger.error("Conversation memory extraction failed: %s", exc)
+        logger.warning("Conversation memory extraction failed: %s", exc)
         return []
 
 

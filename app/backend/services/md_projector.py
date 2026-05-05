@@ -21,14 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.config import USER_DATA_DIR
 from app.backend.db.base import get_async_session_maker
 from app.backend.models.growth_event import GrowthEvent
+from app.backend.services.memory_limits import EXPERIENCES_CHAR_LIMIT, MEMORY_CHAR_LIMIT, SKILLS_CHAR_LIMIT
 from app.backend.services.memory_service import ensure_memory_dirs
 
 logger = logging.getLogger(__name__)
-
-# 字符限制（非 token），控制 system prompt 长度
-MEMORY_CHAR_LIMIT = 5000  # memory.md（合并后增大）
-SKILLS_CHAR_LIMIT = 2000  # skills.md
-EXPERIENCES_CHAR_LIMIT = 2000  # experiences.md
 
 
 def _deep_merge(base: dict, update: dict) -> dict:
@@ -52,122 +48,119 @@ def _load_payload(event: GrowthEvent) -> dict:
 
 
 def _merge_profile_events(events: list[GrowthEvent]) -> dict:
-    profile: dict = {}
-    latest_memory_md: str | None = None
+    """合并 profile_updated 事件。新格式走 ProfilePayload schema，legacy memory_md blob 走正则提取。"""
+    from app.backend.schemas.memory_events import ProfilePayload
 
+    profile: dict = {}
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
 
+        # Legacy: payload 含 memory_md blob → 规则提取结构化字段
         if isinstance(payload.get("memory_md"), str):
-            latest_memory_md = payload["memory_md"]
+            from app.backend.services.memory_service import _extract_profile_fields
 
-        legacy_snapshot = (
-            payload.get("content")
-            if payload.get("field") in {"resume", "memory_md"} and isinstance(payload.get("content"), str)
-            else None
-        )
-        if legacy_snapshot:
-            latest_memory_md = legacy_snapshot
+            profile = _deep_merge(profile, _extract_profile_fields(payload["memory_md"]))
+            continue
 
-        structured_payload = payload.copy()
-        structured_payload.pop("memory_md", None)
-        if structured_payload.get("field") and "content" in structured_payload and latest_memory_md is None:
-            structured_payload = {structured_payload["field"]: structured_payload["content"]}
+        # New: schema 驱动
+        try:
+            validated = ProfilePayload.model_validate(payload).model_dump(exclude_none=True)
+        except Exception:
+            continue
+        profile = _deep_merge(profile, validated)
 
-        profile = _deep_merge(profile, structured_payload)
-
-    if latest_memory_md:
-        profile["__memory_md_snapshot"] = latest_memory_md
     return profile
 
 
 def _merge_skill_events(events: list[GrowthEvent]) -> dict[str, dict]:
+    """合并技能事件，使用 SkillPayload schema。"""
+    from app.backend.schemas.memory_events import SkillPayload
+
     skills: dict[str, dict] = {}
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
-
-        skill_name = (
-            payload.get("name")
-            or payload.get("skill")
-            or payload.get("skill_name")
-            or payload.get("section")
-            or event.entity_id
-        )
-        if not skill_name:
+        try:
+            validated = SkillPayload.model_validate(payload)
+        except Exception:
             continue
-
-        skills[skill_name] = {
-            "name": skill_name,
-            "level": payload.get("new_level") or payload.get("level", "familiar"),
-            "context": payload.get("context") or payload.get("content", ""),
+        skills[validated.name] = {
+            "name": validated.name,
+            "level": validated.level,
+            "context": validated.context,
+            "source": validated.source,
             "updated_at": event.created_at.isoformat() if event.created_at else None,
         }
     return skills
 
 
 def _merge_experience_events(events: list[GrowthEvent]) -> list[dict]:
+    """合并经历事件，使用 ExperiencePayload schema。"""
+    from app.backend.schemas.memory_events import ExperiencePayload
+
     experiences: list[dict] = []
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
-        if payload.get("section") and payload.get("content"):
-            experiences.append(
-                {
-                    "title": payload["section"],
-                    "description": payload["content"],
-                    "created_at": event.created_at.isoformat() if event.created_at else None,
-                }
-            )
-        else:
-            experiences.append(
-                {
-                    **payload,
-                    "created_at": event.created_at.isoformat() if event.created_at else None,
-                }
-            )
+        try:
+            validated = ExperiencePayload.model_validate(payload)
+        except Exception:
+            continue
+        experiences.append(
+            {
+                "title": validated.title,
+                "description": validated.description,
+                "period": validated.period,
+                "tech_stack": validated.tech_stack,
+                "role": validated.role,
+                "source": validated.source,
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+            }
+        )
     return experiences
 
 
 def _merge_dict_events(events: list[GrowthEvent]) -> dict:
-    """合并偏好、状态、目标等字典类型事件。"""
+    """合并偏好/状态/目标事件，使用 KeyValuePayload schema。"""
+    from app.backend.schemas.memory_events import KeyValuePayload
+
     result: dict = {}
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
-        if payload.get("section") and "content" in payload:
-            result[payload["section"]] = payload["content"]
-        else:
-            result.update(payload)
+        try:
+            validated = KeyValuePayload.model_validate(payload)
+        except Exception:
+            continue
+        result[validated.key] = validated.value
     return result
 
 
 def _merge_decision_events(events: list[GrowthEvent]) -> list[dict]:
+    """合并决策事件，使用 DecisionPayload schema。"""
+    from app.backend.schemas.memory_events import DecisionPayload
+
     decisions: list[dict] = []
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
-        if payload.get("section") and payload.get("content"):
-            decisions.append(
-                {
-                    "title": payload["section"],
-                    "decision": payload["content"],
-                    "created_at": event.created_at.isoformat() if event.created_at else None,
-                }
-            )
-        else:
-            decisions.append(
-                {
-                    **payload,
-                    "created_at": event.created_at.isoformat() if event.created_at else None,
-                }
-            )
+        try:
+            validated = DecisionPayload.model_validate(payload)
+        except Exception:
+            continue
+        decisions.append(
+            {
+                "title": validated.title,
+                "decision": validated.content,
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+            }
+        )
     return decisions
 
 
@@ -179,10 +172,6 @@ def _generate_memory_md(
     decisions: list[dict],
 ) -> str:
     """生成 memory.md：核心画像 + 状态 + 目标 + 偏好 + 决策。"""
-    snapshot = profile.get("__memory_md_snapshot")
-    if isinstance(snapshot, str) and snapshot.strip():
-        return snapshot
-
     date = datetime.now().strftime("%Y-%m-%d")
     parts = ["# 用户核心记忆", ""]
     parts.append("> 这个文件由 AI 自动管理，记录用户的核心信息。")
@@ -342,61 +331,14 @@ def _write_md_file_safe(path: str, content: str, max_chars: int | None = None) -
     os.replace(temp_path, path)
 
 
-def _default_memory_template() -> str:
-    return """# 用户核心记忆
-
-> 这个文件由 AI 自动管理，记录用户的核心信息。
-> 每次对话开始时会自动注入到 system prompt。
-
-## 基础信息
-- 学校：（待填写）
-- 专业：（待填写）
-- 年级：（待填写）
-- 毕业年份：（待填写）
-
-## 目标方向
-- 目标岗位：（待填写）
-- 目标公司类型：（待填写）
-- 意向城市：（待填写）
-
-## 当前状态
-- 正在学习：（待填写）
-- 正在准备：（待填写）
-- 焦虑程度：（待填写）
-
----
-*最后更新：待初始化*"""
-
-
-def _default_skills_template() -> str:
-    return """# 技能列表
-
-> 记录用户的技能状态，用于能力评估和学习建议。
-
-## 已掌握技能
-（待填写）
-
----
-*最后更新：待初始化*"""
-
-
-def _default_experiences_template() -> str:
-    return """# 经历列表
-
-> 记录用户的项目、实习、竞赛和其它成长经历。
-
-（待填写）
-
----
-*最后更新：待初始化*"""
-
-
 def _write_default_md_snapshot() -> None:
+    from app.backend.services.memory_templates import experiences_default, memory_default, skills_default
+
     ensure_memory_dirs()
     memory_dir = USER_DATA_DIR / "memory"
-    _write_md_file_safe(str(memory_dir / "memory.md"), _default_memory_template())
-    _write_md_file_safe(str(memory_dir / "skills.md"), _default_skills_template())
-    _write_md_file_safe(str(memory_dir / "experiences.md"), _default_experiences_template())
+    _write_md_file_safe(str(memory_dir / "memory.md"), memory_default())
+    _write_md_file_safe(str(memory_dir / "skills.md"), skills_default())
+    _write_md_file_safe(str(memory_dir / "experiences.md"), experiences_default())
 
 
 async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:

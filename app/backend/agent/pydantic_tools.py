@@ -11,9 +11,9 @@ from app.backend.agent.deps import CareerOSDeps
 
 logger = logging.getLogger(__name__)
 
-# entity_type → SQLite event_type 映射（支持 3 文件结构 + 细粒度事件类型）
+# entity_type → SQLite event_type 映射
+# 注意：memory 类型不走 memory_save，使用 update_profile 工具
 _EVENT_TYPE_MAP: dict[str, str] = {
-    "memory": "profile_updated",
     "skills": "skill_added",
     "experiences": "experience_added",
     "preferences": "preference_learned",
@@ -68,22 +68,40 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         """保存或更新记忆条目。
 
         entity_type 说明：
-        - memory       → 核心画像（学校/专业/目标方向等基础信息）
         - skills       → 技能（掌握的技术、工具、语言）
         - experiences  → 经历（项目、实习、竞赛）
         - preferences  → 偏好（学习风格、工作偏好等）
         - goals        → 目标（短期/长期职业目标）
         - decisions    → 决策（重要的选择和结论）
         - status       → 当前状态（正在学习什么、焦虑什么）
+
+        注意：memory 类型请使用 update_profile 工具（更新画像结构化字段）。
         """
         logger.info("Tool call: memory_save, entity_type=%s, section=%s", entity_type, section)
 
         if entity_type not in _EVENT_TYPE_MAP:
             return f"未知的类型 {entity_type}。支持: {', '.join(_EVENT_TYPE_MAP.keys())}"
 
+        from app.backend.schemas.memory_events import (
+            DecisionPayload,
+            ExperiencePayload,
+            KeyValuePayload,
+            SkillPayload,
+        )
         from app.backend.services.md_projector import create_event_and_project_md
 
-        payload = {"section": section, "content": content}
+        # 按 entity_type 构建正确的 payload schema
+        if entity_type == "skills":
+            payload = SkillPayload(name=section, level="familiar", context=content, source="Agent工具").model_dump()
+        elif entity_type == "experiences":
+            payload = ExperiencePayload(title=section, description=content, source="Agent工具").model_dump()
+        elif entity_type == "decisions":
+            payload = DecisionPayload(title=section, content=content).model_dump()
+        elif entity_type in ("preferences", "goals", "status"):
+            payload = KeyValuePayload(key=section, value=content).model_dump()
+        else:
+            return f"不支持的类型 {entity_type}，请使用正确的工具"
+
         event = await create_event_and_project_md(
             db=ctx.deps.db,
             user_id=ctx.deps.user_id,

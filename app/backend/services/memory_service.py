@@ -8,25 +8,62 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from app.backend.config import USER_DATA_DIR
+from app.backend.services.memory_limits import _LIMITS
+from app.backend.services.memory_templates import (
+    experiences_default as _default_experiences_template,
+)
+from app.backend.services.memory_templates import (
+    memory_default as _default_memory_template,
+)
+from app.backend.services.memory_templates import (
+    skills_default as _default_skills_template,
+)
 
 MEMORY_DIR = USER_DATA_DIR / "memory"
-
-MEMORY_CHAR_LIMIT = 5000
-SKILLS_CHAR_LIMIT = 2000
-EXPERIENCES_CHAR_LIMIT = 2000
-
-_LIMITS = {
-    "memory": MEMORY_CHAR_LIMIT,
-    "skills": SKILLS_CHAR_LIMIT,
-    "experiences": EXPERIENCES_CHAR_LIMIT,
-}
 
 
 def ensure_memory_dirs() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _extract_profile_fields(md_text: str) -> dict:
+    """从简历 markdown 用正则提取结构化字段（不调 LLM）。
+
+    复用：投影器处理 legacy memory_md blob 用，简历上传后写 profile_updated 也用它。
+    """
+    import re
+
+    patterns = {
+        "school_name": r"- 学校：(.+)",
+        "major": r"- 专业：(.+)",
+        "grade": r"- 年级：(.+)",
+        "graduation_year": r"- 毕业年份：(.+)",
+        "school_level": r"- 学校层次：(.+)",
+        "target_direction": r"- 目标岗位：(.+)",
+        "target_company_level": r"- 目标公司类型：(.+)",
+        "city": r"- 意向城市：(.+)",
+        "gpa": r"- GPA：(.+)",
+        "ranking": r"- 排名：(.+)",
+        "english_level": r"- (.+)",  # 跟在 ## 英语水平 后
+        "expected_salary": r"- (.+)",  # 跟在 ## 期望薪资 后
+    }
+    fields: dict = {}
+    for key, pattern in patterns.items():
+        m = re.search(pattern, md_text)
+        if m:
+            val = m.group(1).strip()
+            if val and val != "（待填写）":
+                fields[key] = val
+
+    # 多行字段：bio 可能跨行
+    m = re.search(r"## 个人简介\s*\n(.+?)(?=\n##|\n---|\Z)", md_text, re.DOTALL)
+    if m:
+        val = m.group(1).strip()
+        if val and val != "（待填写）":
+            fields["bio"] = val
+
+    return fields
 
 
 def read_memory() -> str:
@@ -63,61 +100,6 @@ def read_experiences() -> str:
 def write_experiences(content: str) -> None:
     ensure_memory_dirs()
     (MEMORY_DIR / "experiences.md").write_text(content, encoding="utf-8")
-
-
-def _default_memory_template() -> str:
-    date = datetime.now().strftime("%Y-%m-%d")
-    return f"""# 用户核心记忆
-
-> 这个文件由 AI 自动管理，记录用户的核心信息。
-> 每次对话开始时会自动注入到 system prompt。
-
-## 基础信息
-- 学校：（待填写）
-- 专业：（待填写）
-- 年级：（待填写）
-- 毕业年份：（待填写）
-
-## 目标方向
-- 目标岗位：（待填写）
-- 目标公司类型：（待填写）
-- 意向城市：（待填写）
-
-## 当前状态
-- 正在学习：（待填写）
-- 正在准备：（待填写）
-- 焦虑程度：（待填写）
-
----
-*最后更新：{date}*
-"""
-
-
-def _default_skills_template() -> str:
-    date = datetime.now().strftime("%Y-%m-%d")
-    return f"""# 技能列表
-
-> 记录用户的技能状态，用于能力评估和学习建议。
-
-## 已掌握技能
-（待填写）
-
----
-*最后更新：{date}*
-"""
-
-
-def _default_experiences_template() -> str:
-    date = datetime.now().strftime("%Y-%m-%d")
-    return f"""# 经历列表
-
-> 记录用户的项目、实习、竞赛和其它成长经历。
-
-（待填写）
-
----
-*最后更新：{date}*
-"""
 
 
 def search_memory(query: str) -> list[dict]:
