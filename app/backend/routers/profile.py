@@ -87,7 +87,7 @@ async def upload_resume(
     try:
         from app.backend.services.profile_service import process_resume_to_memory
 
-        result = await process_resume_to_memory(file)
+        result = await process_resume_to_memory(file, user_id=user_id)
         return result
     except HTTPException:
         raise

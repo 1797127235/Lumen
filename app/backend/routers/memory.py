@@ -93,12 +93,12 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
             await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
             # get_db 会自动 commit
 
-        # 清空 Cognee（在 SQLite 事务提交后）
+        # 清空 Cognee 索引（在 SQLite 事务提交后）
         # 如果 Cognee 失败，记录日志但不影响响应
         try:
-            await cognee_service.forget(user_id, "all")
+            await cognee_service.clear_user_index(user_id)
         except Exception as cognee_exc:
-            logger.warning("Cognee forget failed after SQLite reset: %s", cognee_exc)
+            logger.warning("Cognee clear_user_index failed after SQLite reset: %s", cognee_exc)
 
         logger.info("记忆已重置: user_id=%s, deleted=%d", user_id, count)
         return MemoryResetResponse(deleted=count)

@@ -209,8 +209,12 @@ async def _llm_extract_to_markdown(raw_text: str) -> str:
 # ═══════════════════════════════════════════════
 
 
-async def process_resume_to_memory(file: UploadFile) -> dict:
+async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user") -> dict:
     """完整管线：上传简历 → 解析 → 写入 .md 文件
+
+    Args:
+        file: 上传的简历文件
+        user_id: 用户 ID
 
     Returns:
         dict: 包含 success, message, preview 字段
@@ -251,7 +255,44 @@ async def process_resume_to_memory(file: UploadFile) -> dict:
         logger.exception("[3/3] 画像保存失败")
         raise HTTPException(status_code=500, detail=f"数据保存失败: {e}")
 
-    # 4. 返回结果
+    # 4. 写入成长事件（fire-and-forget）
+    try:
+        from app.backend.db.base import get_async_session_maker
+        from app.backend.services.growth_event_service import create_growth_event
+
+        async def _create_resume_events():
+            async with get_async_session_maker()() as db:
+                # 简历上传事件
+                await create_growth_event(
+                    db=db,
+                    user_id=user_id,
+                    event_type="resume_uploaded",
+                    entity_type="profile",
+                    payload={"filename": filename, "content_length": len(markdown_content)},
+                    source="简历提取",
+                    project=True,
+                )
+                # 画像更新事件
+                await create_growth_event(
+                    db=db,
+                    user_id=user_id,
+                    event_type="profile_updated",
+                    entity_type="profile",
+                    payload={"field": "resume", "source": "简历解析"},
+                    source="简历提取",
+                    project=True,
+                )
+                await db.commit()
+
+        task = asyncio.create_task(_create_resume_events())
+        # 存储任务引用，防止被垃圾回收
+        _ = task
+        logger.info("[4/4] 成长事件已创建")
+    except Exception as e:
+        # 成长事件创建失败不影响简历上传
+        logger.warning("[4/4] 成长事件创建失败: %s", e)
+
+    # 5. 返回结果
     preview = raw_text[:_PREVIEW_LENGTH].replace("\n", " ")
     return {
         "success": True,

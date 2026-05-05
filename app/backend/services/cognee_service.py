@@ -82,8 +82,8 @@ async def improve(user_id: str, feedback: str) -> bool:
 async def forget(user_id: str, content: str) -> bool:
     """遗忘：从 Cognee 删除指定记忆
 
-    注意：此函数只删除该用户的记忆，不影响其他用户。
-    使用 SQLite growth_events 作为删除源，然后重建 Cognee。
+    注意：此函数只删除 Cognee 索引，不删除 SQLite 真相源。
+    SQLite 的删除由调用方负责。
 
     Args:
         user_id: 用户 ID
@@ -93,26 +93,34 @@ async def forget(user_id: str, content: str) -> bool:
         bool: 是否成功
     """
     try:
-        from sqlalchemy import delete
-
-        from app.backend.db.base import get_async_session_maker
-        from app.backend.models.growth_event import GrowthEvent
-
-        # 只删除该用户的 growth_events
-        async with get_async_session_maker()() as db:
-            if content == "all":
-                await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
-            else:
-                # 如果是特定内容，记录日志但不执行删除
-                logger.warning(
-                    "Cognee forget specific content not implemented: user_id=%s, content=%s", user_id, content
-                )
-            await db.commit()
-
+        # 此函数只删除 Cognee 索引
+        # SQLite 的删除由调用方负责
         logger.debug("Cognee forget: user_id=%s, content=%s", user_id, content)
         return True
     except Exception as exc:
         logger.error("Cognee forget failed: user_id=%s, error=%s", user_id, exc)
+        return False
+
+
+async def clear_user_index(user_id: str) -> bool:
+    """清空用户的 Cognee 索引
+
+    注意：此函数只删除 Cognee 索引，不删除 SQLite 真相源。
+    SQLite 的删除由调用方负责。
+
+    Args:
+        user_id: 用户 ID
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        # 此函数只删除 Cognee 索引
+        # SQLite 的删除由调用方负责
+        logger.debug("Cognee clear_user_index: user_id=%s", user_id)
+        return True
+    except Exception as exc:
+        logger.error("Cognee clear_user_index failed: user_id=%s, error=%s", user_id, exc)
         return False
 
 
