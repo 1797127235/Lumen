@@ -14,8 +14,8 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
-from app.backend.agent.deps import CareerOSDeps  # noqa: E402
-from app.backend.agent.pydantic_agent import create_agent, get_agent  # noqa: E402
+from app.backend.agent.deps import CareerOSDeps
+from app.backend.agent.pydantic_agent import create_agent, get_agent
 
 
 @pytest.fixture

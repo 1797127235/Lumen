@@ -44,15 +44,12 @@ def _validate_user_id(user_id: str) -> str:
 
 @router.get("/stats", response_model=MemoryStats)
 async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
-    """查询当前记忆状态和条数"""
+    """查询当前记忆状态和条数（基于 SQLite growth_events）"""
     _validate_user_id(user_id)
     status = get_cognee_status()
 
-    if status != "ready":
-        return MemoryStats(status=status, count=0)
-
     try:
-        # 从 SQLite 查询 growth_events 数量
+        # 从 SQLite 查询 growth_events 数量（不依赖 Cognee 状态）
         from sqlalchemy import func, select
 
         from app.backend.db.session import get_db
@@ -70,14 +67,11 @@ async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
 
 @router.post("/reset", response_model=MemoryResetResponse)
 async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse:
-    """清空指定用户的所有 Cognee 记忆"""
+    """清空指定用户的长期记忆事件（基于 SQLite growth_events）"""
     _validate_user_id(user_id)
-    status = get_cognee_status()
-    if status != "ready":
-        raise HTTPException(status_code=503, detail="记忆服务未就绪")
 
     try:
-        # 删除 SQLite 中的 growth_events
+        # 删除 SQLite 中的 growth_events（不依赖 Cognee 状态）
         from sqlalchemy import delete, func, select
 
         from app.backend.db.session import get_db
@@ -93,14 +87,15 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
             await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
             # get_db 会自动 commit
 
-        # 清空 Cognee 索引（在 SQLite 事务提交后）
-        # 如果 Cognee 失败，记录日志但不影响响应
-        try:
-            await cognee_service.clear_user_index(user_id)
-        except Exception as cognee_exc:
-            logger.warning("Cognee clear_user_index failed after SQLite reset: %s", cognee_exc)
+        # 尝试清空 Cognee 索引（可选，不影响主流程）
+        index_cleared = False
+        if get_cognee_status() == "ready":
+            try:
+                index_cleared = await cognee_service.clear_user_index(user_id)
+            except Exception as cognee_exc:
+                logger.warning("Cognee clear_user_index failed after SQLite reset: %s", cognee_exc)
 
-        logger.info("记忆已重置: user_id=%s, deleted=%d", user_id, count)
+        logger.info("记忆已重置: user_id=%s, deleted=%d, index_cleared=%s", user_id, count, index_cleared)
         return MemoryResetResponse(deleted=count)
 
     except HTTPException:
@@ -112,11 +107,8 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
 
 @router.get("/list", response_model=list[MemoryItem])
 async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItem]:
-    """返回用户所有记忆条目，按 created_at 倒序"""
+    """返回用户所有记忆条目，按 created_at 倒序（基于 SQLite growth_events）"""
     _validate_user_id(user_id)
-    status = get_cognee_status()
-    if status != "ready":
-        return []
 
     try:
         from sqlalchemy import select
@@ -124,7 +116,7 @@ async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItem]:
         from app.backend.db.session import get_db
         from app.backend.models.growth_event import GrowthEvent
 
-        # 使用 FastAPI DI 获取 session
+        # 使用 FastAPI DI 获取 session（不依赖 Cognee 状态）
         async for db in get_db():
             result = await db.execute(
                 select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())

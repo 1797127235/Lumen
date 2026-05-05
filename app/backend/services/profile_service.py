@@ -263,26 +263,39 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
         async def _create_resume_events():
             async with get_async_session_maker()() as db:
                 # 简历上传事件
-                await create_growth_event(
+                event1 = await create_growth_event(
                     db=db,
                     user_id=user_id,
                     event_type="resume_uploaded",
                     entity_type="profile",
                     payload={"filename": filename, "content_length": len(markdown_content)},
                     source="简历提取",
-                    project=True,
+                    project=False,  # 不在事务内触发投影
                 )
                 # 画像更新事件
-                await create_growth_event(
+                event2 = await create_growth_event(
                     db=db,
                     user_id=user_id,
                     event_type="profile_updated",
                     entity_type="profile",
                     payload={"field": "resume", "source": "简历解析"},
                     source="简历提取",
-                    project=True,
+                    project=False,  # 不在事务内触发投影
                 )
                 await db.commit()
+
+                # 事务提交后触发投影
+                try:
+                    import asyncio
+
+                    from app.backend.services.cognee_projector import project_event
+
+                    task1 = asyncio.create_task(project_event(event1))
+                    task2 = asyncio.create_task(project_event(event2))
+                    _ = task1
+                    _ = task2
+                except Exception as e:
+                    logger.warning("Cognee 投影失败: %s", e)
 
         task = asyncio.create_task(_create_resume_events())
         # 存储任务引用，防止被垃圾回收

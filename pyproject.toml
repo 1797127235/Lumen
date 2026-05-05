@@ -43,6 +43,7 @@ known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["E402"]  # 脚本需要在 sys.path.insert 后导入
+"tests/*" = ["E402"]    # 测试文件需要在 pytest.importorskip 后导入
 "requirements.txt" = ["ALL"]
 
 [tool.ruff.format]

@@ -66,20 +66,9 @@ async def create_growth_event(
         entity_id,
     )
 
-    # 触发 Cognee 投影（fire-and-forget）
-    if project:
-        try:
-            import asyncio
-
-            from app.backend.services.cognee_projector import project_event
-
-            # 异步投影，不阻塞当前事务
-            task = asyncio.create_task(project_event(event))
-            # 存储任务引用，防止被垃圾回收
-            _ = task
-        except Exception as e:
-            # 投影失败不影响事件写入
-            logger.warning("Cognee 投影失败: %s", e)
+    # 注意：不在这里触发投影
+    # 投影应该在事务提交后由调用方触发
+    # 避免事务回滚时 Cognee 中有孤立数据
 
     return event
 

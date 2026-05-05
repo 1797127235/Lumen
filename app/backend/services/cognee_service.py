@@ -132,20 +132,25 @@ async def forget(user_id: str, content: str) -> bool:
 async def clear_user_index(user_id: str) -> bool:
     """清空用户的 Cognee 索引
 
-    注意：此函数只删除 Cognee 索引，不删除 SQLite 真相源。
-    SQLite 的删除由调用方负责。
+    注意：当前实现为占位，实际未清空 Cognee 索引。
+    调用方应检查返回值，如果为 False，需要手动处理索引清理。
 
     Args:
         user_id: 用户 ID
 
     Returns:
-        bool: 是否成功
+        bool: 是否成功清空索引（当前固定返回 False）
     """
     try:
-        # 此函数只删除 Cognee 索引
-        # SQLite 的删除由调用方负责
-        logger.debug("Cognee clear_user_index: user_id=%s", user_id)
-        return True
+        # 当前实现：只记录日志，实际未清空 Cognee 索引
+        # 原因：Cognee API 不支持按 user_id 过滤删除
+        # 后续实现：需要重建整个索引或使用 Cognee 的 metadata 过滤功能
+        logger.warning(
+            "Cognee clear_user_index: 当前为占位实现，未实际清空索引。"
+            "user_id=%s。建议使用 /api/memory/rebuild 重建索引。",
+            user_id,
+        )
+        return False
     except Exception as exc:
         logger.error("Cognee clear_user_index failed: user_id=%s, error=%s", user_id, exc)
         return False
@@ -177,7 +182,17 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
 
             for event in events:
                 content = event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}"
-                await cognee.remember(content, metadata=_cognee_metadata())
+                # 构建包含 user_id/event_id 的 metadata
+                metadata = {
+                    "user_id": event.user_id,
+                    "event_id": str(event.id),
+                    "event_type": event.event_type,
+                    "entity_type": event.entity_type,
+                    "entity_id": event.entity_id,
+                    "source": event.source,
+                    "created_at": event.created_at.isoformat() if event.created_at else None,
+                }
+                await cognee.remember(content, metadata=_cognee_metadata(metadata))
 
         logger.info("Cognee rebuilt from SQLite: user_id=%s, events=%d", user_id, len(events))
         return True
