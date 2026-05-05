@@ -23,6 +23,10 @@ from app.backend.services.memory_service import (
 
 logger = logging.getLogger(__name__)
 
+# 字符限制（非 token），控制 system prompt 长度
+MEMORY_CHAR_LIMIT = 3000  # memory.md
+ENTITY_CHAR_LIMIT = 2000  # 每个实体文件
+
 
 def _deep_merge(base: dict, update: dict) -> dict:
     result = base.copy()
@@ -348,7 +352,23 @@ def _generate_decisions_md(decisions: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _write_md_file_safe(path: str, content: str) -> None:
+def _truncate_to_limit(content: str, limit: int) -> str:
+    """截断内容到字符限制，保留最新的内容。"""
+    if len(content) <= limit:
+        return content
+    # 保留尾部（最新内容在后面）
+    truncated = content[-limit:]
+    # 找到第一个完整段落开始
+    first_newline = truncated.find("\n\n")
+    if first_newline > 0:
+        truncated = truncated[first_newline + 2 :]
+    logger.warning("Content truncated: %d -> %d chars", len(content), len(truncated))
+    return truncated
+
+
+def _write_md_file_safe(path: str, content: str, max_chars: int | None = None) -> None:
+    if max_chars is not None:
+        content = _truncate_to_limit(content, max_chars)
     dir_name = os.path.dirname(path)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -412,14 +432,30 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
         memory_dir = USER_DATA_DIR / "memory"
         entities_dir = memory_dir / "entities"
 
-        _write_md_file_safe(str(memory_dir / "memory.md"), _generate_memory_md(profile, preferences, status, goals))
-        _write_md_file_safe(str(entities_dir / "skills.md"), _generate_skills_md(skills))
-        _write_md_file_safe(str(entities_dir / "experiences.md"), _generate_experiences_md(experiences))
-        _write_md_file_safe(str(entities_dir / "preferences.md"), _generate_preferences_md(preferences))
-        _write_md_file_safe(str(entities_dir / "goals.md"), _generate_goals_md(goals))
-        _write_md_file_safe(str(entities_dir / "decisions.md"), _generate_decisions_md(decisions))
-        _write_md_file_safe(str(entities_dir / "relationships.md"), _default_entity_template("relationships"))
-        _write_md_file_safe(str(entities_dir / "status.md"), _default_entity_template("status"))
+        _write_md_file_safe(
+            str(memory_dir / "memory.md"),
+            _generate_memory_md(profile, preferences, status, goals),
+            max_chars=MEMORY_CHAR_LIMIT,
+        )
+        _write_md_file_safe(str(entities_dir / "skills.md"), _generate_skills_md(skills), max_chars=ENTITY_CHAR_LIMIT)
+        _write_md_file_safe(
+            str(entities_dir / "experiences.md"), _generate_experiences_md(experiences), max_chars=ENTITY_CHAR_LIMIT
+        )
+        _write_md_file_safe(
+            str(entities_dir / "preferences.md"), _generate_preferences_md(preferences), max_chars=ENTITY_CHAR_LIMIT
+        )
+        _write_md_file_safe(str(entities_dir / "goals.md"), _generate_goals_md(goals), max_chars=ENTITY_CHAR_LIMIT)
+        _write_md_file_safe(
+            str(entities_dir / "decisions.md"), _generate_decisions_md(decisions), max_chars=ENTITY_CHAR_LIMIT
+        )
+        _write_md_file_safe(
+            str(entities_dir / "relationships.md"),
+            _default_entity_template("relationships"),
+            max_chars=ENTITY_CHAR_LIMIT,
+        )
+        _write_md_file_safe(
+            str(entities_dir / "status.md"), _default_entity_template("status"), max_chars=ENTITY_CHAR_LIMIT
+        )
 
         now = datetime.utcnow()
         for event in events:
