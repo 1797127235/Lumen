@@ -41,20 +41,47 @@ async def remember(user_id: str, content: str, metadata: dict[str, Any] | None =
 
 
 async def recall(user_id: str, query: str, limit: int = 10) -> list[str]:
-    """检索：从 SQLite growth_events 检索相关记忆
-
-    注意：直接从 SQLite 查询，确保用户隔离。
-    不使用 Cognee 的语义搜索，避免跨用户数据泄露。
+    """检索：先尝试 Cognee 语义召回，失败降级 SQLite
 
     Args:
         user_id: 用户 ID
-        query: 查询文本（用于日志，实际过滤使用 user_id）
+        query: 查询文本
         limit: 返回结果数量限制
 
     Returns:
         list[str]: 检索结果列表
     """
-    # 直接从 SQLite 查询，确保用户隔离
+    # 先尝试 Cognee 语义召回
+    try:
+        import cognee
+
+        # 使用 Cognee 语义搜索
+        results = await cognee.search(query, limit=limit)
+
+        if results:
+            # 过滤出属于该用户的结果
+            user_results = []
+            for result in results:
+                # 检查 metadata 中的 user_id
+                if hasattr(result, "metadata") and result.metadata:
+                    if result.metadata.get("user_id") == user_id:
+                        user_results.append(result.text if hasattr(result, "text") else str(result))
+                else:
+                    # 如果没有 metadata，可能是全局结果，跳过
+                    continue
+
+            if user_results:
+                logger.debug("Cognee recall: user_id=%s, query=%s, results=%d", user_id, query, len(user_results))
+                return user_results[:limit]
+
+        # Cognee 返回空结果，降级到 SQLite
+        logger.debug("Cognee recall returned empty, falling back to SQLite: user_id=%s", user_id)
+
+    except Exception as exc:
+        # Cognee 不可用，降级到 SQLite
+        logger.warning("Cognee recall failed, falling back to SQLite: user_id=%s, error=%s", user_id, exc)
+
+    # 降级：从 SQLite 查询
     return await _recall_from_sqlite(user_id, query, limit)
 
 
