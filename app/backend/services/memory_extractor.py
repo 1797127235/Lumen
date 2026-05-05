@@ -140,82 +140,29 @@ async def save_extracted_events(
         return 0
 
     try:
-        from sqlalchemy import and_, func, select
-
         from app.backend.db.base import get_async_session_maker
-        from app.backend.models.growth_event import GrowthEvent
-        from app.backend.services.growth_event_service import create_growth_event
+        from app.backend.services.md_projector import create_event_and_project_md
 
         success_count = 0
         async with get_async_session_maker()() as db:
             for event in events:
                 try:
-                    # 重复过滤：检查最近 7 天是否有相同事件
-                    event_type = event["event_type"]
-                    entity_type = event.get("entity_type")
-                    entity_id = event.get("entity_id")
-                    payload = event.get("payload", {})
-
-                    # 构建查询条件
-                    conditions = [
-                        GrowthEvent.user_id == user_id,
-                        GrowthEvent.event_type == event_type,
-                    ]
-                    if entity_type:
-                        conditions.append(GrowthEvent.entity_type == entity_type)
-                    if entity_id:
-                        conditions.append(GrowthEvent.entity_id == entity_id)
-
-                    # 检查是否存在重复事件（最近 7 天）
-                    from datetime import datetime, timedelta
-
-                    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-                    conditions.append(GrowthEvent.created_at >= seven_days_ago)
-
-                    result = await db.execute(select(func.count(GrowthEvent.id)).where(and_(*conditions)))
-                    existing_count = result.scalar() or 0
-
-                    if existing_count > 0:
-                        logger.debug(
-                            "跳过重复事件: user_id=%s, event_type=%s, entity_type=%s, entity_id=%s",
-                            user_id,
-                            event_type,
-                            entity_type,
-                            entity_id,
-                        )
-                        continue
-
-                    # 保存事件
-                    await create_growth_event(
+                    # 使用统一入口（带去重）
+                    created = await create_event_and_project_md(
                         db=db,
                         user_id=user_id,
-                        event_type=event_type,
-                        entity_type=entity_type,
-                        entity_id=entity_id,
-                        payload=payload,
+                        event_type=event["event_type"],
+                        entity_type=event.get("entity_type"),
+                        entity_id=event.get("entity_id"),
+                        payload=event.get("payload"),
                         source="对话识别",
-                        project=False,  # 不在事务内触发投影
                     )
-                    success_count += 1
+                    if created:
+                        success_count += 1
                 except Exception as e:
                     logger.warning("保存事件失败: %s", e)
 
             await db.commit()
-
-            # 事务提交后触发投影（异步）
-            if success_count > 0:
-                try:
-                    import asyncio
-
-                    from app.backend.services.cognee_projector import project_new_events
-
-                    # 投影最近的事件
-                    task = asyncio.create_task(
-                        project_new_events(user_id, since=datetime.utcnow() - timedelta(minutes=5))
-                    )
-                    _ = task
-                except Exception as e:
-                    logger.warning("Cognee 投影失败: %s", e)
 
         logger.info(
             "对话记忆保存: user_id=%s, conversation_id=%s, saved=%d",

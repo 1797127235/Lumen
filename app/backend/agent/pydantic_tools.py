@@ -88,15 +88,43 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             content: 要更新的内容
         """
         logger.info("工具调用: memory_update, entity_type=%s, section=%s", entity_type, section)
-        from app.backend.services.memory_service import update_memory_section, write_entity
+        from app.backend.db.session import get_db
+        from app.backend.services.md_projector import create_event_and_project_md
 
-        if entity_type == "memory":
-            update_memory_section(section, content)
-            return f"核心记忆已更新：{section}"
-        else:
-            # 对于实体记忆，直接写入整个文件（简化实现）
-            write_entity(entity_type, content)
-            return f"实体记忆已更新：{entity_type}"
+        # 映射 entity_type 到 event_type
+        event_type_map = {
+            "memory": "profile_updated",
+            "skills": "skill_added",
+            "experiences": "experience_added",
+            "preferences": "preference_learned",
+            "goals": "goal_updated",
+            "decisions": "decision_made",
+            "status": "status_changed",
+        }
+        event_type = event_type_map.get(entity_type, "profile_updated")
+
+        # 构建 payload
+        payload = {
+            "section": section,
+            "content": content,
+        }
+
+        # 写入 growth_events + 同步投影 .md
+        async for db in get_db():
+            event = await create_event_and_project_md(
+                db=db,
+                user_id=ctx.deps.user_id,
+                event_type=event_type,
+                entity_type=entity_type,
+                payload=payload,
+                source="Agent工具",
+            )
+            if event:
+                return f"已更新 {entity_type} 的 {section} 部分"
+            else:
+                return f"{entity_type} 的 {section} 部分已是最新，跳过更新"
+
+        return "更新失败"
 
     @agent.tool
     async def memory_add(
@@ -120,10 +148,42 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             content: 要添加的内容
         """
         logger.info("工具调用: memory_add, entity_type=%s, section=%s", entity_type, section)
-        from app.backend.services.memory_service import append_to_entity
+        from app.backend.db.session import get_db
+        from app.backend.services.md_projector import create_event_and_project_md
 
-        append_to_entity(entity_type, section, content)
-        return f"已添加到 {entity_type} 的 {section} 部分"
+        # 映射 entity_type 到 event_type
+        event_type_map = {
+            "skills": "skill_added",
+            "experiences": "experience_added",
+            "preferences": "preference_learned",
+            "goals": "goal_updated",
+            "decisions": "decision_made",
+            "status": "status_changed",
+        }
+        event_type = event_type_map.get(entity_type, "profile_updated")
+
+        # 构建 payload
+        payload = {
+            "section": section,
+            "content": content,
+        }
+
+        # 写入 growth_events + 同步投影 .md
+        async for db in get_db():
+            event = await create_event_and_project_md(
+                db=db,
+                user_id=ctx.deps.user_id,
+                event_type=event_type,
+                entity_type=entity_type,
+                payload=payload,
+                source="Agent工具",
+            )
+            if event:
+                return f"已添加到 {entity_type} 的 {section} 部分"
+            else:
+                return f"{entity_type} 的 {section} 部分已存在，跳过添加"
+
+        return "添加失败"
 
     # ── 旧版工具（已废弃，保留兼容性）─────────────────
 
