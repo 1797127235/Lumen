@@ -194,7 +194,11 @@ async def _classify_llm(user_input: str, skills: dict[str, SkillMeta]) -> str:
 
 
 async def _retrieve_memories(user_input: str, user_id: str) -> list[str]:
-    """语义检索 Cognee 中与 user_input 相关的历史记忆，失败返回空列表。"""
+    """语义检索 Cognee 中与 user_input 相关的历史记忆，失败返回空列表。
+
+    注意：PydanticAI 版本中，此函数由 @agent.system_prompt 装饰器替代。
+    保留此函数用于向后兼容。
+    """
     from app.backend.services import cognee_service
 
     try:
@@ -296,11 +300,14 @@ async def run_orchestrator(
     """
     编排单次对话所需的静态上下文（不含用户本轮 user 消息）。
 
+    注意：PydanticAI 版本中，系统提示词由 @agent.system_prompt 装饰器动态生成。
+    此函数保留用于向后兼容和意图分类。
+
     参数:
         user_input: 用户本轮输入，用于意图分类。
         user_profile: 画像字典，结构与 profile 接口一致；可为 None。
         conversation_summary: 可选的多轮摘要，通常由上层从 DB 或 LLM 维护。
-        user_id: 用户 ID，用于 Mem0 记忆检索过滤。
+        user_id: 用户 ID，用于记忆检索过滤。
 
     返回:
         intent: 选中的技能目录名。
@@ -309,7 +316,7 @@ async def run_orchestrator(
     """
     intent, task_type = await classify(user_input)
 
-    # 检索相关历史记忆
+    # 检索相关历史记忆（PydanticAI 版本中由 @agent.system_prompt 处理）
     memories = await _retrieve_memories(user_input, user_id)
 
     system = build_system_prompt(user_profile, intent, conversation_summary, memories=memories)

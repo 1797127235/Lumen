@@ -1,4 +1,4 @@
-"""对话服务 — SSE 流式对话 + 历史存 DB + 滚动摘要"""
+"""对话服务 — SSE 流式对话 + 历史存 DB + 滚动摘要（PydanticAI 版本）"""
 
 from __future__ import annotations
 
@@ -7,17 +7,12 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.backend.agent.agent_loop import AgentResult, agent_loop
-from app.backend.agent.llm_router import TaskType
-from app.backend.agent.llm_router import chat as llm_chat
-from app.backend.agent.orchestrator import run_orchestrator
-from app.backend.agent.tools import tool_registry
-from app.backend.models.agent_trace import AgentTrace
+from app.backend.agent.deps import CareerOSDeps
+from app.backend.agent.pydantic_agent import get_agent
 from app.backend.models.conversation import Conversation, Message
 
 logger = logging.getLogger(__name__)
@@ -55,12 +50,11 @@ async def stream_chat(
     conversation_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
-    SSE 流式对话：
+    SSE 流式对话（PydanticAI 版本）：
     1. 获取/创建会话
     2. 加载历史上下文
-    3. run_orchestrator：画像加载 + 意图分类 + 系统提示词组装
-    4. agent_loop：ReAct 循环（支持工具调用）
-    5. 存 DB + 滚动摘要
+    3. PydanticAI Agent 处理（内置工具调用）
+    4. 存 DB + 滚动摘要
     """
     # 获取或创建会话
     if conversation_id:
@@ -78,30 +72,12 @@ async def stream_chat(
 
     yield _sse_token("", conv.conversation_id)  # 初始事件（返回 conversation_id）
 
-    # 加载历史消息
-    history_result = await db.execute(
-        select(Message)
-        .where(Message.conversation_id == conv.conversation_id)
-        .order_by(Message.created_at.desc())
-        .limit(20)
-    )
-    recent = history_result.scalars().all()
-    history_messages = [{"role": msg.role, "content": msg.content or ""} for msg in reversed(recent)]
-
-    # 1. 加载画像 + 意图分类 + 组装 prompt（失败不落库，无孤儿消息）
-    try:
-        user_profile = await _load_user_profile(db, user_id)
-        intent, task_type, system = await run_orchestrator(user_input, user_profile, conv.summary, user_id=user_id)
-    except Exception:
-        logger.exception("编排失败: conversation_id=%s", conv.conversation_id)
-        yield _sse_error("服务暂不可用，请稍后重试")
-        return
-
+    # 保存用户消息
     user_message = Message(
         conversation_id=conv.conversation_id,
         role="user",
         content=user_input,
-        intent=intent,
+        intent="consultation",
     )
     db.add(user_message)
     conv.message_count = (conv.message_count or 0) + 1
@@ -114,33 +90,20 @@ async def stream_chat(
         yield _sse_error("消息保存失败，请稍后重试")
         return
 
-    # 2. Agent Loop 生成 + 保存 AI 回复
+    # PydanticAI Agent 流式处理（不传 message_history，由 dynamic_prompt 处理上下文）
     try:
+        agent = get_agent()
+        deps = CareerOSDeps(user_id=user_id, db=db)
+
         full_content = ""
         try:
-            # agent_loop 现在是异步生成器，yield 流式 token 和最终结果
-            async for item in agent_loop(
-                user_input=user_input,
-                system_prompt=system,
-                history_messages=history_messages,
-                task_type=cast(TaskType, task_type),
-                db=db,
-                user_id=user_id,
-                registry=tool_registry,
-            ):
-                if isinstance(item, str):
-                    # 流式 token，直接 yield 给前端
-                    full_content += item
-                    yield _sse_token(item, conv.conversation_id)
-                elif isinstance(item, AgentResult):
-                    # 最终结果
-                    result = item
-                    # 如果有工具调用，输出提示
-                    for step in result.steps:
-                        if step.step_type == "tool_call" and step.tool_name:
-                            yield _sse_token(f"\n[调用工具: {step.tool_name}]\n", conv.conversation_id)
-                    # 保存追踪记录
-                    await _save_agent_traces(db, conv.conversation_id, user_id, result.steps)
+            async with agent.run_stream(
+                user_input,
+                deps=deps,
+            ) as response:
+                async for text in response.stream_text():
+                    full_content += text
+                    yield _sse_token(text, conv.conversation_id)
 
         finally:
             # 无论正常完成还是客户端断开，都保存已生成的内容
@@ -150,7 +113,7 @@ async def stream_chat(
                         conversation_id=conv.conversation_id,
                         role="assistant",
                         content=full_content,
-                        intent=intent,
+                        intent="consultation",
                     )
                 )
                 conv.message_count = (conv.message_count or 0) + 1
@@ -166,13 +129,10 @@ async def stream_chat(
         yield _sse_error("生成回复失败，请稍后重试")
         return
 
-    # 3. 滚动摘要：fire-and-forget，不阻塞 SSE
+    # 滚动摘要：fire-and-forget，不阻塞 SSE
     if conv.message_count >= 30 and conv.message_count % 10 == 0:
         task = asyncio.create_task(_summarize_bg(conv.conversation_id))
         task.add_done_callback(_log_task_error)
-
-    # 4. Cognee 记忆提取已移除：事件驱动写入，不逐对话提取
-    # 成长事件通过 growth_events 表和 cognee_projector 投影到 Cognee
 
     yield _sse_done(conv.conversation_id)
 
@@ -202,14 +162,18 @@ async def _summarize_bg(conversation_id: str) -> None:
     """后台摘要：独立 db session，内部重判触发条件防并发重复触发。"""
     from app.backend.db.base import get_async_session_maker
 
-    async with get_async_session_maker()() as db:
-        try:
-            conv = await db.get(Conversation, conversation_id)
-            if conv is None or conv.message_count < 30 or conv.message_count % 10 != 0:
-                return
-            await _summarize_and_persist(db, conv)
-        except Exception:
-            logger.exception("后台摘要失败: conversation_id=%s", conversation_id)
+    try:
+        async with get_async_session_maker()() as db:
+            try:
+                conv = await db.get(Conversation, conversation_id)
+                if conv is None or conv.message_count < 30 or conv.message_count % 10 != 0:
+                    return
+                await _summarize_and_persist(db, conv)
+            except Exception:
+                logger.exception("后台摘要失败: conversation_id=%s", conversation_id)
+    finally:
+        # 确保即使任务被取消也能清理锁
+        _summary_locks.pop(conversation_id, None)
 
 
 async def _fetch_old_messages(db: AsyncSession, conv: Conversation) -> list[Message]:
@@ -258,6 +222,8 @@ async def _summarize_and_persist(db: AsyncSession, conv: Conversation) -> None:
         prompt = _build_summary_prompt(conv.summary or "", _format_messages(old_messages))
 
         try:
+            from app.backend.agent.llm_router import chat as llm_chat
+
             result = await llm_chat(
                 task_type="memory_summarize",
                 messages=[{"role": "user", "content": prompt}],
@@ -289,31 +255,3 @@ def _sse_error(message: str) -> str:
 
 def _sse_done(conversation_id: str) -> str:
     return f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
-
-
-async def _save_agent_traces(
-    db: AsyncSession,
-    conversation_id: str,
-    user_id: str,
-    steps: list,
-) -> None:
-    """保存 Agent 执行追踪记录"""
-    try:
-        for step in steps:
-            trace = AgentTrace(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                step_number=step.step_number,
-                step_type=step.step_type,
-                tool_name=step.tool_name,
-                tool_args=step.tool_args,
-                content=step.content[:5000],  # 截断过长内容
-                duration_ms=step.duration_ms,
-                success=step.success,
-                error_message=step.error,
-            )
-            db.add(trace)
-        await db.flush()
-        logger.debug("Agent 追踪记录已保存: conversation_id=%s, steps=%d", conversation_id, len(steps))
-    except Exception:
-        logger.warning("保存 Agent 追踪记录失败: conversation_id=%s", conversation_id, exc_info=True)

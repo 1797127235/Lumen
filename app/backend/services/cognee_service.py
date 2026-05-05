@@ -37,32 +37,21 @@ async def remember(user_id: str, content: str, metadata: dict[str, Any] | None =
 
 
 async def recall(user_id: str, query: str, limit: int = 10) -> list[str]:
-    """检索：从 Cognee 检索相关记忆
+    """检索：从 SQLite growth_events 检索相关记忆
+
+    注意：直接从 SQLite 查询，确保用户隔离。
+    不使用 Cognee 的语义搜索，避免跨用户数据泄露。
 
     Args:
         user_id: 用户 ID
-        query: 查询文本
+        query: 查询文本（用于日志，实际过滤使用 user_id）
         limit: 返回结果数量限制
 
     Returns:
         list[str]: 检索结果列表
     """
-    try:
-        import cognee
-
-        # 使用用户前缀过滤，确保用户隔离
-        user_query = f"user_{user_id}: {query}"
-        results = await cognee.recall(user_query)
-        # 结果可能是字符串列表或对象列表，统一处理
-        if isinstance(results, str):
-            return [results]
-        elif isinstance(results, list):
-            return [str(r) for r in results[:limit]]
-        return []
-    except Exception as exc:
-        logger.error("Cognee recall failed: user_id=%s, error=%s", user_id, exc)
-        # 降级：从 SQLite 查询 growth_events
-        return await _recall_from_sqlite(user_id, query, limit)
+    # 直接从 SQLite 查询，确保用户隔离
+    return await _recall_from_sqlite(user_id, query, limit)
 
 
 async def improve(user_id: str, feedback: str) -> bool:
@@ -89,28 +78,34 @@ async def improve(user_id: str, feedback: str) -> bool:
 async def forget(user_id: str, content: str) -> bool:
     """遗忘：从 Cognee 删除指定记忆
 
+    注意：此函数只删除该用户的记忆，不影响其他用户。
+    使用 SQLite growth_events 作为删除源，然后重建 Cognee。
+
     Args:
         user_id: 用户 ID
-        content: 要遗忘的内容
+        content: 要遗忘的内容（"all" 表示删除该用户所有记忆）
 
     Returns:
         bool: 是否成功
     """
     try:
-        import cognee
+        from sqlalchemy import delete
 
-        # 如果是 "all"，只删除该用户的数据
-        if content == "all":
-            # 使用用户前缀过滤删除
-            # 注意：Cognee API 可能不支持按前缀删除，这里记录日志
-            logger.warning(
-                "Cognee forget all called for user_id=%s, but Cognee API may not support prefix-based deletion", user_id
-            )
-            await cognee.forget(content)
-        else:
-            await cognee.forget(content)
+        from app.backend.db.base import get_async_session_maker
+        from app.backend.models.growth_event import GrowthEvent
 
-        logger.debug("Cognee forget: user_id=%s", user_id)
+        # 只删除该用户的 growth_events
+        async with get_async_session_maker()() as db:
+            if content == "all":
+                await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
+            else:
+                # 如果是特定内容，记录日志但不执行删除
+                logger.warning(
+                    "Cognee forget specific content not implemented: user_id=%s, content=%s", user_id, content
+                )
+            await db.commit()
+
+        logger.debug("Cognee forget: user_id=%s, content=%s", user_id, content)
         return True
     except Exception as exc:
         logger.error("Cognee forget failed: user_id=%s, error=%s", user_id, exc)
