@@ -1,6 +1,9 @@
 {
   "permissions": {
     "allow": [
+      "Bash(cp *)",
+      "Bash(mkdir *)",
+      "Bash(node *)",
       "Bash(python:*)",
       "Bash(find /c/Users/liu/Desktop/career-planning-agent -path */types/*graph* -name *.ts -o -name *.tsx)",
       "Bash(npx --yes @mermaid-js/mermaid-cli --version)",

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { getMemoryList } from "../lib/api";
-import type { MemoryItem } from "../lib/api";
+import { getMemoryList, getMemoryStats } from "../lib/api";
+import type { MemoryItem, MemoryStats } from "../lib/api";
 
 function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
-  return d.toLocaleString("zh-CN", {
+  if (!iso) return "--";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleString("zh-CN", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -15,36 +15,112 @@ function formatDate(iso: string | null): string {
   });
 }
 
+function statusLabel(stats: MemoryStats | null): string {
+  if (!stats) return "加载中";
+  if (stats.status === "ready") return "就绪";
+  if (stats.status === "no_api_key") return "未配置 Key";
+  if (stats.status === "error") return "异常";
+  return "未初始化";
+}
+
 export default function Memories() {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [stats, setStats] = useState<MemoryStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadMemories() {
+    setError("");
+    try {
+      const [nextStats, nextMemories] = await Promise.all([
+        getMemoryStats(),
+        getMemoryList(),
+      ]);
+      setStats(nextStats);
+      setMemories(nextMemories);
+    } catch {
+      setError("记忆读取失败，稍后再试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    getMemoryList()
-      .then(setMemories)
-      .catch(() => setError("记忆读取失败，稍后再试"))
-      .finally(() => setLoading(false));
+    void loadMemories();
+
+    const handleVisible = () => {
+      if (!document.hidden) {
+        void loadMemories();
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      if (!document.hidden) {
+        void loadMemories();
+      }
+    }, 15000);
+
+    window.addEventListener("focus", handleVisible);
+    document.addEventListener("visibilitychange", handleVisible);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleVisible);
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
   }, []);
 
+  const memoryUnavailable = stats !== null && stats.status !== "ready";
+
   return (
-    <div className="max-w-[720px] mx-auto px-md py-xl">
-      <h1 className="text-xl font-han text-ink mb-lg">记忆</h1>
+    <div className="mx-auto max-w-[720px] px-md py-xl">
+      <div className="mb-lg flex items-center justify-between gap-md">
+        <h1 className="text-xl font-han text-ink">记忆</h1>
+        <button
+          onClick={() => {
+            setLoading(true);
+            void loadMemories();
+          }}
+          className="rounded border border-border px-sm py-1 text-sm text-text hover:bg-surface"
+        >
+          刷新
+        </button>
+      </div>
 
-      {loading && <p className="text-text-muted text-sm">我在想...</p>}
+      <div className="mb-md flex items-center gap-sm text-sm text-text-subtle">
+        <span>状态：{statusLabel(stats)}</span>
+        <span>·</span>
+        <span>共 {stats?.count ?? 0} 条</span>
+      </div>
 
-      {!loading && error && <p className="text-danger text-sm">{error}</p>}
+      {loading && <p className="text-sm text-text-muted">我在想...</p>}
 
-      {!loading && !error && memories.length === 0 && (
-        <p className="text-text-muted">还没有记忆。聊几句，我就开始记了。</p>
+      {!loading && error && <p className="text-sm text-danger">{error}</p>}
+
+      {!loading && !error && memoryUnavailable && (
+        <p className="text-sm text-text-muted">
+          记忆服务当前不可用。先去“设置”确认 LLM / Embedding Key 已保存。
+          如果你刚保存过配置，现在返回本页或点“刷新”就会重新检查状态。
+        </p>
       )}
 
-      {!loading && !error && memories.length > 0 && (
+      {!loading && !error && !memoryUnavailable && memories.length === 0 && (
+        <p className="text-text-muted">
+          还没有记忆。聊几句之后，系统会逐步提取长期记忆。
+        </p>
+      )}
+
+      {!loading && !error && !memoryUnavailable && memories.length > 0 && (
         <ul className="flex flex-col gap-xs">
           {memories.map((mem) => (
-            <li key={mem.id} className="border border-border-soft rounded-lg px-md py-sm">
-              <p className="text-text leading-relaxed">{mem.memory}</p>
-              <p className="text-text-subtle text-xs mt-2xs">{formatDate(mem.created_at)}</p>
+            <li
+              key={mem.id}
+              className="rounded-lg border border-border-soft px-md py-sm"
+            >
+              <p className="leading-relaxed text-text">{mem.memory}</p>
+              <p className="mt-2xs text-xs text-text-subtle">
+                {formatDate(mem.created_at)}
+              </p>
             </li>
           ))}
         </ul>

@@ -20,8 +20,4 @@ TOOLS = [
         "name": "update_profile",
         "description": "从对话中增量更新用户画像。当用户提到目标方向、目标公司、个人偏好等信息时调用。",
     },
-    {
-        "name": "diagnose_jd",
-        "description": "诊断用户与 JD 的匹配度。当用户粘贴 JD 或询问岗位匹配情况时调用。",
-    },
 ]

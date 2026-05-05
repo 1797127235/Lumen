@@ -154,7 +154,9 @@ export default function Settings() {
       if (embeddingApiKey) data.embedding_api_key = embeddingApiKey;
 
       const updated = await updateConfig(data);
+      const nextMemStats = await getMemoryStats();
       setConfig(updated);
+      setMemStats(nextMemStats);
       setLlmApiKey("");
       setEmbeddingApiKey("");
       setSaved(true);

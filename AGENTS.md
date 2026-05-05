@@ -38,11 +38,11 @@ career-os/
 │   │   ├── skill_record.py   # SkillRecord 技能成长记录
 │   │   └── agent_trace.py    # AgentTrace 可观测性
 │   ├── agent/
-│   │   ├── agent_loop.py     # ReAct Loop（流式，工具调用，最多 5 步）
+│   │   ├── pydantic_agent.py  # PydanticAI Agent 定义 + 动态系统提示词
+│   │   ├── pydantic_tools.py  # Agent 工具（get_profile, update_profile）
 │   │   ├── llm_router.py     # LLM 路由（多 Provider），流式+非流式
-│   │   ├── orchestrator.py   # Agent 编排 + Skill 系统
 │   │   ├── mem0_client.py    # Mem0 记忆层封装
-│   │   └── tools.py          # 工具注册中心（ToolRegistry）
+│   │   └── deps.py           # Agent 依赖注入（CareerOSDeps）
 │   ├── routers/
 │   │   ├── health.py         # GET /api/health
 │   │   ├── chat.py           # POST /api/chat (SSE), GET /api/chat/history, DELETE /api/chat/{id}
@@ -108,9 +108,8 @@ career-os/
 
 ## Key Architecture Decisions
 
-- **Agent 系统**：ReAct Loop 实现（`agent_loop.py`），最多 5 步推理，3 步工具调用上限。流式输出通过 `chat_stream()` 逐 token 返回
-- **工具注册**：`ToolRegistry` 类注册工具，3 个内置工具：`get_profile`、`update_profile`、`diagnose_jd`
-- **Skill 系统**：`orchestrator.py` 自发现 `skills/` 目录，按意图加载对应 SKILL.md
+- **Agent 系统**：PydanticAI 实现（`pydantic_agent.py`），支持工具调用、动态系统提示词、流式输出
+- **工具注册**：`@agent.tool` 装饰器注册工具，2 个内置工具：`get_profile`、`update_profile`（JD 结构化诊断走 `POST /api/jd/diagnose`，非 Agent 工具）
 - **LLM 路由**：`llm_router.py` 支持多 Provider（DashScope/OpenAI/DeepSeek 等），通过 LiteLLM 统一调用
 - **记忆层**：Mem0 + Chroma，自动从对话中提取关键信息，语义检索注入上下文
 - **数据库**：SQLite（`career_os.db`），`lifespan` 中 `Base.metadata.create_all` 自动建表

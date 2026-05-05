@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # ── 数据库 ──
     database_url: str = ""
 
+    # ── Cognee ──
+    # 单实例 / 自托管默认共用一个数据集；多用户同机部署时请为每用户拆分策略另行设计
+    cognee_dataset: str = "career_os"
+
     # ── 应用 ──
     debug: bool = True
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]

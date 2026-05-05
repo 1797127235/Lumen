@@ -56,7 +56,6 @@ def _create_model() -> OpenAIChatModel:
             base_url=base_url,
             api_key=api_key,
         ),
-        max_tokens=4096,
     )
 
 
@@ -80,17 +79,23 @@ def create_agent() -> Agent[CareerOSDeps, str]:
             "你是 CareerOS，一个面向中国 CS 学生的 AI 职业规划助手。"
             "你的目标是帮助学生从大一到毕业，追踪成长轨迹，提供个性化的职业规划建议。"
             "\n\n"
-            "核心能力："
-            "1. 分析用户画像（学校、专业、技能、目标）"
-            "2. 诊断 JD 匹配度，找出技能缺口"
-            "3. 提供学习路径和职业发展建议"
-            "4. 追踪成长里程碑"
+            "## 核心能力\n"
+            "1. 诊断 JD 匹配度，找出技能缺口\n"
+            "2. 提供学习路径和职业发展建议\n"
+            "3. 追踪成长里程碑\n"
             "\n\n"
-            "回复风格："
-            "- 使用中文"
-            "- 结构化输出（使用 Markdown）"
-            "- 给出具体可执行的建议"
-            "- 鼓励而非说教"
+            "## 用户画像规则\n"
+            "用户画像（学校、专业、年级、技能、目标）已自动加载到上下文中的「用户信息」部分。\n"
+            "- 【不要】主动调用 get_profile 工具，画像已在上下文中\n"
+            "- 当用户提到个人信息（学校、专业、年级、目标方向等）时，【必须】调用 update_profile 工具保存\n"
+            "- 保存后告诉用户「已记录你的信息」，不要说「已同步」而不实际调用工具\n"
+            "\n\n"
+            "## 回复风格\n"
+            "- 使用中文\n"
+            "- 结构化输出（使用 Markdown）\n"
+            "- 给出具体可执行的建议\n"
+            "- 鼓励而非说教\n"
+            "- 不要重复询问用户已经说过的信息"
         ),
         retries=2,
     )
@@ -101,9 +106,10 @@ def create_agent() -> Agent[CareerOSDeps, str]:
     # 注册动态系统提示词
     @agent.system_prompt
     async def dynamic_prompt(ctx: RunContext[CareerOSDeps]) -> str:
-        """动态系统提示词：加载用户画像和记忆"""
+        """动态系统提示词：加载用户画像、记忆和历史消息"""
         from sqlalchemy import select
 
+        from app.backend.models.conversation import Message
         from app.backend.models.user import User, UserProfile
         from app.backend.services import cognee_service
 
@@ -127,7 +133,16 @@ def create_agent() -> Agent[CareerOSDeps, str]:
             if profile.major:
                 parts.append(f"专业：{profile.major}")
             if profile.grade:
-                parts.append(f"年级：{profile.grade}")
+                grade_map = {
+                    "freshman": "大一",
+                    "sophomore": "大二",
+                    "junior": "大三",
+                    "senior": "大四",
+                    "graduate1": "研一",
+                    "graduate2": "研二",
+                    "graduate3": "研三",
+                }
+                parts.append(f"年级：{grade_map.get(profile.grade, profile.grade)}")
             if profile.target_direction:
                 parts.append(f"目标方向：{profile.target_direction}")
 
@@ -141,9 +156,45 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         except Exception:
             pass  # 记忆加载失败不影响对话
 
+        # 加载历史消息（L1 短期记忆）
+        try:
+            # 从 DB 加载最近 20 条消息（按 created_at 倒序）
+            history_result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == ctx.deps.conversation_id)
+                .order_by(Message.created_at.desc())
+                .limit(20)
+            )
+            history_messages = history_result.scalars().all()
+
+            if history_messages:
+                # 反转为正序（最早的在前）
+                history_messages = list(reversed(history_messages))
+
+                # 格式化为文本
+                history_lines = []
+                for msg in history_messages:
+                    if msg.role == "user":
+                        history_lines.append(f"用户：{msg.content}")
+                    elif msg.role == "assistant":
+                        # 截断过长的回复，保留前 200 字符
+                        content = msg.content or ""
+                        if len(content) > 200:
+                            content = content[:200] + "..."
+                        history_lines.append(f"AI：{content}")
+
+                if history_lines:
+                    parts.append("【对话历史】\n" + "\n".join(history_lines))
+        except Exception:
+            pass  # 历史消息加载失败不影响对话
+
         if parts:
-            return "用户信息：\n" + "\n".join(parts)
-        return ""
+            return (
+                "【用户画像 - 已自动加载，不要调用 get_profile】\n"
+                + "\n".join(parts)
+                + "\n\n注意：以上信息已加载，直接使用。当用户提到新信息时，调用 update_profile 保存。"
+            )
+        return "【用户画像为空】用户尚未填写个人信息。当用户提供信息时，调用 update_profile 保存。"
 
     logger.info("PydanticAI Agent created with model: %s", model.model_name)
     return agent

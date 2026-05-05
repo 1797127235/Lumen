@@ -27,7 +27,8 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
 
     @agent.tool
     async def get_profile(ctx: RunContext[CareerOSDeps]) -> str:
-        """读取用户画像，包括学校、专业、技能、目标方向等信息。当需要了解用户背景时调用。"""
+        """读取用户画像。仅当用户明确要求「查看我的画像」「我的信息」时调用，不要主动调用。"""
+        logger.info("工具调用: get_profile, user_id=%s", ctx.deps.user_id)
         from sqlalchemy import select
 
         from app.backend.models.user import User, UserProfile
@@ -95,10 +96,17 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         ctx: RunContext[CareerOSDeps],
         fields: dict[str, Any],
     ) -> str:
-        """从对话中增量更新用户画像。当用户提到目标方向、目标公司、个人偏好等信息时调用。
+        """更新用户画像。当用户提到以下信息时【必须】调用：
+        - 学校、专业、年级（如"我是大三的"、"软件工程专业"）
+        - 目标方向（如"想做AI Agent"、"后端开发"）
+        - 目标公司（如"想去大厂"、"国企"）
+        - 个人简介、城市、薪资期望等
 
         Args:
             fields: 要更新的字段字典，支持的字段：
+                - school_name: 学校名称
+                - major: 专业
+                - grade: 年级（freshman/sophomore/junior/senior/graduate1/graduate2/graduate3）
                 - target_direction: 目标方向（后端/前端/算法/AI等）
                 - target_company_level: 目标公司（top/major/medium/state_owned）
                 - bio: 个人简介
@@ -106,6 +114,7 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
                 - expected_salary: 期望薪资
                 - english_level: 英语水平
         """
+        logger.info("工具调用: update_profile, user_id=%s, fields=%s", ctx.deps.user_id, fields)
         from sqlalchemy import select
 
         from app.backend.models.user import UserProfile
@@ -115,7 +124,17 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         user_id = ctx.deps.user_id
 
         # 定义允许的字段
-        allowed_fields = {"target_direction", "target_company_level", "bio", "city", "expected_salary", "english_level"}
+        allowed_fields = {
+            "school_name",
+            "major",
+            "grade",  # 基础信息
+            "target_direction",
+            "target_company_level",  # 目标
+            "bio",
+            "city",
+            "expected_salary",
+            "english_level",  # 扩展信息
+        }
 
         # 过滤掉未知字段
         unknown_fields = set(fields.keys()) - allowed_fields
@@ -133,6 +152,34 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
 
         pdata = dict(profile.profile_data or {})
         updated_fields = []
+
+        # 直接映射的字段（存到 profile 表）
+        direct_fields = {"school_name", "major"}
+        for key in direct_fields:
+            if key in fields and fields[key] is not None:
+                setattr(profile, key, fields[key])
+                updated_fields.append(key)
+
+        # grade 字段需要校验合法值
+        valid_grades = {"freshman", "sophomore", "junior", "senior", "graduate1", "graduate2", "graduate3"}
+        if "grade" in fields and fields["grade"] is not None:
+            grade_val = fields["grade"].lower() if isinstance(fields["grade"], str) else fields["grade"]
+            # 支持中文年级映射
+            grade_map = {
+                "大一": "freshman",
+                "大二": "sophomore",
+                "大三": "junior",
+                "大四": "senior",
+                "研一": "graduate1",
+                "研二": "graduate2",
+                "研三": "graduate3",
+            }
+            grade_val = grade_map.get(grade_val, grade_val)
+            if grade_val in valid_grades:
+                profile.grade = grade_val
+                updated_fields.append("grade")
+            else:
+                logger.warning("无效的 grade: %s", fields["grade"])
 
         # target_direction 需要校验合法值
         if "target_direction" in fields and fields["target_direction"] is not None:
@@ -166,55 +213,3 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             return f"画像已更新：{', '.join(updated_fields)}"
         else:
             return "没有需要更新的字段。"
-
-    @agent.tool
-    async def diagnose_jd(
-        ctx: RunContext[CareerOSDeps],
-        jd_text: str,
-    ) -> str:
-        """诊断用户与 JD 的匹配度。当用户粘贴 JD 或询问岗位匹配情况时调用。
-
-        Args:
-            jd_text: JD 岗位描述文本
-        """
-        from app.backend.services.jd_service import diagnose_jd
-
-        db = ctx.deps.db
-        user_id = ctx.deps.user_id
-
-        try:
-            result = await diagnose_jd(db, user_id, jd_text)
-
-            # 格式化输出
-            parts = [
-                "【JD 诊断结果】",
-                f"岗位：{result.jd_title}",
-                f"匹配度：{result.overall_score}/100",
-                f"总结：{result.summary}",
-            ]
-
-            if result.matched_skills:
-                parts.append(f"匹配技能：{', '.join(result.matched_skills)}")
-
-            if result.skill_gaps:
-                gaps = [f"{g.skill}（{g.priority}）" for g in result.skill_gaps]
-                parts.append(f"技能缺口：{', '.join(gaps)}")
-
-            if result.strengths:
-                parts.append(f"优势：{', '.join(result.strengths)}")
-
-            if result.risks:
-                parts.append(f"风险：{', '.join(result.risks)}")
-
-            if result.action_plan:
-                parts.append("行动计划：")
-                for i, plan in enumerate(result.action_plan, 1):
-                    parts.append(f"  {i}. {plan}")
-
-            return "\n".join(parts)
-        except Exception as e:
-            logger.error("JD 诊断失败: %s", e, exc_info=True)
-            # 不向用户暴露内部错误细节
-            return "JD 诊断失败，请稍后重试。如果问题持续存在，请联系管理员。"
-
-    logger.info("Tools registered: get_profile, update_profile, diagnose_jd")

@@ -89,11 +89,11 @@ career-os/
 │   │   ├── skill_record.py   # SkillRecord 技能成长记录
 │   │   └── agent_trace.py    # AgentTrace 可观测性
 │   ├── agent/
-│   │   ├── agent_loop.py     # ReAct Loop（流式，工具调用）
+│   │   ├── pydantic_agent.py  # PydanticAI Agent 定义 + 动态系统提示词
+│   │   ├── pydantic_tools.py  # Agent 工具（get_profile, update_profile）
 │   │   ├── llm_router.py     # LLM 路由（多 Provider），流式+非流式
-│   │   ├── orchestrator.py   # Agent 编排 + Skill 系统
 │   │   ├── mem0_client.py    # Mem0 记忆层封装
-│   │   └── tools.py          # 工具注册中心（ToolRegistry）
+│   │   └── deps.py           # Agent 依赖注入（CareerOSDeps）
 │   ├── routers/
 │   │   ├── chat.py           # POST /api/chat (SSE), GET /api/chat/history
 │   │   ├── profile.py        # GET/PATCH/DELETE /api/profile/me
@@ -177,7 +177,7 @@ CareerOS 实现了完整的 Agent ReAct Loop：
   ↓
 ReAct Loop（最多 5 步）
   ├─ 思考：分析下一步
-  ├─ 行动：调用工具（get_profile / update_profile / diagnose_jd）
+  ├─ 行动：调用工具（get_profile / update_profile）
   ├─ 观察：获取工具结果
   └─ 循环直到得出最终答案
   ↓
@@ -189,7 +189,7 @@ Mem0 后台提取记忆
 **工具列表**：
 - `get_profile` — 获取用户画像
 - `update_profile` — 更新画像（含方向值校验）
-- `diagnose_jd` — JD 诊断（匹配评分 + 缺口分析）
+- `POST /api/jd/diagnose` — JD 诊断（匹配评分 + 缺口分析，HTTP 接口，非对话工具）
 
 **可观测性**：每个 Agent 运行记录在 `agent_traces` 表，包含推理步骤、工具调用、耗时。
 

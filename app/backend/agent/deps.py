@@ -14,7 +14,9 @@ class CareerOSDeps:
     用于 PydanticAI Agent 的 RunContext，提供：
     - user_id: 用户 ID
     - db: SQLAlchemy 异步会话
+    - conversation_id: 会话 ID（用于加载历史消息）
     """
 
     user_id: str
     db: AsyncSession
+    conversation_id: str | None = None

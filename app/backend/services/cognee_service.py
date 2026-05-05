@@ -7,9 +7,15 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.backend.config import get_settings
 from app.backend.db.base import get_async_session_maker
 
 logger = logging.getLogger(__name__)
+
+
+def _cognee_metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """合并写入 Cognee 的 metadata；dataset 由配置固定，便于单实例共用图谱。"""
+    return {**(extra or {}), "dataset": get_settings().cognee_dataset}
 
 
 async def remember(user_id: str, content: str, metadata: dict[str, Any] | None = None) -> bool:
@@ -26,9 +32,7 @@ async def remember(user_id: str, content: str, metadata: dict[str, Any] | None =
     try:
         import cognee
 
-        # 添加用户前缀以隔离不同用户的数据
-        dataset_name = f"user_{user_id}"
-        await cognee.remember(content, metadata={"dataset": dataset_name, **(metadata or {})})
+        await cognee.remember(content, metadata=_cognee_metadata(metadata))
         logger.debug("Cognee remember: user_id=%s, len=%d", user_id, len(content))
         return True
     except Exception as exc:
@@ -138,9 +142,7 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
 
             for event in events:
                 content = event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}"
-                # 使用用户前缀确保隔离
-                dataset_name = f"user_{user_id}"
-                await cognee.remember(content, metadata={"dataset": dataset_name})
+                await cognee.remember(content, metadata=_cognee_metadata())
 
         logger.info("Cognee rebuilt from SQLite: user_id=%s, events=%d", user_id, len(events))
         return True

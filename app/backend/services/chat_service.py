@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.agent.deps import CareerOSDeps
-from app.backend.agent.pydantic_agent import get_agent
 from app.backend.models.conversation import Conversation, Message
 
 logger = logging.getLogger(__name__)
@@ -92,14 +91,19 @@ async def stream_chat(
 
     # PydanticAI Agent 流式处理（不传 message_history，由 dynamic_prompt 处理上下文）
     try:
+        from pydantic_ai.settings import ModelSettings
+
+        from app.backend.agent.pydantic_agent import get_agent
+
         agent = get_agent()
-        deps = CareerOSDeps(user_id=user_id, db=db)
+        deps = CareerOSDeps(user_id=user_id, db=db, conversation_id=conv.conversation_id)
 
         full_content = ""
         try:
             async with agent.run_stream(
                 user_input,
                 deps=deps,
+                model_settings=ModelSettings(max_tokens=4096),
             ) as response:
                 async for text in response.stream_text(delta=True):
                     full_content += text

@@ -123,9 +123,7 @@ async def delete_conversation(
     if conv.user_id != user_id:
         raise HTTPException(status_code=403, detail="无权删除该会话")
 
-    await db.execute(
-        Message.__table__.delete().where(Message.conversation_id == conversation_id)
-    )
+    await db.execute(Message.__table__.delete().where(Message.conversation_id == conversation_id))
     await db.delete(conv)
     await db.commit()
     return {"deleted": True}
