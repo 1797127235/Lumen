@@ -37,6 +37,8 @@ async def project_event(event: GrowthEvent) -> bool:
 
         # 构建元数据
         metadata = {
+            "user_id": event.user_id,
+            "event_id": str(event.id),
             "event_type": event.event_type,
             "entity_type": event.entity_type,
             "entity_id": event.entity_id,

@@ -147,3 +147,26 @@ async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItem]:
     except Exception as e:
         logger.error("记忆列表查询失败: %s", e)
         return []
+
+
+@router.post("/rebuild")
+async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
+    """从 SQLite 重建 Cognee 索引"""
+    _validate_user_id(user_id)
+    status = get_cognee_status()
+    if status != "ready":
+        raise HTTPException(status_code=503, detail="记忆服务未就绪")
+
+    try:
+        from app.backend.services.cognee_projector import project_all_events
+
+        success = await project_all_events(user_id)
+        if success:
+            return {"message": "重建成功", "user_id": user_id}
+        else:
+            raise HTTPException(status_code=500, detail="重建失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("记忆重建失败: %s", e)
+        raise HTTPException(status_code=500, detail="重建失败，请查看日志")
