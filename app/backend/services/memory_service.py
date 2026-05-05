@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from app.backend.config import USER_DATA_DIR
-from app.backend.services.memory_limits import _LIMITS
+from app.backend.services.memory_limits import LIMITS
 from app.backend.services.memory_templates import (
     experiences_default as _default_experiences_template,
 )
@@ -27,7 +27,7 @@ def ensure_memory_dirs() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _extract_profile_fields(md_text: str) -> dict:
+def extract_profile_fields(md_text: str) -> dict:
     """从简历 markdown 用正则提取结构化字段（不调 LLM）。
 
     复用：投影器处理 legacy memory_md blob 用，简历上传后写 profile_updated 也用它。
@@ -45,8 +45,8 @@ def _extract_profile_fields(md_text: str) -> dict:
         "city": r"- 意向城市：(.+)",
         "gpa": r"- GPA：(.+)",
         "ranking": r"- 排名：(.+)",
-        "english_level": r"- (.+)",  # 跟在 ## 英语水平 后
-        "expected_salary": r"- (.+)",  # 跟在 ## 期望薪资 后
+        "english_level": r"## 英语水平\s*\n- (.+)",
+        "expected_salary": r"## 期望薪资\s*\n- (.+)",
     }
     fields: dict = {}
     for key, pattern in patterns.items():
@@ -170,7 +170,7 @@ def get_memory_usage(name: str) -> dict:
         return {"chars": 0, "limit": 0, "pct": 0}
     content = readers[name]()
     chars = len(content)
-    limit = _LIMITS[name]
+    limit = LIMITS[name]
     pct = int(chars / limit * 100) if limit else 0
     return {"chars": chars, "limit": limit, "pct": pct}
 

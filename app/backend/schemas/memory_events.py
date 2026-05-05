@@ -43,7 +43,7 @@ class ProfilePayload(BaseModel):
 
 
 class SkillPayload(BaseModel):
-    name: str
+    name: str = Field(min_length=1)
     level: Literal["familiar", "proficient", "expert"] = "familiar"
     context: str = ""
     source: str = ""
@@ -53,7 +53,7 @@ class SkillPayload(BaseModel):
 
 
 class ExperiencePayload(BaseModel):
-    title: str
+    title: str = Field(min_length=1)
     description: str = ""
     period: str = ""
     tech_stack: str = ""
@@ -65,7 +65,7 @@ class ExperiencePayload(BaseModel):
 
 
 class KeyValuePayload(BaseModel):
-    key: str
+    key: str = Field(min_length=1)
     value: str
 
 
@@ -73,7 +73,7 @@ class KeyValuePayload(BaseModel):
 
 
 class DecisionPayload(BaseModel):
-    title: str
+    title: str = Field(min_length=1)
     content: str
 
 

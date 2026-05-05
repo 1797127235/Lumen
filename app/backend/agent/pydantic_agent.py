@@ -114,10 +114,12 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         from sqlalchemy import select
 
         from app.backend.models.conversation import Conversation, Message
-        from app.backend.services.memory_service import (
+        from app.backend.services.memory_limits import (
             EXPERIENCES_CHAR_LIMIT,
             MEMORY_CHAR_LIMIT,
             SKILLS_CHAR_LIMIT,
+        )
+        from app.backend.services.memory_service import (
             read_experiences,
             read_memory,
             read_skills,

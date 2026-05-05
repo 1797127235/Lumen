@@ -15,6 +15,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +23,7 @@ from app.backend.config import USER_DATA_DIR
 from app.backend.db.base import get_async_session_maker
 from app.backend.models.growth_event import GrowthEvent
 from app.backend.services.memory_limits import EXPERIENCES_CHAR_LIMIT, MEMORY_CHAR_LIMIT, SKILLS_CHAR_LIMIT
-from app.backend.services.memory_service import ensure_memory_dirs
+from app.backend.services.memory_service import ensure_memory_dirs, extract_profile_fields
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +60,18 @@ def _merge_profile_events(events: list[GrowthEvent]) -> dict:
 
         # Legacy: payload 含 memory_md blob → 规则提取结构化字段
         if isinstance(payload.get("memory_md"), str):
-            from app.backend.services.memory_service import _extract_profile_fields
+            profile = _deep_merge(profile, extract_profile_fields(payload["memory_md"]))
+            continue
 
-            profile = _deep_merge(profile, _extract_profile_fields(payload["memory_md"]))
+        # Legacy: field/content 格式（旧版 profile_service）
+        if payload.get("field") in {"resume", "memory_md"} and isinstance(payload.get("content"), str):
+            profile = _deep_merge(profile, extract_profile_fields(payload["content"]))
             continue
 
         # New: schema 驱动
         try:
             validated = ProfilePayload.model_validate(payload).model_dump(exclude_none=True)
-        except Exception:
+        except ValidationError:
             continue
         profile = _deep_merge(profile, validated)
 
@@ -85,7 +89,7 @@ def _merge_skill_events(events: list[GrowthEvent]) -> dict[str, dict]:
             continue
         try:
             validated = SkillPayload.model_validate(payload)
-        except Exception:
+        except ValidationError:
             continue
         skills[validated.name] = {
             "name": validated.name,
@@ -102,14 +106,18 @@ def _merge_experience_events(events: list[GrowthEvent]) -> list[dict]:
     from app.backend.schemas.memory_events import ExperiencePayload
 
     experiences: list[dict] = []
+    seen_titles: set[str] = set()
     for event in events:
         payload = _load_payload(event)
         if not payload:
             continue
         try:
             validated = ExperiencePayload.model_validate(payload)
-        except Exception:
+        except ValidationError:
             continue
+        if validated.title in seen_titles:
+            continue
+        seen_titles.add(validated.title)
         experiences.append(
             {
                 "title": validated.title,
@@ -135,7 +143,7 @@ def _merge_dict_events(events: list[GrowthEvent]) -> dict:
             continue
         try:
             validated = KeyValuePayload.model_validate(payload)
-        except Exception:
+        except ValidationError:
             continue
         result[validated.key] = validated.value
     return result
@@ -152,7 +160,7 @@ def _merge_decision_events(events: list[GrowthEvent]) -> list[dict]:
             continue
         try:
             validated = DecisionPayload.model_validate(payload)
-        except Exception:
+        except ValidationError:
             continue
         decisions.append(
             {
@@ -198,7 +206,7 @@ def _generate_memory_md(
     parts.append("")
 
     # 教育背景
-    if profile.get("gpa") or profile.get("ranking") or profile.get("awards"):
+    if profile.get("gpa") or profile.get("ranking") or profile.get("awards") is not None:
         parts.append("## 教育背景")
         if profile.get("gpa"):
             parts.append(f"- GPA：{profile['gpa']}")

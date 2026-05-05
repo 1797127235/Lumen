@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from pydantic_ai import Agent
 
 from app.backend.agent.llm_router import _get_model_identifier
 from app.backend.agent.llm_router import chat as llm_chat
+from app.backend.services.memory_service import extract_profile_fields
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +138,7 @@ async def _llm_extract_to_markdown(raw_text: str) -> str:
 
 class _ResumeSkill(BaseModel):
     name: str
-    level: str = "familiar"
+    level: Literal["familiar", "proficient", "expert"] = "familiar"
     context: str = ""
 
 
@@ -193,22 +195,24 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
         logger.exception("[2/3] LLM extraction failed")
         raise HTTPException(status_code=502, detail=f"AI 解析失败: {exc}")
 
+    # [2.5/3] 结构化拆解
     try:
-        # [2.5/3] 结构化拆解
-        decomp = await _decompose_resume(markdown_content)
-        from app.backend.services.memory_service import _extract_profile_fields
+        profile_fields = extract_profile_fields(markdown_content)
+        logger.info("[2.5/3] Profile fields extracted: %d fields", len(profile_fields))
+    except Exception as exc:
+        logger.warning("[2.5/3] Profile field extraction failed: %s", exc)
+        profile_fields = {}
 
-        profile_fields = _extract_profile_fields(markdown_content)
+    try:
+        decomp = await _decompose_resume(markdown_content)
         logger.info(
-            "[2.5/3] Decomposition: %d skills, %d experiences, %d profile fields",
+            "[2.5/3] Decomposition: %d skills, %d experiences",
             len(decomp.skills),
             len(decomp.experiences),
-            len(profile_fields),
         )
     except Exception as exc:
-        logger.warning("[2.5/3] Decomposition skipped: %s", exc)
+        logger.warning("[2.5/3] Decomposition failed: %s", exc)
         decomp = _ResumeDecomposition()
-        profile_fields = {}
 
     try:
         from app.backend.db.base import get_async_session_maker
@@ -252,12 +256,10 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
                     event_ids.append(str(profile_event.id))
 
             # skill_added × N
-            _valid_levels = {"familiar", "proficient", "expert"}
             for skill in decomp.skills:
-                level = skill.level if skill.level in _valid_levels else "familiar"
                 payload = SkillPayload(
                     name=skill.name,
-                    level=level,
+                    level=skill.level,
                     context=skill.context,
                     source="简历解析",
                 ).model_dump()

@@ -36,8 +36,6 @@ class ExtractedEvent(BaseModel):
         "status_changed",
         "experience_added",
     ]
-    entity_type: str = ""
-    entity_id: str = ""
     payload: dict = {}
     confidence: float = 0.0
 
@@ -53,15 +51,18 @@ _extract_agent = Agent(
 )
 
 
-def _validate_event_payload(event: ExtractedEvent) -> ExtractedEvent | None:
+def _validate_event_payload(event: ExtractedEvent) -> dict | None:
     """校验 payload 是否匹配对应 event_type 的 schema。不匹配则丢弃。"""
     schema = EVENT_PAYLOAD_MAP.get(event.event_type)
     if schema is None:
         return None
     try:
         validated = schema.model_validate(event.payload)
-        event.payload = validated.model_dump()
-        return event
+        return {
+            "event_type": event.event_type,
+            "payload": validated.model_dump(),
+            "confidence": event.confidence,
+        }
     except ValidationError:
         logger.warning("Extractor event rejected: type=%s", event.event_type)
         return None
@@ -89,7 +90,7 @@ async def extract_memory_from_conversation(
             validated = _validate_event_payload(event)
             if validated is None:
                 continue
-            filtered_events.append(validated.model_dump())
+            filtered_events.append(validated)
 
         return filtered_events
     except Exception as exc:
