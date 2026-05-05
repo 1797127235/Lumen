@@ -11,148 +11,116 @@ from app.backend.agent.deps import CareerOSDeps
 
 logger = logging.getLogger(__name__)
 
+# entity_type → SQLite event_type 映射（支持 3 文件结构 + 细粒度事件类型）
+_EVENT_TYPE_MAP: dict[str, str] = {
+    "memory": "profile_updated",
+    "skills": "skill_added",
+    "experiences": "experience_added",
+    "preferences": "preference_learned",
+    "goals": "goal_updated",
+    "decisions": "decision_made",
+    "status": "status_changed",
+}
+
 
 def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
     @agent.tool
     async def memory_search(
         ctx: RunContext[CareerOSDeps],
         query: str,
-        entity_types: list[str] | None = None,
+        files: list[str] | None = None,
     ) -> str:
-        logger.info("Tool call: memory_search, query=%s, entity_types=%s", query, entity_types)
+        """搜索记忆文件。files 可选 memory/skills/experiences，不传则全搜。"""
+        logger.info("Tool call: memory_search, query=%s, files=%s", query, files)
 
         if not query or not query.strip():
             return "请提供搜索关键词。"
 
-        from app.backend.services.memory_service import read_experiences, read_memory, read_skills, search_memory
+        from app.backend.services.memory_service import (
+            read_experiences,
+            read_memory,
+            read_skills,
+            search_memory,
+        )
 
-        # entity_type 到文件的映射
-        entity_file_map = {
-            "memory": read_memory,
-            "skills": read_skills,
-            "experiences": read_experiences,
-            # 兼容旧的 entity_type
-            "preferences": read_memory,
-            "goals": read_memory,
-            "decisions": read_memory,
-            "status": read_memory,
-        }
-
-        if entity_types:
+        if files:
+            readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
             results = []
-            for entity_type in entity_types:
-                reader = entity_file_map.get(entity_type)
+            for name in files:
+                reader = readers.get(name)
                 if not reader:
                     continue
                 content = reader()
                 if content and query.lower() in content.lower():
-                    results.append(
-                        {
-                            "file": f"{entity_type}.md",
-                            "section": entity_type,
-                            "content": content[:500],
-                        }
-                    )
-            return str(results) if results else f"在 {entity_types} 中未找到相关内容。"
+                    results.append({"file": f"{name}.md", "section": name, "content": content[:500]})
+            return str(results) if results else f"在 {files} 中未找到相关内容。"
 
         results = search_memory(query)
         return str(results) if results else "未找到相关内容。"
 
     @agent.tool
-    async def memory_update(
+    async def memory_save(
         ctx: RunContext[CareerOSDeps],
         entity_type: str,
         section: str,
         content: str,
     ) -> str:
-        logger.info("Tool call: memory_update, entity_type=%s, section=%s", entity_type, section)
-        from app.backend.db.session import get_db
+        """保存或更新记忆条目。
+
+        entity_type 说明：
+        - memory       → 核心画像（学校/专业/目标方向等基础信息）
+        - skills       → 技能（掌握的技术、工具、语言）
+        - experiences  → 经历（项目、实习、竞赛）
+        - preferences  → 偏好（学习风格、工作偏好等）
+        - goals        → 目标（短期/长期职业目标）
+        - decisions    → 决策（重要的选择和结论）
+        - status       → 当前状态（正在学习什么、焦虑什么）
+        """
+        logger.info("Tool call: memory_save, entity_type=%s, section=%s", entity_type, section)
+
+        if entity_type not in _EVENT_TYPE_MAP:
+            return f"未知的类型 {entity_type}。支持: {', '.join(_EVENT_TYPE_MAP.keys())}"
+
         from app.backend.services.md_projector import create_event_and_project_md
 
-        event_type_map = {
-            "memory": "profile_updated",
-            "skills": "skill_added",
-            "experiences": "experience_added",
-            "preferences": "preference_learned",
-            "goals": "goal_updated",
-            "decisions": "decision_made",
-            "relationships": "profile_updated",
-            "status": "status_changed",
-        }
-        if entity_type not in event_type_map:
-            return f"未知的实体类型 {entity_type}。支持: {', '.join(event_type_map.keys())}"
-
         payload = {"section": section, "content": content}
-        async for db in get_db():
-            event = await create_event_and_project_md(
-                db=db,
-                user_id=ctx.deps.user_id,
-                event_type=event_type_map[entity_type],
-                entity_type=entity_type,
-                entity_id=section,
-                payload=payload,
-                source="Agent工具",
-            )
-            if event:
-                return f"已更新 {entity_type} 的 {section} 部分"
-            return f"{entity_type} 的 {section} 部分已是最新，跳过更新"
-
-        return "更新失败"
-
-    @agent.tool
-    async def memory_add(
-        ctx: RunContext[CareerOSDeps],
-        entity_type: str,
-        section: str,
-        content: str,
-    ) -> str:
-        logger.info("Tool call: memory_add, entity_type=%s, section=%s", entity_type, section)
-        from app.backend.db.session import get_db
-        from app.backend.services.md_projector import create_event_and_project_md
-
-        event_type_map = {
-            "skills": "skill_added",
-            "experiences": "experience_added",
-            "preferences": "preference_learned",
-            "goals": "goal_updated",
-            "decisions": "decision_made",
-            "relationships": "profile_updated",
-            "status": "status_changed",
-        }
-        if entity_type not in event_type_map:
-            return f"未知的实体类型 {entity_type}。支持: {', '.join(event_type_map.keys())}"
-
-        payload = {"section": section, "content": content}
-        async for db in get_db():
-            event = await create_event_and_project_md(
-                db=db,
-                user_id=ctx.deps.user_id,
-                event_type=event_type_map[entity_type],
-                entity_type=entity_type,
-                entity_id=section,
-                payload=payload,
-                source="Agent工具",
-            )
-            if event:
-                return f"已添加到 {entity_type} 的 {section} 部分"
-            return f"{entity_type} 的 {section} 部分已存在，跳过添加"
-
-        return "添加失败"
+        event = await create_event_and_project_md(
+            db=ctx.deps.db,
+            user_id=ctx.deps.user_id,
+            event_type=_EVENT_TYPE_MAP[entity_type],
+            entity_type=entity_type,
+            entity_id=section,
+            payload=payload,
+            source="Agent工具",
+        )
+        if event:
+            return f"已保存 {entity_type}/{section}"
+        return f"{entity_type}/{section} 内容未变化，跳过"
 
     @agent.tool
     async def get_profile(ctx: RunContext[CareerOSDeps]) -> str:
+        """获取用户完整画像（通常无需主动调用，画像已在 system prompt 中）。"""
         logger.info("Tool call: get_profile, user_id=%s", ctx.deps.user_id)
         from app.backend.services.md_projector import sync_user_md_projection
-        from app.backend.services.memory_service import read_memory
+        from app.backend.services.memory_service import read_experiences, read_memory, read_skills
 
         memory_content = read_memory()
         if not memory_content.strip():
-            projected = await sync_user_md_projection(ctx.deps.user_id)
-            if projected:
-                memory_content = read_memory()
+            await sync_user_md_projection(ctx.deps.user_id)
+            memory_content = read_memory()
 
-        if memory_content:
-            return memory_content
+        parts = []
+        if memory_content.strip():
+            parts.append(memory_content)
+        skills = read_skills()
+        if skills.strip():
+            parts.append(skills)
+        experiences = read_experiences()
+        if experiences.strip():
+            parts.append(experiences)
+
+        if parts:
+            return "\n\n".join(parts)
         return "用户画像为空，请先上传简历或手动填写画像。"
 
     @agent.tool
@@ -160,25 +128,22 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         ctx: RunContext[CareerOSDeps],
         fields: dict[str, Any],
     ) -> str:
+        """批量更新画像结构化字段（如 school_name/major/grade 等）。"""
         logger.info("Tool call: update_profile, user_id=%s, fields=%s", ctx.deps.user_id, fields)
         if not fields:
             return "没有需要更新的字段。"
 
-        from app.backend.db.session import get_db
         from app.backend.services.md_projector import create_event_and_project_md
 
-        async for db in get_db():
-            event = await create_event_and_project_md(
-                db=db,
-                user_id=ctx.deps.user_id,
-                event_type="profile_updated",
-                entity_type="profile",
-                entity_id="profile_fields",
-                payload=fields,
-                source="Agent工具",
-            )
-            if event:
-                return f"画像已更新：{', '.join(fields.keys())}"
-            return "画像内容没有变化，跳过更新。"
-
-        return "更新失败"
+        event = await create_event_and_project_md(
+            db=ctx.deps.db,
+            user_id=ctx.deps.user_id,
+            event_type="profile_updated",
+            entity_type="profile",
+            entity_id="profile_fields",
+            payload=fields,
+            source="Agent工具",
+        )
+        if event:
+            return f"画像已更新：{', '.join(fields.keys())}"
+        return "画像内容没有变化，跳过更新。"

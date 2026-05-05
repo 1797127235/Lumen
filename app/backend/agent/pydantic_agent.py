@@ -85,7 +85,7 @@ def create_agent() -> Agent[CareerOSDeps, str]:
             "## 用户画像规则\n"
             "用户画像（学校、专业、年级、技能、目标）已自动加载到上下文中的「用户信息」部分。\n"
             "- 【不要】主动调用 get_profile 工具，画像已在上下文中\n"
-            "- 当用户提到个人信息（学校、专业、年级、目标方向等）时，【必须】调用 memory_update 工具保存\n"
+            "- 当用户提到个人信息（学校、专业、年级、目标方向等）时，【必须】调用 memory_save 工具保存\n"
             "- 保存后告诉用户「已记录你的信息」，不要说「已同步」而不实际调用工具\n"
             "\n\n"
             "## 回复风格\n"
@@ -110,80 +110,92 @@ def create_agent() -> Agent[CareerOSDeps, str]:
     # 注册动态系统提示词
     @agent.system_prompt
     async def dynamic_prompt(ctx: RunContext[CareerOSDeps]) -> str:
-        """动态系统提示词：加载用户画像、记忆和历史消息"""
+        """动态系统提示词：注入 3 个记忆文件 + 对话摘要 + 近期历史"""
         from sqlalchemy import select
 
-        from app.backend.models.conversation import Message
-        from app.backend.services.memory_service import read_memory
+        from app.backend.models.conversation import Conversation, Message
+        from app.backend.services.memory_service import (
+            EXPERIENCES_CHAR_LIMIT,
+            MEMORY_CHAR_LIMIT,
+            SKILLS_CHAR_LIMIT,
+            read_experiences,
+            read_memory,
+            read_skills,
+        )
 
         db = ctx.deps.db
-
         parts = []
 
-        # 加载核心记忆（L2 实体记忆）
+        # 字符限制映射
+        _limits = {
+            "memory": MEMORY_CHAR_LIMIT,
+            "skills": SKILLS_CHAR_LIMIT,
+            "experiences": EXPERIENCES_CHAR_LIMIT,
+        }
+
+        def _memory_block(label: str, name: str, content: str) -> str:
+            """Hermes 风格：带用量 header 的记忆块。"""
+            chars = len(content)
+            limit = _limits.get(name, 0)
+            pct = int(chars / limit * 100) if limit else 0
+            header = f"══ {label} [{pct}% — {chars:,}/{limit:,} 字符] ══"
+            return f"{header}\n{content.strip()}"
+
+        # ── 3 个记忆文件 ──────────────────────────────────────
         try:
             memory_content = read_memory()
-            if memory_content:
-                parts.append(memory_content)
+            if memory_content.strip():
+                parts.append(_memory_block("核心记忆", "memory", memory_content))
         except Exception:
-            pass  # 记忆加载失败不影响对话
+            pass
 
-        # 加载长期事件记忆（L3）
         try:
-            from app.backend.services.cognee_service import recall
-
-            if ctx.deps.current_user_input:
-                long_term_memories = await recall(
-                    user_id=ctx.deps.user_id,
-                    query=ctx.deps.current_user_input,
-                    limit=5,
-                )
-                if long_term_memories:
-                    # 截断过长的记忆
-                    truncated = []
-                    for mem in long_term_memories:
-                        if len(mem) > 200:
-                            mem = mem[:200] + "..."
-                        truncated.append(f"- {mem}")
-                    parts.append("【长期记忆】\n" + "\n".join(truncated))
+            skills_content = read_skills()
+            if skills_content.strip():
+                parts.append(_memory_block("技能", "skills", skills_content))
         except Exception:
-            pass  # 长期记忆加载失败不影响对话
+            pass
 
-        # 加载历史消息（L1 短期记忆）
         try:
-            # 从 DB 加载最近 20 条消息（按 created_at 倒序）
+            exp_content = read_experiences()
+            if exp_content.strip():
+                parts.append(_memory_block("经历", "experiences", exp_content))
+        except Exception:
+            pass
+
+        # ── 对话摘要（超过 30 条消息后由后台生成）──────────────
+        try:
+            conv = await db.get(Conversation, ctx.deps.conversation_id)
+            if conv and conv.summary:
+                parts.append(f"【对话摘要】\n{conv.summary}")
+        except Exception:
+            pass
+
+        # ── 近期对话历史（最近 20 条）─────────────────────────
+        try:
             history_result = await db.execute(
                 select(Message)
                 .where(Message.conversation_id == ctx.deps.conversation_id)
                 .order_by(Message.created_at.desc())
                 .limit(20)
             )
-            history_messages = history_result.scalars().all()
+            history_messages = list(reversed(history_result.scalars().all()))
+
+            # 去掉最后一条 user 消息（避免与当前 user_input 重复）
+            if history_messages and history_messages[-1].role == "user":
+                history_messages = history_messages[:-1]
 
             if history_messages:
-                # 反转为正序（最早的在前）
-                history_messages = list(reversed(history_messages))
-
-                # 去掉最后一条 user 消息（避免与当前 user_input 重复）
-                if history_messages and history_messages[-1].role == "user":
-                    history_messages = history_messages[:-1]
-
-                # 格式化为文本
                 history_lines = []
                 for msg in history_messages:
                     if msg.role == "user":
                         history_lines.append(f"用户：{msg.content}")
                     elif msg.role == "assistant":
-                        # 截断过长的回复，保留前 200 字符
-                        content = msg.content or ""
-                        if len(content) > 200:
-                            content = content[:200] + "..."
+                        content = (msg.content or "")[:200]
                         history_lines.append(f"AI：{content}")
-
-                if history_lines:
-                    parts.append("【对话历史】\n" + "\n".join(history_lines))
+                parts.append("【对话历史】\n" + "\n".join(history_lines))
         except Exception:
-            pass  # 历史消息加载失败不影响对话
+            pass
 
         if parts:
             return "\n\n".join(parts)

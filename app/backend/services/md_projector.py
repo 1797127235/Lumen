@@ -313,15 +313,15 @@ def _generate_experiences_md(experiences: list[dict]) -> str:
 
 
 def _truncate_to_limit(content: str, limit: int) -> str:
-    """截断内容到字符限制，保留最新的内容。"""
+    """截断内容到字符限制，保留头部结构（标题、基础信息等）。"""
     if len(content) <= limit:
         return content
-    # 保留尾部（最新内容在后面）
-    truncated = content[-limit:]
-    # 找到第一个完整段落开始
-    first_newline = truncated.find("\n\n")
-    if first_newline > 0:
-        truncated = truncated[first_newline + 2 :]
+    # 保留头部（结构化内容在前面）
+    truncated = content[:limit]
+    # 找到最后一个完整段落结束
+    last_newline = truncated.rfind("\n\n")
+    if last_newline > 0:
+        truncated = truncated[:last_newline]
     logger.warning("Content truncated: %d -> %d chars", len(content), len(truncated))
     return truncated
 
@@ -470,10 +470,6 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
     except Exception as exc:
         logger.error(".md projection failed: user_id=%s, error=%s", user_id, exc)
         return False
-
-
-async def project_incremental_md(db: AsyncSession, user_id: str) -> bool:
-    return await project_user_to_md(db, user_id)
 
 
 async def sync_user_md_projection(user_id: str) -> bool:

@@ -14,6 +14,16 @@ from app.backend.config import USER_DATA_DIR
 
 MEMORY_DIR = USER_DATA_DIR / "memory"
 
+MEMORY_CHAR_LIMIT = 5000
+SKILLS_CHAR_LIMIT = 2000
+EXPERIENCES_CHAR_LIMIT = 2000
+
+_LIMITS = {
+    "memory": MEMORY_CHAR_LIMIT,
+    "skills": SKILLS_CHAR_LIMIT,
+    "experiences": EXPERIENCES_CHAR_LIMIT,
+}
+
 
 def ensure_memory_dirs() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -169,6 +179,18 @@ def _extract_relevant_content(content: str, query: str, context_lines: int = 3) 
         seen.add(line)
         unique_lines.append(line)
     return "\n".join(unique_lines[:50])
+
+
+def get_memory_usage(name: str) -> dict:
+    """返回指定记忆文件的字符用量信息，用于 Hermes 风格的 system prompt 注入。"""
+    readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
+    if name not in readers:
+        return {"chars": 0, "limit": 0, "pct": 0}
+    content = readers[name]()
+    chars = len(content)
+    limit = _LIMITS[name]
+    pct = int(chars / limit * 100) if limit else 0
+    return {"chars": chars, "limit": limit, "pct": pct}
 
 
 def initialize_memory() -> None:
