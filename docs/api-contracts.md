@@ -170,9 +170,23 @@ data: {"type": "error", "message": "API Key 未配置"}
 
 ## 4. Memory API
 
+### GET /api/memory/me
+
+读取用户 `.md` 画像内容。`.md` 为空时会尝试从数据库事件重建。
+
+**查询参数**:
+- `user_id` (string, 默认 "demo_user")
+
+**响应**:
+```json
+{
+  "content": "# 用户核心记忆\n\n## 基础信息\n..."
+}
+```
+
 ### GET /api/memory/stats
 
-获取记忆状态。
+获取记忆统计。
 
 **查询参数**:
 - `user_id` (string, 默认 "demo_user")
@@ -220,13 +234,31 @@ data: {"type": "error", "message": "API Key 未配置"}
 ```json
 {
   "message": "重建成功",
-  "user_id": "demo_user"
+  "user_id": "demo_user",
+  "md_success": true,
+  "cognee_success": true
 }
 ```
 
+### DELETE /api/memory/{event_id}
+
+删除单条事件记忆，并重新投影 `.md`。
+
+**查询参数**:
+- `user_id` (string, 默认 "demo_user")
+
+**响应**:
+```json
+{
+  "deleted": "event-uuid"
+}
+```
+
+**注意**: 因 SQLite 3.45.3 FTS5 触发器兼容问题，删除会先清理触发器 → 执行 DELETE → 重建 FTS 虚拟表 → 重建触发器。低版本不受影响。
+
 ### GET /api/memory/search
 
-搜索记忆。
+搜索记忆（FTS5 全文搜索）。
 
 **查询参数**:
 - `user_id` (string)

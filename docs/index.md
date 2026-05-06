@@ -113,7 +113,7 @@ pytest
 | SQLAlchemy | ≥2.0.0 | ORM |
 | PydanticAI | 1.89.1 | AI Agent |
 | LiteLLM | ≥1.30.0 | LLM 路由 |
-| Cognee | 1.0.5 | 记忆层 |
+| Cognee | 1.0.5 | 可选，当前未接入 |
 
 ### 前端
 

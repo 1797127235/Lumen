@@ -156,4 +156,45 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ---
 
+---
+
+## 新增规则（2026-05-06）
+
+### Memory System Rules
+
+- **必须** Agent 写入走 `memory_save(entity_type, section, content)` 或 `update_profile(14 params)`，禁止直接操作 `.md` 文件
+- **必须** 写入后 `deps.pending_event_ids` 会累积事件 ID，需在 `finally` 块中调用 `sync_projections()`
+- **必须** `CareerOSDeps` 含 `pending_event_ids: list[str]`，用于追踪本轮 Agent 调用产生的记忆事件
+- **必须** FTS5 由 `lifespan` 自动建表 + 触发器，代码中不可手动 DROP/CREATE（DELETE 端点除外）
+- **必须** 记忆去重用 `dedupe_key = {event_type}:{entity_type}:{entity_id}` 的 UNIQUE 约束，冲突时返回 `None`
+- **必须** 后台审查失败不能影响用户，用 `logger.exception` 记录
+- **禁止** 用 Cognee 相关 API（当前未接入，所有搜索走 FTS5 或 `.md` 文件）
+- **禁止** `db.delete()` 配合 FTS5 触发器使用（SQLite 3.45.3 bug），DELETE 端点在删除前先 DROP TRIGGER
+
+### PydanticAI Rules
+
+- **必须** `end_strategy` 只接受 `"graceful"` 或 `"exhaustive"`，无 `"early"`
+- **必须** 工具调用后 `deps.pending_event_ids` 不为空时触发 `sync_projections()`
+- **必须** 动态 context 用 `@agent.system_prompt` 注入（用户消息保持干净），禁止拼接到 `user_input`
+- **必须** 工具函数 docstring 用中文+英文说明触发条件和示例，避免模型不理解何时调用
+- **禁止** 工具参数用 `dict[str, Any]`（PydanticAI 无法正确序列化），必须拆成显式参数
+- **禁止** `run_stream()` 之后手动拼接工具结果（PydanticAI 自动处理 `tool_calls`）
+
+### DeepSeek 兼容规则
+
+- **必须** `base_url` 为 `https://api.deepseek.com`（不加 `/v1`，PydanticAI 和 liteLLM 各自补全）
+- **必须** 模型名与 provider 都支持在 Settings 页切换，不硬编码
+- **必须** 存 API Key 时去首尾空格
+
+### Background Review Rules
+
+- **必须** 仅在 `deps.pending_event_ids` 为空（Agent 本轮没调工具）时触发
+- **必须** `asyncio.create_task` 搭配 `task.add_done_callback(_log_task_error)`
+- **必须** 使用独立 `db session`（`get_async_session_maker`），不共享主请求的 session
+- **必须** 审查 Agent 与主 Agent 同模型、同配置（复用 `get_agent()`）
+- **必须** 审查失败只打日志，不抛出异常到用户
+- **禁止** 在审查 Agent 中启用新的 nudge 或审查（防止递归）
+
+---
+
 Last Updated: 2026-05-06

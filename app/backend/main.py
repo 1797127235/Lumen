@@ -33,11 +33,13 @@ async def lifespan(app: FastAPI):
     applied = apply_user_config(settings)
     if applied:
         logger.info("config.json 覆盖", keys=list(applied.keys()))
-    # Cognee 记忆层初始化（可选，失败不阻塞启动）
+    # Cognee 记忆层初始化（后台线程，不阻塞启动）
+    import threading
+
     from app.backend.agent.cognee_client import init_cognee
 
-    cognee_status = init_cognee()
-    logger.info("Cognee 状态", status=cognee_status)
+    threading.Thread(target=init_cognee, daemon=True, name="cognee-init").start()
+
     yield
     # 关闭时取消未完成的 Cognee 投影任务
     from app.backend.services.careeros_memory import cancel_background_tasks
@@ -142,9 +144,8 @@ app.include_router(memory.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(config_router.router, prefix="/api")
 
-# ── 生产模式：托管前端静态文件 + SPA 路由 ──
-
-if not _settings.debug:
+# ── 静态文件托管：dist/ 存在时始终挂载（开发/桌面/生产都可用） ──
+if True:  # 始终启用（桌面/生产模式依赖此挂载）
     from pathlib import Path
 
     static_dir = Path(__file__).parent.parent / "frontend" / "dist"

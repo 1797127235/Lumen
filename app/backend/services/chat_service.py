@@ -44,11 +44,76 @@ _SUMMARIZE_PROMPT = """根据以下对话记录更新摘要。只保留：用户
 
 _MAX_MSG_CHARS = 200  # 单条消息送入摘要前的截断长度
 
+# ── 后台记忆审查 ──
+
+_REVIEW_PROMPT = """审查上一轮对话，判断是否包含值得保存的用户信息。
+
+重点关注：
+1. 用户是否透露了关于自己的新信息（目标、技能、经历、偏好、状态）？
+2. 用户是否纠正了你、表达了偏好、或做出了决策？
+
+如果有值得保存的信息，调用 memory_save 或 update_profile 保存。
+如果没有任何新信息，回复「无需保存」。
+
+【对话】
+用户：{user_message}
+
+助手：{assistant_response}"""
+
+
+async def _background_memory_review(
+    user_id: str,
+    user_message: str,
+    assistant_response: str,
+    conversation_id: str,
+) -> None:
+    """后台审查本轮对话，判断是否有值得保存的记忆。
+
+    仅在 Agent 本轮未主动调用 memory_save/update_profile 时触发。
+    使用独立 db session，不阻塞用户看到回复。
+    """
+    try:
+        from app.backend.db.base import get_async_session_maker
+
+        async with get_async_session_maker()() as db:
+            from app.backend.agent.deps import CareerOSDeps
+            from app.backend.agent.pydantic_agent import get_agent
+
+            agent = get_agent()
+            deps = CareerOSDeps(
+                user_id=user_id,
+                db=db,
+                conversation_id=conversation_id,
+                current_user_input=user_message,
+            )
+
+            prompt = _REVIEW_PROMPT.format(
+                user_message=user_message,
+                assistant_response=assistant_response,
+            )
+
+            await agent.run(prompt, deps=deps)
+
+            # 如果审查 Agent 调了工具 → 触发投影
+            if deps.pending_event_ids:
+                from app.backend.services.careeros_memory import get_memory
+
+                await get_memory().sync_projections(user_id, deps.pending_event_ids)
+                logger.info(
+                    "后台审查已保存 %d 条记忆",
+                    len(deps.pending_event_ids),
+                    conversation_id=conversation_id,
+                )
+            await db.commit()
+    except Exception:
+        # 后台审查失败不影响用户
+        logger.exception("后台记忆审查失败", conversation_id=conversation_id)
+
 
 def _log_task_error(task: asyncio.Task) -> None:
     """asyncio.Task 的 done_callback：未取消且抛异常时记录日志。"""
     if not task.cancelled() and (exc := task.exception()):
-        logger.error("摘要任务异常", exc_info=exc)
+        logger.error("后台任务异常", exc_info=exc)
 
 
 async def stream_chat(
@@ -153,8 +218,18 @@ async def stream_chat(
                     except Exception as e:
                         logger.warning("记忆投影失败", error=str(e))
 
-                # 记忆由 Agent 在对话中通过 memory_save / update_profile 工具主动写入。
-                # 不依赖后台自动提取 —— 确保可靠性（Agent 有完整上下文，最清楚什么值得记）
+                # ── 后台记忆审查 ──
+                # Agent 本轮没调 memory_save / update_profile → 后台审查兜底
+                if not deps.pending_event_ids:
+                    task = asyncio.create_task(
+                        _background_memory_review(
+                            user_id=user_id,
+                            user_message=user_input,
+                            assistant_response=full_content,
+                            conversation_id=conv.conversation_id,
+                        )
+                    )
+                    task.add_done_callback(_log_task_error)
     except Exception:
         logger.exception("生成 AI 回复失败", conversation_id=conv.conversation_id)
         await db.rollback()

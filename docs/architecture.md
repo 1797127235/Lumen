@@ -8,7 +8,8 @@
 
 ## 1. 架构概览
 
-CareerOS 采用前后端分离的分层架构，后端使用 FastAPI + SQLAlchemy，前端使用 React + Vite。核心创新在于事件驱动的记忆系统，实现了"越用越懂你"的个性化体验。
+CareerOS 采用前后端分离的分层架构，后端使用 FastAPI + SQLAlchemy，前端使用 React + Vite。
+核心创新在于**事件驱动的记忆系统 + Agent 工具驱动写入**，实现了"越用越懂你"的个性化体验。
 
 ### 1.1 系统层次
 
@@ -27,19 +28,20 @@ CareerOS 采用前后端分离的分层架构，后端使用 FastAPI + SQLAlchem
 └──────────────────────────────────────────────────────────────┘
                               │
 ┌──────────────────────────────────────────────────────────────┐
-│                     Service Layer                            │
+│                     Service Layer                             │
 │   chat_service / profile_service / memory_service            │
-│   growth_event_service / cognee_service / md_projector       │
+│   growth_event_service / md_projector                        │
 └──────────────────────────────────────────────────────────────┘
                               │
 ┌──────────────────────────────────────────────────────────────┐
-│                      Agent Layer                             │
+│                      Agent Layer                              │
 │         PydanticAI Agent + Tools + LLM Router                │
 └──────────────────────────────────────────────────────────────┘
                               │
 ┌──────────────────────────────────────────────────────────────┐
-│                    Data Layer                                │
-│   SQLite (truth) → .md files (projection) → Cognee (index)  │
+│                    Data Layer                                 │
+│   growth_events (truth) → .md files (projection)             │
+│   FTS5 index (search)                                        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,26 +51,30 @@ CareerOS 采用前后端分离的分层架构，后端使用 FastAPI + SQLAlchem
 
 ### 2.1 事件驱动记忆系统
 
-**决策**: 使用 growth_events 表作为唯一真相源，通过投影器同步到 .md 文件和 Cognee。
+**决策**: 使用 growth_events 表作为唯一真相源，通过投影器同步到 .md 文件。
+Agent 工具（memory_save / update_profile）负责写入，后台审查负责兜底。
 
 **理由**:
 - 事件溯源支持时间旅行和审计
 - 投影器可以重建任意时间点的状态
 - 去重机制防止重复事件
-- 支持多层记忆（L1/L2/L3）
+- Agent 有完整上下文，最清楚什么值得记
+- 后台审查兜底 Agent 遗漏的信息
 
 **实现**:
 ```
-写入路径: Agent 工具 / 对话提取 / 简历上传
-    ↓
-growth_events (SQLite)
-    ↓
-┌─────────┴─────────┐
-↓                   ↓
-.md 投影器      Cognee 投影器
-↓                   ↓
-memory.md         Cognee 索引
-entities/*.md     (Kuzu + LanceDB)
+写入路径: Agent 工具 (memory_save / update_profile)
+    |
+    ├─ 对话中主动调用 → growth_events
+    |                       ↓
+    |                   sync_projections → .md
+    |
+    └─ Agent 没调 → 后台审查 (asyncio.create_task)
+                         ↓
+                    fork Agent + review prompt
+                         ↓
+                    有信息→growth_events→.md
+                    无信息→跳过
 ```
 
 ### 2.2 单用户模式
@@ -96,39 +102,51 @@ entities/*.md     (Kuzu + LanceDB)
 
 ## 3. 记忆系统架构
 
-### 3.1 三层记忆模型
+### 3.1 两层记忆模型
 
 | 层级 | 存储 | 用途 | 注入时机 |
 |------|------|------|---------|
-| L1 | conversation messages | 短期上下文 | 最近 20 条消息 |
-| L2 | .md 文件 | 结构化画像 | system prompt |
-| L3 | Cognee | 语义检索 | 按相关性召回 |
+| L1 | conversation messages | 短期上下文 | 最近 20 条消息 + 滚动摘要 |
+| L2 | .md 文件 + growth_events | 结构化画像 + 语义检索 | system prompt + FTS5 |
+
+**Cognee** 曾作为 L3 语义检索引入，但从未真正接入。当前语义搜索由 **FTS5 虚拟表** 提供（支持中文 trigram 分词）。
 
 ### 3.2 事件类型
 
-| 事件类型 | 实体类型 | 合并规则 |
-|---------|---------|---------|
-| profile_updated | profile | 递归深合并 |
-| skill_added | skill | 按技能名覆盖 |
-| skill_level_changed | skill | 按技能名覆盖 |
-| experience_added | experience | 追加 |
-| preference_learned | preference | 覆盖 |
-| decision_made | decision | 追加 |
-| status_changed | status | 覆盖 |
-| goal_updated | goal | 覆盖 |
-| resume_uploaded | profile | 触发全量重建 |
+| 事件类型 | 实体类型 | 触发工具 | 合并规则 |
+|---------|---------|---------|---------|
+| profile_updated | profile | update_profile | 递归深合并 |
+| skill_added | skills | memory_save | 覆盖 |
+| experience_added | experiences | memory_save | 追加 |
+| preference_learned | preferences | memory_save | 覆盖 |
+| decision_made | decisions | memory_save | 追加 |
+| status_changed | status | memory_save | 覆盖 |
+| goal_updated | goals | memory_save | 覆盖 |
 
-### 3.3 去重机制
+### 3.3 FTS5 全文搜索
+
+**两张虚拟表（建在 lifespan 中）**:
+- `growth_events_fts` — 标准 FTS5（英文/拼音搜索）
+- `growth_events_fts_trigram` — trigram 分词（中文子串搜索，如"AI Agent"）
+
+**同步触发器**:
+- `trg_growth_events_ai` / `trg_growth_events_tri_ai` — INSERT 时同步到 FTS
+- `trg_growth_events_ad` / `trg_growth_events_tri_ad` — DELETE 时同步到 FTS
+- `trg_growth_events_au` / `trg_growth_events_tri_au` — UPDATE 时同步到 FTS
+
+> **已知问题**: SQLite 3.45.3 的 FTS5 DELETE 触发器存在兼容 bug（`INSERT ... VALUES('delete', ...)` 报 `SQL logic error`）。
+> 在 DELETE 操作时先 `DROP TRIGGER`、执行删除、`DROP TABLE` 重建 FTS、再 `CREATE TRIGGER` 重建。
+> 见 `routers/memory.py` 中 DELETE 端点的实现。
+
+### 3.4 去重机制
 
 - **UNIQUE 约束**: (user_id, dedupe_key)
 - **dedupe_key 格式**: `{event_type}:{entity_type}:{entity_id}`
-- **冲突处理**: IntegrityError → 跳过创建
 
-### 3.4 投影追踪
+### 3.5 投影追踪
 
-- `projected_md_at`: 最后投影到 .md 的时间
-- `projected_cognee_at`: 最后投影到 Cognee 的时间
-- 增量投影查询: `WHERE projected_md_at IS NULL`
+- `projected_md_at` — 最后投影到 .md 的时间
+- `sync_projections()` — 在 chat_service.py 中由 `pending_event_ids` 触发
 
 ---
 
@@ -141,27 +159,57 @@ Agent(
     model=OpenAIChatModel,  # LiteLLM 路由
     deps_type=CareerOSDeps,
     output_type=str,
-    system_prompt="...",  # 静态提示词
+    system_prompt="...",  # 静态提示词：工具调用规则
+    end_strategy="graceful",  # 流式模式同时返回文本+工具调用
 )
-
-@agent.system_prompt
-async def dynamic_prompt(ctx):  # 动态提示词
-    # 注入: memory.md + Cognee recall + 历史消息
 ```
+
+**两层 system prompt**:
+- **静态** (构造时传入): 工具调用规则（"目标→memory_save | 技能→memory_save | ..."）
+- **动态** (`@agent.system_prompt`): 注入结构化画像 + 对话摘要 + 近期历史
+  - 注意：context 在 system prompt 而非用户消息中——之前拼在用户消息会导致指令被淹没
+
+**context 注入位置的历史**:
+- 旧: 拼接到 user_input（模型混淆上下文和用户请求，工具调用指令被淹没）
+- 新: `@agent.system_prompt` 装饰器注入（语义正确，模型能区分背景信息和当前请求）
 
 ### 4.2 工具注册
 
-| 工具 | 功能 | 写入路径 |
-|------|------|---------|
-| memory_search | 搜索记忆 | 只读 |
-| memory_update | 更新记忆 | growth_events → .md |
-| memory_add | 添加记忆 | growth_events → .md |
+| 工具 | 功能 | 写入路径 | 触发时机 |
+|------|------|---------|---------|
+| memory_search | 搜索记忆（FTS5） | 只读 | Agent 主动调 |
+| memory_save | 保存记忆（目标/技能/经历/偏好/决策/状态） | growth_events → .md | Agent 主动调 |
+| update_profile | 更新结构化画像 | growth_events (profile) → .md | Agent 主动调 |
+| get_profile | 获取画像 | 只读 | Agent 主动调（很少需要，已在 system prompt） |
 
-### 4.3 LLM 路由
+**memory_save 参数演化**:
+- memory_update/memory_add（旧，Cognee 时代）→ 已废弃
+- memory_save(entity_type, section, content)（当前）：支持 6 种实体类型
+- update_profile：14 个显式参数（原为 dict[str, Any]，PydanticAI 无法正确序列化任意 dict）
+
+### 4.3 后台记忆审查
+
+**当 Agent 本轮未调用 memory_save / update_profile 时兜底**:
+
+```
+Agent 回复完毕
+  ↓ pending_event_ids 为空？
+asyncio.create_task(_background_memory_review(...))
+  ↓ 独立 db session
+同模型 Agent + review prompt + 本轮对话
+  ↓
+模型决定是否有值得保存的信息
+  ├─ 有 → memory_save → growth_events → sync_projections
+  └─ 无 → "无需保存" → 跳过
+```
+
+**参考实现**: Hermes Agent (Nous Research) 的 `_spawn_background_review` 模式。
+
+### 4.4 LLM 路由
 
 - **统一层**: LiteLLM
 - **Provider**: DashScope / OpenAI / DeepSeek / Anthropic / Gemini / Ollama / OpenRouter
-- **任务路由**: 不同任务使用不同模型
+- **DeepSeek 注意**: base_url 为 `https://api.deepseek.com`，兼容 OpenAI API 格式。PydanticAI 和 liteLLM 两条路径都已修复 base_url 处理。
 
 ---
 
@@ -173,8 +221,12 @@ async def dynamic_prompt(ctx):  # 动态提示词
 用户消息 → POST /api/chat
     ↓
 chat_service.py
+    ├─ 创建/获取 Conversation
+    ├─ 保存用户消息 → DB (commit)
     ↓
 PydanticAI Agent (ReAct Loop)
+    ├─ @agent.system_prompt 注入: memory.md + 摘要 + 历史
+    ├─ user_input 原样传入（不拼接上下文）
     ↓
 ┌─────────┴─────────┐
 ↓                   ↓
@@ -182,9 +234,15 @@ PydanticAI Agent (ReAct Loop)
 ↓                   ↓
 growth_events     SSE 流式输出
 ↓
-memory_extractor (fire-and-forget)
-↓
-growth_events
+sync_projections → .md
+        ↓
+pending_event_ids 为空？
+        ↓ 是
+asyncio.create_task(后台记忆审查)
+        ↓
+独立 db session + Agent + review prompt
+        ↓
+有信息→growth_events→.md | 无→跳过
 ```
 
 ### 5.2 简历上传流程
@@ -225,12 +283,13 @@ services:
 
 ```
 ~/.careeros/
-├── career_os.db      # SQLite 数据库
+├── career_os.db      # SQLite 数据库（growth_events + FTS5）
 ├── memory/           # .md 记忆文件
-│   ├── memory.md     # 核心记忆
-│   └── entities/     # 实体记忆
-├── config.json       # 用户配置
-└── cognee_data/      # Cognee 索引
+│   ├── memory.md     # 核心画像
+│   ├── skills.md     # 技能
+│   └── experiences.md # 经历
+├── config.json       # 用户配置（API Key 等）
+└── cognee_data/      # Cognee 索引（可选，当前未接入）
 ```
 
 ---
@@ -265,7 +324,6 @@ services:
 ### 8.2 潜在瓶颈
 
 - .md 投影器全量重建（大量事件时）
-- Cognee 语义搜索延迟
 - LLM 调用延迟
 
 ---
