@@ -44,6 +44,10 @@ def _create_model() -> OpenAIChatModel:
     if provider == "dashscope" and not base_url:
         base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+    # DeepSeek OpenAI 兼容端点
+    if provider == "deepseek" and not base_url:
+        base_url = "https://api.deepseek.com/v1"
+
     if not base_url:
         raise ValueError(
             f"未配置 LLM Base URL。请在设置页面配置 Base URL，"
