@@ -215,98 +215,76 @@ async def process_resume_to_memory(file: UploadFile, user_id: str = "demo_user")
         decomp = _ResumeDecomposition()
 
     try:
-        from app.backend.db.base import get_async_session_maker
         from app.backend.schemas.memory_events import (
             ExperiencePayload,
             ProfilePayload,
             SkillPayload,
         )
-        from app.backend.services.cognee_projector import project_event_ids
-        from app.backend.services.growth_event_service import create_growth_event_with_dedup
-        from app.backend.services.md_projector import sync_user_md_projection
+        from app.backend.services.careeros_memory import EventSpec, get_memory
 
-        event_ids: list[str] = []
-        async with get_async_session_maker()() as db:
-            # resume_uploaded 审计事件
-            uploaded_event = await create_growth_event_with_dedup(
-                db=db,
-                user_id=user_id,
+        memory = get_memory()
+        event_specs: list[EventSpec] = []
+
+        # resume_uploaded 审计事件
+        event_specs.append(
+            EventSpec(
                 event_type="resume_uploaded",
                 entity_type="profile",
                 entity_id=filename,
                 payload={"filename": filename, "content_length": len(markdown_content)},
                 source="简历提取",
             )
-            if uploaded_event:
-                event_ids.append(str(uploaded_event.id))
+        )
 
-            # profile_updated：结构化字段
-            if profile_fields:
-                profile_payload = ProfilePayload(**profile_fields).model_dump(exclude_none=True)
-                profile_event = await create_growth_event_with_dedup(
-                    db=db,
-                    user_id=user_id,
+        # profile_updated
+        if profile_fields:
+            profile_payload = ProfilePayload(**profile_fields).model_dump(exclude_none=True)
+            event_specs.append(
+                EventSpec(
                     event_type="profile_updated",
                     entity_type="profile",
                     entity_id="resume_fields",
                     payload=profile_payload,
                     source="简历提取",
                 )
-                if profile_event:
-                    event_ids.append(str(profile_event.id))
+            )
 
-            # skill_added × N
-            for skill in decomp.skills:
-                payload = SkillPayload(
-                    name=skill.name,
-                    level=skill.level,
-                    context=skill.context,
-                    source="简历解析",
-                ).model_dump()
-                skill_event = await create_growth_event_with_dedup(
-                    db=db,
-                    user_id=user_id,
+        # skill_added × N
+        for skill in decomp.skills:
+            event_specs.append(
+                EventSpec(
                     event_type="skill_added",
                     entity_type="skill",
                     entity_id=skill.name,
-                    payload=payload,
+                    payload=SkillPayload(
+                        name=skill.name, level=skill.level, context=skill.context, source="简历解析"
+                    ).model_dump(),
                     source="简历提取",
                 )
-                if skill_event:
-                    event_ids.append(str(skill_event.id))
+            )
 
-            # experience_added × N
-            for exp in decomp.experiences:
-                payload = ExperiencePayload(
-                    title=exp.title,
-                    description=exp.description,
-                    period=exp.period,
-                    tech_stack=exp.tech_stack,
-                    role=exp.role,
-                    source="简历解析",
-                ).model_dump()
-                exp_event = await create_growth_event_with_dedup(
-                    db=db,
-                    user_id=user_id,
+        # experience_added × N
+        for exp in decomp.experiences:
+            event_specs.append(
+                EventSpec(
                     event_type="experience_added",
                     entity_type="experience",
                     entity_id=exp.title,
-                    payload=payload,
+                    payload=ExperiencePayload(
+                        title=exp.title,
+                        description=exp.description,
+                        period=exp.period,
+                        tech_stack=exp.tech_stack,
+                        role=exp.role,
+                        source="简历解析",
+                    ).model_dump(),
                     source="简历提取",
                 )
-                if exp_event:
-                    event_ids.append(str(exp_event.id))
+            )
 
-            await db.commit()
+        created = await memory.remember_batch(user_id, event_specs)
 
-        projected = await sync_user_md_projection(user_id)
-        if not projected:
-            raise HTTPException(status_code=500, detail="简历事件已写入，但画像投影失败")
-
-        if event_ids:
-            await project_event_ids(event_ids)
-
-        logger.info("[3/3] Resume events persisted and markdown synchronized")
+        logger.info("[3/3] Resume events persisted (%d)", len(created))
     except HTTPException:
         raise
     except Exception as exc:

@@ -30,22 +30,20 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         query: str,
         files: list[str] | None = None,
     ) -> str:
-        """搜索记忆文件。files 可选 memory/skills/experiences，不传则全搜。"""
+        """搜索记忆。files 可选 memory/skills/experiences，不传则全搜。"""
         logger.info("Tool call: memory_search, query=%s, files=%s", query, files)
 
         if not query or not query.strip():
             return "请提供搜索关键词。"
 
-        from app.backend.services.memory_service import (
-            read_experiences,
-            read_memory,
-            read_skills,
-            search_memory,
-        )
+        from app.backend.services.careeros_memory import get_memory
 
+        memory = get_memory()
         uid = ctx.deps.user_id
 
         if files:
+            from app.backend.services.memory_service import read_experiences, read_memory, read_skills
+
             readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
             results = []
             for name in files:
@@ -57,8 +55,12 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
                     results.append({"file": f"{name}.md", "section": name, "content": content[:500]})
             return str(results) if results else f"在 {files} 中未找到相关内容。"
 
-        results = search_memory(uid, query)
-        return str(results) if results else "未找到相关内容。"
+        items = await memory.recall(uid, query)
+        if items:
+            return "\n".join(
+                f"- [{item.categories[0] if item.categories else '?'}] {item.content[:300]}" for item in items
+            )
+        return "未找到相关内容。"
 
     @agent.tool
     async def memory_save(
@@ -93,7 +95,7 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             KeyValuePayload,
             SkillPayload,
         )
-        from app.backend.services.md_projector import create_event_and_project_md
+        from app.backend.services.careeros_memory import get_memory
 
         # 按 entity_type 构建正确的 payload schema
         if entity_type == "skills":
@@ -107,14 +109,15 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         else:
             return f"不支持的类型 {entity_type}，请使用正确的工具"
 
-        event = await create_event_and_project_md(
-            db=ctx.deps.db,
+        memory = get_memory()
+        event = await memory.remember(
             user_id=ctx.deps.user_id,
             event_type=_EVENT_TYPE_MAP[entity_type],
             entity_type=entity_type,
             entity_id=section,
             payload=payload,
             source="Agent工具",
+            db=ctx.deps.db,
         )
         if event:
             return f"已保存 {entity_type}/{section}"
@@ -124,26 +127,12 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
     async def get_profile(ctx: RunContext[CareerOSDeps]) -> str:
         """获取用户完整画像（通常无需主动调用，画像已在 system prompt 中）。"""
         logger.info("Tool call: get_profile, user_id=%s", ctx.deps.user_id)
-        from app.backend.services.md_projector import sync_user_md_projection
-        from app.backend.services.memory_service import read_experiences, read_memory, read_skills
+        from app.backend.services.careeros_memory import get_memory
 
-        memory_content = read_memory(ctx.deps.user_id)
-        if not memory_content.strip():
-            await sync_user_md_projection(ctx.deps.user_id)
-            memory_content = read_memory(ctx.deps.user_id)
-
-        parts = []
-        if memory_content.strip():
-            parts.append(memory_content)
-        skills = read_skills(ctx.deps.user_id)
-        if skills.strip():
-            parts.append(skills)
-        experiences = read_experiences(ctx.deps.user_id)
-        if experiences.strip():
-            parts.append(experiences)
-
-        if parts:
-            return "\n\n".join(parts)
+        memory = get_memory()
+        context = await memory.build_context(ctx.deps.user_id)
+        if context.strip():
+            return context
         return "用户画像为空，请先上传简历或手动填写画像。"
 
     @agent.tool
@@ -160,7 +149,7 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         ctx.deps.memory_tool_called = True
 
         from app.backend.schemas.memory_events import ProfilePayload
-        from app.backend.services.md_projector import create_event_and_project_md
+        from app.backend.services.careeros_memory import get_memory
 
         # 校验：只保留 ProfilePayload 已知字段，丢弃未知 key；类型错则报错
         allowed_keys = set(ProfilePayload.model_fields.keys())
@@ -174,14 +163,15 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         except Exception as e:
             return f"画像字段校验失败：{e}"
 
-        event = await create_event_and_project_md(
-            db=ctx.deps.db,
+        memory = get_memory()
+        event = await memory.remember(
             user_id=ctx.deps.user_id,
             event_type="profile_updated",
             entity_type="profile",
             entity_id="profile_fields",
             payload=validated.model_dump(exclude_none=True),
             source="Agent工具",
+            db=ctx.deps.db,
         )
         if event:
             return f"画像已更新：{', '.join(validated.model_dump(exclude_none=True).keys())}"

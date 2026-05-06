@@ -1,4 +1,4 @@
-"""从单轮对话中提取长期记忆事件（PydanticAI 约束输出）。"""
+"""从单轮对话中提取长期记忆事件。"""
 
 from __future__ import annotations
 
@@ -103,39 +103,24 @@ async def save_extracted_events(
         return 0
 
     try:
-        from app.backend.db.base import get_async_session_maker
-        from app.backend.services.cognee_projector import project_event_ids
-        from app.backend.services.growth_event_service import create_growth_event_with_dedup
-        from app.backend.services.md_projector import sync_user_md_projection
+        from app.backend.services.careeros_memory import EventSpec, get_memory
 
-        success_count = 0
-        created_event_ids: list[str] = []
-        async with get_async_session_maker()() as db:
-            for event in events:
-                try:
-                    created = await create_growth_event_with_dedup(
-                        db=db,
-                        user_id=user_id,
-                        event_type=event["event_type"],
-                        entity_type=event.get("entity_type"),
-                        entity_id=event.get("entity_id"),
-                        payload=event.get("payload"),
-                        source="对话识别",
-                    )
-                    if created:
-                        success_count += 1
-                        created_event_ids.append(str(created.id))
-                except Exception as exc:
-                    logger.warning("Save extracted event failed: %s", exc)
+        memory = get_memory()
+        event_specs: list[EventSpec] = []
+        for event in events:
+            event_specs.append(
+                EventSpec(
+                    event_type=event["event_type"],
+                    entity_type=event.get("entity_type"),
+                    entity_id=event.get("entity_id"),
+                    payload=event.get("payload"),
+                    source="extractor",
+                )
+            )
 
-            await db.commit()
-
-        if success_count > 0:
-            await sync_user_md_projection(user_id)
-            await project_event_ids(created_event_ids)
-
-        logger.info("Conversation memory saved: user_id=%s, saved=%d", user_id, success_count)
-        return success_count
+        created = await memory.remember_batch(user_id, event_specs)
+        logger.info("Conversation memory saved: user_id=%s, saved=%d", user_id, len(created))
+        return len(created)
     except Exception as exc:
         logger.error("Conversation memory save failed: %s", exc)
         return 0

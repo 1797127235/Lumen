@@ -33,17 +33,25 @@ async def remember(user_id: str, content: str, metadata: dict[str, Any] | None =
         return False
 
 
-async def recall(user_id: str, query: str, limit: int = 10) -> list[str]:
+async def recall(user_id: str, query: str, limit: int = 10) -> list[dict[str, str | None]]:
+    """语义搜索。返回 [{"text": ..., "event_id": ..., "event_type": ..., "created_at": ...}]。"""
     try:
         import cognee
 
         results = await cognee.search(query, limit=limit)
-        user_results: list[str] = []
+        user_results: list[dict] = []
         for result in results or []:
             metadata = getattr(result, "metadata", None) or {}
             if metadata.get("user_id") != user_id:
                 continue
-            user_results.append(getattr(result, "text", str(result)))
+            user_results.append(
+                {
+                    "text": getattr(result, "text", str(result)),
+                    "event_id": metadata.get("event_id"),
+                    "event_type": metadata.get("event_type"),
+                    "created_at": metadata.get("created_at"),
+                }
+            )
         if user_results:
             return user_results[:limit]
     except Exception as exc:
@@ -123,8 +131,7 @@ async def rebuild_from_sqlite(user_id: str) -> bool:
         return False
 
 
-async def _recall_from_sqlite(user_id: str, query: str, limit: int) -> list[str]:
-    del query
+async def _recall_from_sqlite(user_id: str, query: str, limit: int) -> list[dict[str, str | None]]:
     try:
         from app.backend.models.growth_event import GrowthEvent
 
@@ -137,29 +144,46 @@ async def _recall_from_sqlite(user_id: str, query: str, limit: int) -> list[str]
             )
             events = result.scalars().all()
 
-        memories: list[str] = []
+        memories: list[dict] = []
         for event in events:
-            if event.payload_json:
-                try:
-                    payload = json.loads(event.payload_json)
-                    if event.event_type == "skill_added":
-                        skill = payload.get("skill_name") or payload.get("name") or event.entity_id or "未知技能"
-                        level = payload.get("level", "未知水平")
-                        memories.append(f"掌握了 {skill}（{level}）")
-                    elif event.event_type == "profile_updated":
-                        if payload.get("memory_md"):
-                            memories.append("更新了核心画像")
-                        else:
-                            school = payload.get("school_name", "未知学校")
-                            major = payload.get("major", "未知专业")
-                            memories.append(f"更新了画像：{school} {major}")
-                    else:
-                        memories.append(f"{event.event_type}: {json.dumps(payload, ensure_ascii=False)}")
-                except json.JSONDecodeError:
-                    memories.append(f"{event.event_type}: {event.payload_json}")
-            else:
-                memories.append(f"{event.event_type}: {event.entity_type or 'unknown'}")
+            text = _format_event_text(event)
+            memories.append(
+                {
+                    "text": text,
+                    "event_id": str(event.id),
+                    "event_type": event.event_type,
+                    "created_at": event.created_at.isoformat() if event.created_at else None,
+                }
+            )
         return memories
     except Exception as exc:
         logger.error("SQLite recall failed: user_id=%s, error=%s", user_id, exc)
         return []
+
+
+def _format_event_text(event) -> str:
+    """GrowthEvent → 人类可读文本。"""
+    payload = {}
+    if event.payload_json:
+        try:
+            payload = json.loads(event.payload_json)
+        except json.JSONDecodeError:
+            payload = {}
+
+    if event.event_type == "skill_added":
+        skill = payload.get("skill_name") or payload.get("name") or event.entity_id or "未知技能"
+        level = payload.get("level", "未知水平")
+        return f"掌握了 {skill}（{level}）"
+    if event.event_type == "profile_updated":
+        if payload.get("memory_md"):
+            return "更新了核心画像"
+        school = payload.get("school_name", "")
+        major = payload.get("major", "")
+        return f"更新了画像：{school} {major}".strip()
+    if event.event_type == "experience_added":
+        title = payload.get("title", event.entity_id or "未知经历")
+        desc = payload.get("description", "")
+        return f"经历：{title} — {desc}" if desc else f"经历：{title}"
+    if payload:
+        return f"{event.event_type}: {json.dumps(payload, ensure_ascii=False)}"
+    return f"{event.event_type}: {event.entity_type or 'unknown'}"

@@ -7,7 +7,7 @@ import re
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, select
 
 from app.backend.agent.cognee_client import get_cognee_status
 from app.backend.db.base import get_async_session_maker
@@ -15,7 +15,6 @@ from app.backend.models.growth_event import GrowthEvent
 from app.backend.services import cognee_service
 from app.backend.services.cognee_projector import project_all_events
 from app.backend.services.md_projector import project_user_to_md, sync_user_md_projection
-from app.backend.services.memory_service import search_memory
 
 logger = logging.getLogger(__name__)
 
@@ -159,55 +158,19 @@ async def search_memories(
     _validate_user_id(user_id)
 
     try:
-        results: list[MemoryItem] = []
-        escaped_query = query.replace("%", "\\%").replace("_", "\\_")
+        from app.backend.services.careeros_memory import get_memory as _get_mem
 
-        async with get_async_session_maker()() as db:
-            result = await db.execute(
-                select(GrowthEvent)
-                .where(
-                    GrowthEvent.user_id == user_id,
-                    or_(
-                        GrowthEvent.payload_json.contains(escaped_query),
-                        GrowthEvent.event_type.contains(escaped_query),
-                        GrowthEvent.entity_type.contains(escaped_query),
-                    ),
-                )
-                .order_by(GrowthEvent.created_at.desc())
-                .limit(limit)
+        memory = _get_mem()
+        items = await memory.recall(user_id, query, limit=limit)
+        return [
+            MemoryItem(
+                id=item.id,
+                memory=item.content,
+                created_at=item.created_at,
+                categories=item.categories,
             )
-            events = result.scalars().all()
-
-        for event in events:
-            results.append(
-                MemoryItem(
-                    id=str(event.id),
-                    memory=event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
-                    created_at=event.created_at.isoformat() if event.created_at else None,
-                    categories=[event.event_type] if event.event_type else [],
-                )
-            )
-
-        for md_result in search_memory(user_id, query):
-            results.append(
-                MemoryItem(
-                    id=f"md:{md_result['file']}",
-                    memory=md_result["content"],
-                    created_at=None,
-                    categories=[md_result["section"]],
-                )
-            )
-
-        unique_results: list[MemoryItem] = []
-        seen: set[str] = set()
-        for item in results:
-            if item.id in seen:
-                continue
-            seen.add(item.id)
-            unique_results.append(item)
-            if len(unique_results) >= limit:
-                break
-        return unique_results
+            for item in items
+        ]
     except Exception as exc:
         logger.error("Memory search failed: %s", exc)
         return []

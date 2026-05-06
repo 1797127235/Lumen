@@ -10,9 +10,9 @@ from sqlalchemy import delete
 
 from app.backend.db.base import get_async_session_maker
 from app.backend.models.growth_event import GrowthEvent
-from app.backend.services.cognee_projector import project_all_events, project_event_ids
+from app.backend.services.careeros_memory import get_memory
+from app.backend.services.cognee_projector import project_all_events
 from app.backend.services.cognee_service import clear_user_index
-from app.backend.services.growth_event_service import create_growth_event_with_dedup
 from app.backend.services.md_projector import sync_user_md_projection
 from app.backend.services.memory_service import read_memory
 
@@ -49,24 +49,19 @@ async def patch_my_profile(
     user_id: str = Query("demo_user"),
 ):
     try:
-        async with get_async_session_maker()() as db:
-            event = await create_growth_event_with_dedup(
-                db=db,
-                user_id=user_id,
-                event_type="profile_updated",
-                entity_type="profile",
-                entity_id="memory_md",
-                payload={"memory_md": patch.content},
-                source="用户主动",
-            )
-            await db.commit()
+        memory = get_memory()
+        event = await memory.remember(
+            user_id=user_id,
+            event_type="profile_updated",
+            entity_type="profile",
+            entity_id="memory_md",
+            payload={"memory_md": patch.content},
+            source="用户主动",
+        )
+        projected = event is not None
 
-        projected = await sync_user_md_projection(user_id)
         if not projected:
             raise HTTPException(status_code=500, detail="画像事件已保存，但 markdown 投影失败")
-
-        if event:
-            await project_event_ids([str(event.id)])
 
         return ProfileResponse(content=read_memory(user_id))
     except HTTPException:

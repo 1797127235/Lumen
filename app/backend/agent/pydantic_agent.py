@@ -119,57 +119,17 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         from sqlalchemy import select
 
         from app.backend.models.conversation import Conversation, Message
-        from app.backend.services.memory_limits import (
-            EXPERIENCES_CHAR_LIMIT,
-            MEMORY_CHAR_LIMIT,
-            SKILLS_CHAR_LIMIT,
-        )
-        from app.backend.services.memory_service import (
-            read_experiences,
-            read_memory,
-            read_skills,
-        )
 
         db = ctx.deps.db
         parts = []
 
-        # 字符限制映射
-        _limits = {
-            "memory": MEMORY_CHAR_LIMIT,
-            "skills": SKILLS_CHAR_LIMIT,
-            "experiences": EXPERIENCES_CHAR_LIMIT,
-        }
+        # ── 结构化画像 + 语义召回 ──────────────────────
+        from app.backend.services.careeros_memory import get_memory
 
-        def _memory_block(label: str, name: str, content: str) -> str:
-            """Hermes 风格：带用量 header 的记忆块。"""
-            chars = len(content)
-            limit = _limits.get(name, 0)
-            pct = int(chars / limit * 100) if limit else 0
-            header = f"══ {label} [{pct}% — {chars:,}/{limit:,} 字符] ══"
-            return f"{header}\n{content.strip()}"
-
-        # ── 3 个记忆文件 ──────────────────────────────────────
-        uid = ctx.deps.user_id
-        try:
-            memory_content = read_memory(uid)
-            if memory_content.strip():
-                parts.append(_memory_block("核心记忆", "memory", memory_content))
-        except Exception:
-            pass
-
-        try:
-            skills_content = read_skills(uid)
-            if skills_content.strip():
-                parts.append(_memory_block("技能", "skills", skills_content))
-        except Exception:
-            pass
-
-        try:
-            exp_content = read_experiences(uid)
-            if exp_content.strip():
-                parts.append(_memory_block("经历", "experiences", exp_content))
-        except Exception:
-            pass
+        memory = get_memory()
+        context = await memory.build_context(ctx.deps.user_id, user_input=ctx.deps.current_user_input)
+        if context.strip():
+            parts.append(context)
 
         # ── 对话摘要（超过 30 条消息后由后台生成）──────────────
         try:

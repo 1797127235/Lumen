@@ -11,16 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.backend.config import USER_DATA_DIR
-from app.backend.services.memory_limits import LIMITS
-from app.backend.services.memory_templates import (
-    experiences_default as _default_experiences_template,
-)
-from app.backend.services.memory_templates import (
-    memory_default as _default_memory_template,
-)
-from app.backend.services.memory_templates import (
-    skills_default as _default_skills_template,
-)
 
 # 用户记忆文件根目录（按 user_id 子目录隔离）
 _BASE_MEMORY_DIR = USER_DATA_DIR / "memory"
@@ -179,26 +169,3 @@ def _extract_relevant_content(content: str, query: str, context_lines: int = 3) 
         seen.add(line)
         unique_lines.append(line)
     return "\n".join(unique_lines[:50])  # 控制返回长度，避免工具输出过大
-
-
-def get_memory_usage(user_id: str, name: str) -> dict:
-    """返回指定记忆文件的字符数、上限与占比，供 system prompt 注入用量提示。"""
-    readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
-    if name not in readers:
-        return {"chars": 0, "limit": 0, "pct": 0}
-    content = readers[name](user_id)
-    chars = len(content)
-    limit = LIMITS[name]
-    pct = int(chars / limit * 100) if limit else 0
-    return {"chars": chars, "limit": limit, "pct": pct}
-
-
-def initialize_memory(user_id: str) -> None:
-    """首次启动时若缺省则写入三份记忆的默认 Markdown 模板。"""
-    ensure_memory_dirs(user_id)
-    if not (memory_dir(user_id) / "memory.md").exists():
-        write_memory(user_id, _default_memory_template())
-    if not (memory_dir(user_id) / "skills.md").exists():
-        write_skills(user_id, _default_skills_template())
-    if not (memory_dir(user_id) / "experiences.md").exists():
-        write_experiences(user_id, _default_experiences_template())

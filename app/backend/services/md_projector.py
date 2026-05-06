@@ -429,33 +429,3 @@ async def sync_user_md_projection(user_id: str) -> bool:
         else:
             await db.rollback()
         return success
-
-
-async def create_event_and_project_md(
-    db: AsyncSession,
-    user_id: str,
-    event_type: str,
-    entity_type: str | None = None,
-    entity_id: str | None = None,
-    payload: dict | None = None,
-    source: str = "system",
-) -> GrowthEvent | None:
-    from app.backend.services.growth_event_service import create_growth_event_with_dedup
-
-    event = await create_growth_event_with_dedup(
-        db=db,
-        user_id=user_id,
-        event_type=event_type,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload=payload,
-        source=source,
-    )
-    if event is None:
-        return None
-
-    await db.commit()
-    success = await sync_user_md_projection(user_id)
-    if not success:
-        raise RuntimeError(f".md projection failed after event commit: user_id={user_id}")
-    return event
