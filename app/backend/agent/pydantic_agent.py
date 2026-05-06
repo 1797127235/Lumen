@@ -144,22 +144,23 @@ def create_agent() -> Agent[CareerOSDeps, str]:
             return f"{header}\n{content.strip()}"
 
         # ── 3 个记忆文件 ──────────────────────────────────────
+        uid = ctx.deps.user_id
         try:
-            memory_content = read_memory()
+            memory_content = read_memory(uid)
             if memory_content.strip():
                 parts.append(_memory_block("核心记忆", "memory", memory_content))
         except Exception:
             pass
 
         try:
-            skills_content = read_skills()
+            skills_content = read_skills(uid)
             if skills_content.strip():
                 parts.append(_memory_block("技能", "skills", skills_content))
         except Exception:
             pass
 
         try:
-            exp_content = read_experiences()
+            exp_content = read_experiences(uid)
             if exp_content.strip():
                 parts.append(_memory_block("经历", "experiences", exp_content))
         except Exception:

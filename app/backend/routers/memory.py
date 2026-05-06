@@ -188,7 +188,7 @@ async def search_memories(
                 )
             )
 
-        for md_result in search_memory(query):
+        for md_result in search_memory(user_id, query):
             results.append(
                 MemoryItem(
                     id=f"md:{md_result['file']}",

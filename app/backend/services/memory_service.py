@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.backend.config import USER_DATA_DIR
 from app.backend.services.memory_limits import LIMITS
 from app.backend.services.memory_templates import (
@@ -20,13 +22,22 @@ from app.backend.services.memory_templates import (
     skills_default as _default_skills_template,
 )
 
-# 用户记忆文件根目录（memory.md / skills.md / experiences.md）
-MEMORY_DIR = USER_DATA_DIR / "memory"
+# 用户记忆文件根目录（按 user_id 子目录隔离）
+_BASE_MEMORY_DIR = USER_DATA_DIR / "memory"
 
 
-def ensure_memory_dirs() -> None:
+def memory_dir(user_id: str) -> Path:
+    """返回 user_id 对应的记忆目录路径（公共 API，供外部如 md_projector 使用）。"""
+    return _BASE_MEMORY_DIR / user_id
+
+
+def _memory_dir(user_id: str) -> Path:
+    return memory_dir(user_id)
+
+
+def ensure_memory_dirs(user_id: str) -> None:
     """若不存在则创建记忆目录（含父路径）。"""
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    memory_dir(user_id).mkdir(parents=True, exist_ok=True)
 
 
 def extract_profile_fields(md_text: str) -> dict:
@@ -68,54 +79,54 @@ def extract_profile_fields(md_text: str) -> dict:
     return fields
 
 
-def read_memory() -> str:
+def read_memory(user_id: str) -> str:
     """读取核心记忆文件；不存在则返回空字符串。"""
-    memory_file = MEMORY_DIR / "memory.md"
+    memory_file = _memory_dir(user_id) / "memory.md"
     if not memory_file.exists():
         return ""
     return memory_file.read_text(encoding="utf-8")
 
 
-def write_memory(content: str) -> None:
+def write_memory(user_id: str, content: str) -> None:
     """写入核心记忆文件（UTF-8）。"""
-    ensure_memory_dirs()
-    (MEMORY_DIR / "memory.md").write_text(content, encoding="utf-8")
+    ensure_memory_dirs(user_id)
+    (_memory_dir(user_id) / "memory.md").write_text(content, encoding="utf-8")
 
 
-def read_skills() -> str:
+def read_skills(user_id: str) -> str:
     """读取技能记忆文件；不存在则返回空字符串。"""
-    skills_file = MEMORY_DIR / "skills.md"
+    skills_file = _memory_dir(user_id) / "skills.md"
     if not skills_file.exists():
         return ""
     return skills_file.read_text(encoding="utf-8")
 
 
-def write_skills(content: str) -> None:
+def write_skills(user_id: str, content: str) -> None:
     """写入技能记忆文件（UTF-8）。"""
-    ensure_memory_dirs()
-    (MEMORY_DIR / "skills.md").write_text(content, encoding="utf-8")
+    ensure_memory_dirs(user_id)
+    (_memory_dir(user_id) / "skills.md").write_text(content, encoding="utf-8")
 
 
-def read_experiences() -> str:
+def read_experiences(user_id: str) -> str:
     """读取经历记忆文件；不存在则返回空字符串。"""
-    exp_file = MEMORY_DIR / "experiences.md"
+    exp_file = _memory_dir(user_id) / "experiences.md"
     if not exp_file.exists():
         return ""
     return exp_file.read_text(encoding="utf-8")
 
 
-def write_experiences(content: str) -> None:
+def write_experiences(user_id: str, content: str) -> None:
     """写入经历记忆文件（UTF-8）。"""
-    ensure_memory_dirs()
-    (MEMORY_DIR / "experiences.md").write_text(content, encoding="utf-8")
+    ensure_memory_dirs(user_id)
+    (_memory_dir(user_id) / "experiences.md").write_text(content, encoding="utf-8")
 
 
-def search_memory(query: str) -> list[dict]:
+def search_memory(user_id: str, query: str) -> list[dict]:
     """在三份 Markdown 记忆中做不区分大小写的子串匹配，返回命中文件与上下文片段。"""
     results: list[dict] = []
 
     # 搜索 memory.md
-    memory_content = read_memory()
+    memory_content = read_memory(user_id)
     if query.lower() in memory_content.lower():
         results.append(
             {
@@ -126,7 +137,7 @@ def search_memory(query: str) -> list[dict]:
         )
 
     # 搜索 skills.md
-    skills_content = read_skills()
+    skills_content = read_skills(user_id)
     if query.lower() in skills_content.lower():
         results.append(
             {
@@ -137,7 +148,7 @@ def search_memory(query: str) -> list[dict]:
         )
 
     # 搜索 experiences.md
-    exp_content = read_experiences()
+    exp_content = read_experiences(user_id)
     if query.lower() in exp_content.lower():
         results.append(
             {
@@ -174,24 +185,24 @@ def _extract_relevant_content(content: str, query: str, context_lines: int = 3) 
     return "\n".join(unique_lines[:50])  # 控制返回长度，避免工具输出过大
 
 
-def get_memory_usage(name: str) -> dict:
+def get_memory_usage(user_id: str, name: str) -> dict:
     """返回指定记忆文件的字符数、上限与占比，供 system prompt 注入用量提示。"""
     readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
     if name not in readers:
         return {"chars": 0, "limit": 0, "pct": 0}
-    content = readers[name]()
+    content = readers[name](user_id)
     chars = len(content)
     limit = LIMITS[name]
     pct = int(chars / limit * 100) if limit else 0
     return {"chars": chars, "limit": limit, "pct": pct}
 
 
-def initialize_memory() -> None:
+def initialize_memory(user_id: str) -> None:
     """首次启动时若缺省则写入三份记忆的默认 Markdown 模板。"""
-    ensure_memory_dirs()
-    if not (MEMORY_DIR / "memory.md").exists():
-        write_memory(_default_memory_template())
-    if not (MEMORY_DIR / "skills.md").exists():
-        write_skills(_default_skills_template())
-    if not (MEMORY_DIR / "experiences.md").exists():
-        write_experiences(_default_experiences_template())
+    ensure_memory_dirs(user_id)
+    if not (_memory_dir(user_id) / "memory.md").exists():
+        write_memory(user_id, _default_memory_template())
+    if not (_memory_dir(user_id) / "skills.md").exists():
+        write_skills(user_id, _default_skills_template())
+    if not (_memory_dir(user_id) / "experiences.md").exists():
+        write_experiences(user_id, _default_experiences_template())

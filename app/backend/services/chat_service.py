@@ -1,4 +1,4 @@
-"""对话服务 — SSE 流式对话 + 历史存 DB + 滚动摘要（PydanticAI 版本）"""
+"""对话服务 — SSE 流式对话 + 历史存 DB + 滚动摘要"""
 
 from __future__ import annotations
 

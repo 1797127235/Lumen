@@ -43,6 +43,8 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             search_memory,
         )
 
+        uid = ctx.deps.user_id
+
         if files:
             readers = {"memory": read_memory, "skills": read_skills, "experiences": read_experiences}
             results = []
@@ -50,12 +52,12 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
                 reader = readers.get(name)
                 if not reader:
                     continue
-                content = reader()
+                content = reader(uid)
                 if content and query.lower() in content.lower():
                     results.append({"file": f"{name}.md", "section": name, "content": content[:500]})
             return str(results) if results else f"在 {files} 中未找到相关内容。"
 
-        results = search_memory(query)
+        results = search_memory(uid, query)
         return str(results) if results else "未找到相关内容。"
 
     @agent.tool
@@ -125,18 +127,18 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         from app.backend.services.md_projector import sync_user_md_projection
         from app.backend.services.memory_service import read_experiences, read_memory, read_skills
 
-        memory_content = read_memory()
+        memory_content = read_memory(ctx.deps.user_id)
         if not memory_content.strip():
             await sync_user_md_projection(ctx.deps.user_id)
-            memory_content = read_memory()
+            memory_content = read_memory(ctx.deps.user_id)
 
         parts = []
         if memory_content.strip():
             parts.append(memory_content)
-        skills = read_skills()
+        skills = read_skills(ctx.deps.user_id)
         if skills.strip():
             parts.append(skills)
-        experiences = read_experiences()
+        experiences = read_experiences(ctx.deps.user_id)
         if experiences.strip():
             parts.append(experiences)
 
@@ -157,7 +159,20 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         # 标记本轮已写入
         ctx.deps.memory_tool_called = True
 
+        from app.backend.schemas.memory_events import ProfilePayload
         from app.backend.services.md_projector import create_event_and_project_md
+
+        # 校验：只保留 ProfilePayload 已知字段，丢弃未知 key；类型错则报错
+        allowed_keys = set(ProfilePayload.model_fields.keys())
+        known = {k: v for k, v in fields.items() if k in allowed_keys}
+        discarded = [k for k in fields if k not in allowed_keys]
+        if discarded:
+            logger.warning("update_profile discarded unknown keys: %s", discarded)
+
+        try:
+            validated = ProfilePayload.model_validate(known)
+        except Exception as e:
+            return f"画像字段校验失败：{e}"
 
         event = await create_event_and_project_md(
             db=ctx.deps.db,
@@ -165,9 +180,9 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
             event_type="profile_updated",
             entity_type="profile",
             entity_id="profile_fields",
-            payload=fields,
+            payload=validated.model_dump(exclude_none=True),
             source="Agent工具",
         )
         if event:
-            return f"画像已更新：{', '.join(fields.keys())}"
+            return f"画像已更新：{', '.join(validated.model_dump(exclude_none=True).keys())}"
         return "画像内容没有变化，跳过更新。"

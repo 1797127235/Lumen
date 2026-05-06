@@ -19,11 +19,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.backend.config import USER_DATA_DIR
 from app.backend.db.base import get_async_session_maker
 from app.backend.models.growth_event import GrowthEvent
 from app.backend.services.memory_limits import EXPERIENCES_CHAR_LIMIT, MEMORY_CHAR_LIMIT, SKILLS_CHAR_LIMIT
-from app.backend.services.memory_service import ensure_memory_dirs, extract_profile_fields
+from app.backend.services.memory_service import ensure_memory_dirs, extract_profile_fields, memory_dir
 
 logger = logging.getLogger(__name__)
 
@@ -339,14 +338,14 @@ def _write_md_file_safe(path: str, content: str, max_chars: int | None = None) -
     os.replace(temp_path, path)
 
 
-def _write_default_md_snapshot() -> None:
+def _write_default_md_snapshot(user_id: str) -> None:
     from app.backend.services.memory_templates import experiences_default, memory_default, skills_default
 
-    ensure_memory_dirs()
-    memory_dir = USER_DATA_DIR / "memory"
-    _write_md_file_safe(str(memory_dir / "memory.md"), memory_default())
-    _write_md_file_safe(str(memory_dir / "skills.md"), skills_default())
-    _write_md_file_safe(str(memory_dir / "experiences.md"), experiences_default())
+    ensure_memory_dirs(user_id)
+    d = memory_dir(user_id)
+    _write_md_file_safe(str(d / "memory.md"), memory_default())
+    _write_md_file_safe(str(d / "skills.md"), skills_default())
+    _write_md_file_safe(str(d / "experiences.md"), experiences_default())
 
 
 async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
@@ -357,7 +356,7 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
         events = list(result.scalars().all())
 
         if not events:
-            _write_default_md_snapshot()
+            _write_default_md_snapshot(user_id)
             logger.debug("No events found; rebuilt default markdown: user_id=%s", user_id)
             return True
 
@@ -377,27 +376,27 @@ async def project_user_to_md(db: AsyncSession, user_id: str) -> bool:
         decisions = _merge_decision_events(events_by_type.get("decision_made", []))
 
         # 写入 3 个文件
-        ensure_memory_dirs()
-        memory_dir = USER_DATA_DIR / "memory"
+        ensure_memory_dirs(user_id)
+        d = memory_dir(user_id)
 
         _write_md_file_safe(
-            str(memory_dir / "memory.md"),
+            str(d / "memory.md"),
             _generate_memory_md(profile, preferences, status, goals, decisions),
             max_chars=MEMORY_CHAR_LIMIT,
         )
         _write_md_file_safe(
-            str(memory_dir / "skills.md"),
+            str(d / "skills.md"),
             _generate_skills_md(skills),
             max_chars=SKILLS_CHAR_LIMIT,
         )
         _write_md_file_safe(
-            str(memory_dir / "experiences.md"),
+            str(d / "experiences.md"),
             _generate_experiences_md(experiences),
             max_chars=EXPERIENCES_CHAR_LIMIT,
         )
 
         # 清理旧的 entities 目录（如果存在）
-        entities_dir = memory_dir / "entities"
+        entities_dir = d / "entities"
         if entities_dir.exists():
             import shutil
 

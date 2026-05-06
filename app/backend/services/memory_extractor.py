@@ -69,12 +69,9 @@ def _validate_event_payload(event: ExtractedEvent) -> dict | None:
 
 
 async def extract_memory_from_conversation(
-    user_id: str,
-    conversation_id: str,
     user_input: str,
     assistant_reply: str,
 ) -> list[dict]:
-    del user_id, conversation_id
     try:
         prompt = _EXTRACT_PROMPT.format(
             user_input=user_input,
@@ -100,10 +97,8 @@ async def extract_memory_from_conversation(
 
 async def save_extracted_events(
     user_id: str,
-    conversation_id: str,
     events: list[dict],
 ) -> int:
-    del conversation_id
     if not events:
         return 0
 
@@ -152,14 +147,12 @@ async def extract_and_save_memory(
     user_input: str,
     assistant_reply: str,
 ) -> int:
+    del conversation_id  # reserved for future per-conversation extraction scope
     events = await extract_memory_from_conversation(
-        user_id=user_id,
-        conversation_id=conversation_id,
         user_input=user_input,
         assistant_reply=assistant_reply,
     )
     return await save_extracted_events(
         user_id=user_id,
-        conversation_id=conversation_id,
         events=events,
     )
