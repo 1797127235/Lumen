@@ -82,6 +82,9 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         if entity_type not in _EVENT_TYPE_MAP:
             return f"未知的类型 {entity_type}。支持: {', '.join(_EVENT_TYPE_MAP.keys())}"
 
+        # 标记本轮已写入——后台提取器会跳过，避免双写
+        ctx.deps.memory_tool_called = True
+
         from app.backend.schemas.memory_events import (
             DecisionPayload,
             ExperiencePayload,
@@ -150,6 +153,9 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
         logger.info("Tool call: update_profile, user_id=%s, fields=%s", ctx.deps.user_id, fields)
         if not fields:
             return "没有需要更新的字段。"
+
+        # 标记本轮已写入
+        ctx.deps.memory_tool_called = True
 
         from app.backend.services.md_projector import create_event_and_project_md
 
