@@ -40,12 +40,9 @@ def _create_model() -> OpenAIChatModel:
             "未配置 LLM API Key。请在设置页面配置 API Key，或在 .env 文件中设置 DASHSCOPE_API_KEY 或 LLM_API_KEY。"
         )
 
-    # DeepSeek OpenAI 兼容端点（PydanticAI OpenAIProvider 需要 /v1 前缀）
-    if provider == "deepseek":
-        if not base_url:
-            base_url = "https://api.deepseek.com/v1"
-        elif not base_url.rstrip("/").endswith("/v1"):
-            base_url = base_url.rstrip("/") + "/v1"
+    # DeepSeek OpenAI 兼容端点
+    if provider == "deepseek" and not base_url:
+        base_url = "https://api.deepseek.com"
 
     # DashScope OpenAI 兼容端点
     if provider == "dashscope" and not base_url:
@@ -102,51 +99,22 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         deps_type=CareerOSDeps,
         output_type=str,
         system_prompt=(
-            "你是 CareerOS，一个面向中国 CS 学生的 AI 职业规划助手。"
-            "你的目标是帮助学生从大一到毕业，追踪成长轨迹，提供个性化的职业规划建议。"
-            "\n\n"
-            "## 核心能力\n"
-            "1. 结合用户画像，对用户提供的岗位描述（JD）与求职方向做分析与建议（无独立结构化诊断 API）\n"
-            "2. 提供学习路径和职业发展建议\n"
-            "3. 追踪成长里程碑\n"
-            "\n\n"
-            "## 记忆保存规则（重要！）\n"
-            "用户画像已自动加载到上下文中。当用户表达任何与职业发展相关的信息时，【必须立即】调用工具保存：\n"
-            "- 用户说「我想做XX/对XX感兴趣」→ memory_save('goals', ...)\n"
-            "- 用户说「我会XX/用过XX」→ memory_save('skills', ...)\n"
-            "- 用户分享经历（项目/实习/比赛）→ memory_save('experiences', ...)\n"
-            "- 用户纠正你或说「记住了吗」→ memory_save('preferences', ...)\n"
-            "- 用户表达决策/焦虑/状态 → memory_save(...)\n"
-            "- 用户说学校/专业/年级 → update_profile(...)\n"
-            "- 【不要】主动调用 get_profile，画像已在上下文中\n"
-            "- 保存后一句话告知（如「已记录」），不要长篇确认。\n"
-            "但【保存不是终点】——你的核心任务是针对用户的问题给出有价值的回复。\n"
-            "比如用户说「我想做AI Agent开发」，你应该：先分析这个方向的现状与前景，给出学习建议，顺带说一句「已记录你的兴趣」。\n"
-            "决不能只回一个「已记录」就结束，那是把用户晾在一边。\n"
-            "\n\n"
-            "## 回复风格\n"
-            "- 使用中文\n"
-            "- 结构化输出（使用 Markdown）\n"
-            "- 给出具体可执行的建议\n"
-            "- 鼓励而非说教\n"
-            "- 不要重复询问用户已经说过的信息\n"
-            "\n\n"
-            "## 自我介绍规范\n"
-            "- 你是一个通用的职业规划助手，不要说「专为XX定制」或「专为XX设计」\n"
-            "- 首次对话时，简短欢迎即可（1-2句），不要长篇大论\n"
-            "- 不要把用户的画像信息全部复述一遍，用户自己知道自己的信息\n"
-            "- 直接询问用户需要什么帮助，而不是列出一堆「你需要补充的信息」"
+            "你是 CareerOS。规则：用户提到职业目标/技能/经历/学校时必须调用工具保存。\n"
+            "目标→memory_save('goals',方向,动机) | 技能→memory_save('skills',名称,程度)\n"
+            "经历→memory_save('experiences',标题,描述) | 学校→update_profile() | 偏好→memory_save('preferences',名,内容)\n"
+            "先保存再回答，一句话告知，不要只回「已记录」。"
         ),
         retries=2,
+        end_strategy="graceful",  # 流式 output_type=str：同时返回文本+工具调用时仍需执行工具
     )
 
     # 注册工具
     register_tools(agent)
 
-    # 注册动态系统提示词
+    # 动态系统提示词：记忆上下文 + 对话历史（放在 system prompt 中而非用户消息）
+    # 语义上正确：上下文是系统级背景信息，模型能区分「指令+背景」和「用户请求」
     @agent.system_prompt
     async def dynamic_prompt(ctx: RunContext[CareerOSDeps]) -> str:
-        """动态系统提示词：注入 3 个记忆文件 + 对话摘要 + 近期历史"""
         from sqlalchemy import select
 
         from app.backend.models.conversation import Conversation, Message
@@ -154,16 +122,16 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         db = ctx.deps.db
         parts = []
 
-        # ── 结构化画像 + 语义召回（Prefetch：缓存到 deps，tool call 复用）──
+        # ── 结构化画像 + 语义召回 ──
         from app.backend.services.careeros_memory import get_memory
 
         memory = get_memory()
         context = await memory.build_context(ctx.deps.user_id, user_input=ctx.deps.current_user_input)
         if context.strip():
-            ctx.deps.build_context_cache = context  # 缓存，供 get_profile 等 tool 复用
+            ctx.deps.build_context_cache = context
             parts.append(context)
 
-        # ── 对话摘要（超过 30 条消息后由后台生成）──────────────
+        # ── 对话摘要 ──
         try:
             conv = await db.get(Conversation, ctx.deps.conversation_id)
             if conv and conv.summary:
@@ -171,37 +139,30 @@ def create_agent() -> Agent[CareerOSDeps, str]:
         except Exception:
             pass
 
-        # ── 近期对话历史（最近 20 条）─────────────────────────
+        # ── 近期对话历史（最近 10 条）──
         try:
             history_result = await db.execute(
                 select(Message)
                 .where(Message.conversation_id == ctx.deps.conversation_id)
                 .order_by(Message.created_at.desc())
-                .limit(20)
+                .limit(10)
             )
-            history_messages = list(reversed(history_result.scalars().all()))
-
-            # 去掉最后一条 user 消息（避免与当前 user_input 重复）
-            if history_messages and history_messages[-1].role == "user":
-                history_messages = history_messages[:-1]
-
-            if history_messages:
-                history_lines = []
-                for msg in history_messages:
-                    if msg.role == "user":
-                        history_lines.append(f"用户：{msg.content}")
-                    elif msg.role == "assistant":
-                        content = (msg.content or "")[:200]
-                        history_lines.append(f"AI：{content}")
-                parts.append("【对话历史】\n" + "\n".join(history_lines))
+            history = list(history_result.scalars().all())
+            history.reverse()
+            if history:
+                lines = ["【近期对话】"]
+                for msg in history:
+                    tag = "用户" if msg.role == "user" else "助手"
+                    lines.append(f"{tag}: {(msg.content or '')[:150]}")
+                parts.append("\n".join(lines))
         except Exception:
             pass
 
-        if parts:
-            return "\n\n".join(parts)
-        return "【用户画像为空】用户尚未填写个人信息。当用户提供信息时，调用 memory_update 保存。"
+        if not parts:
+            return "【用户画像为空】用户尚未填写个人信息。当用户提供信息时，调用 memory_save 或 update_profile 保存。"
 
-    logger.info("PydanticAI Agent created", model=model.model_name)
+        return "\n\n".join(parts)
+
     return agent
 
 

@@ -150,8 +150,8 @@ export default function Settings() {
         embedding_model: embeddingModel,
         embedding_base_url: embeddingBaseUrl,
       };
-      if (llmApiKey) data.llm_api_key = llmApiKey;
-      if (embeddingApiKey) data.embedding_api_key = embeddingApiKey;
+      if (llmApiKey) data.llm_api_key = llmApiKey.trim();
+      if (embeddingApiKey) data.embedding_api_key = embeddingApiKey.trim();
 
       const updated = await updateConfig(data);
       const nextMemStats = await getMemoryStats();

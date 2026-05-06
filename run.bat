@@ -21,14 +21,14 @@ echo  OK
 
 echo [3/3] Starting servers...
 echo.
-echo   Backend  -^> http://localhost:8001/docs
+echo   Backend  -^> http://localhost:8000/docs
 echo   Frontend -^> http://localhost:5173
 echo.
 echo Close each window to stop
 echo ==============================
 
 :: Start backend in new PowerShell window
-start "CodePilot Backend" powershell -NoExit -Command "cd '%~dp0'; python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8001 --reload"
+start "CodePilot Backend" powershell -NoExit -Command "cd '%~dp0'; python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000 --reload"
 
 :: Start frontend in new PowerShell window  
 start "CodePilot Frontend" powershell -NoExit -Command "cd '%~dp0\app\frontend'; npm run dev"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMemoryList, getMemoryStats } from "../lib/api";
+import { deleteMemory, getMemoryList, getMemoryStats } from "../lib/api";
 import type { MemoryItem, MemoryStats } from "../lib/api";
 
 function formatDate(iso: string | null): string {
@@ -28,6 +28,8 @@ export default function Memories() {
   const [stats, setStats] = useState<MemoryStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   async function loadMemories() {
     setError("");
@@ -42,6 +44,21 @@ export default function Memories() {
       setError("记忆读取失败，稍后再试");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setDeleting(id);
+    setError("");
+    try {
+      await deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+      setStats((prev) => (prev ? { ...prev, count: prev.count - 1 } : null));
+    } catch {
+      setError("删除失败，请稍后重试");
+    } finally {
+      setDeleting(null);
+      setConfirmDelete(null);
     }
   }
 
@@ -117,9 +134,32 @@ export default function Memories() {
               className="rounded-lg border border-border-soft px-md py-sm"
             >
               <p className="leading-relaxed text-text">{mem.memory}</p>
-              <p className="mt-2xs text-xs text-text-subtle">
-                {formatDate(mem.created_at)}
-              </p>
+              <div className="mt-2xs flex items-center justify-between gap-sm">
+                <span className="text-xs text-text-subtle">
+                  {formatDate(mem.created_at)}
+                </span>
+                <button
+                  onClick={() => {
+                    if (confirmDelete === mem.id) {
+                      void handleDelete(mem.id);
+                    } else {
+                      setConfirmDelete(mem.id);
+                    }
+                  }}
+                  disabled={deleting === mem.id}
+                  className={`text-xs transition-colors ${
+                    confirmDelete === mem.id
+                      ? "text-danger"
+                      : "text-text-subtle hover:text-danger"
+                  }`}
+                >
+                  {deleting === mem.id
+                    ? "删除中..."
+                    : confirmDelete === mem.id
+                      ? "确定？"
+                      : "删除"}
+                </button>
+              </div>
             </li>
           ))}
         </ul>

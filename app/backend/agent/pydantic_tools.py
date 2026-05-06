@@ -150,10 +150,63 @@ def register_tools(agent: Agent[CareerOSDeps, str]) -> None:
     @agent.tool
     async def update_profile(
         ctx: RunContext[CareerOSDeps],
-        fields: dict[str, Any],
+        school_name: str | None = None,
+        major: str | None = None,
+        grade: str | None = None,
+        graduation_year: str | None = None,
+        school_level: str | None = None,
+        target_direction: str | None = None,
+        target_company_level: str | None = None,
+        city: str | None = None,
+        gpa: str | None = None,
+        ranking: str | None = None,
+        awards: list[str] | None = None,
+        bio: str | None = None,
+        english_level: str | None = None,
+        expected_salary: str | None = None,
     ) -> str:
-        """批量更新画像结构化字段（如 school_name/major/grade 等）。"""
-        logger.info("Tool call: update_profile", user_id=ctx.deps.user_id, fields=list(fields.keys()))
+        """更新用户画像。只传有值的字段，传 None 的会被忽略。
+
+        可用字段及含义：
+        - school_name: 学校名称
+        - major: 专业
+        - grade: 年级（大一/大二/大三/大四/研一/研二/研三）
+        - graduation_year: 毕业年份
+        - school_level: 学校层次（985/211/双一流/普通本科/专科）
+        - target_direction: 职业目标方向（如：后端开发/AI算法/前端开发/产品经理）
+        - target_company_level: 目标公司层次（大厂/中厂/小厂/创业公司/无所谓）
+        - city: 意向城市
+        - gpa: GPA
+        - ranking: 排名
+        - awards: 获奖列表
+        - bio: 个人简介
+        - english_level: 英语水平（CET4/CET6/雅思/托福/无）
+        - expected_salary: 期望薪资
+
+        例：用户说「我在清华读大二，想做大厂AI算法」
+          → update_profile(school_name='清华大学', grade='大二', target_direction='AI算法', target_company_level='大厂')"""
+
+        # 收集非 None 字段
+        fields: dict[str, Any] = {}
+        for name, val in [
+            ("school_name", school_name),
+            ("major", major),
+            ("grade", grade),
+            ("graduation_year", graduation_year),
+            ("school_level", school_level),
+            ("target_direction", target_direction),
+            ("target_company_level", target_company_level),
+            ("city", city),
+            ("gpa", gpa),
+            ("ranking", ranking),
+            ("awards", awards),
+            ("bio", bio),
+            ("english_level", english_level),
+            ("expected_salary", expected_salary),
+        ]:
+            if val is not None:
+                fields[name] = val
+
         if not fields:
             return "没有需要更新的字段。"
 

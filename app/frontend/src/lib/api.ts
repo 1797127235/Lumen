@@ -341,3 +341,10 @@ export function getMemoryList(): Promise<MemoryItem[]> {
     `/api/memory/list?user_id=${encodeURIComponent(getUserId())}`,
   );
 }
+
+export function deleteMemory(id: string): Promise<{ deleted: string }> {
+  return http<{ deleted: string }>(
+    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(getUserId())}`,
+    { method: "DELETE" },
+  );
+}

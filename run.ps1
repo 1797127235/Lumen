@@ -23,14 +23,14 @@ Write-Host " OK"
 
 Write-Host "[3/3] Starting servers..."
 Write-Host ""
-Write-Host "  Backend  -> http://localhost:8001/docs"
+Write-Host "  Backend  -> http://localhost:8000/docs"
 Write-Host "  Frontend -> http://localhost:5173"
 Write-Host ""
 Write-Host "Close each window to stop"
 Write-Host "=============================="
 
 # 启动后端（新窗口）
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot'; python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8001 --reload"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot'; python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000 --reload"
 
 # 启动前端（新窗口）
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot\app\frontend'; npm run dev"

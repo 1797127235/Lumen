@@ -197,11 +197,15 @@ def _generate_memory_md(
 
     # 目标方向
     parts.append("## 目标方向")
-    parts.append(f"- 目标岗位：{profile.get('target_direction', goals.get('target_direction', '（待填写）'))}")
-    parts.append(
-        f"- 目标公司类型：{profile.get('target_company_level', goals.get('target_company_level', '（待填写）'))}"
-    )
-    parts.append(f"- 意向城市：{profile.get('city', goals.get('city', '（待填写）'))}")
+    # 结构化字段优先（来自 update_profile）
+    parts.append(f"- 目标岗位：{profile.get('target_direction', '（待填写）')}")
+    parts.append(f"- 目标公司类型：{profile.get('target_company_level', '（待填写）')}")
+    parts.append(f"- 意向城市：{profile.get('city', '（待填写）')}")
+    # 自由形式目标（来自 memory_save('goals', ...)）
+    if goals:
+        parts.append("- 已记录的目标：")
+        for goal_name, goal_detail in goals.items():
+            parts.append(f"  - **{goal_name}**：{goal_detail}")
     parts.append("")
 
     # 教育背景

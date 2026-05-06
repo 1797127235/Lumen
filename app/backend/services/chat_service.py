@@ -98,7 +98,9 @@ async def stream_chat(
         yield _sse_error("消息保存失败，请稍后重试")
         return
 
-    # PydanticAI Agent 流式处理（不传 message_history，由 dynamic_prompt 处理上下文）
+    # PydanticAI Agent 流式处理
+    # 记忆上下文 + 对话历史 → @agent.system_prompt 注入（system prompt 语义正确）
+    # 用户消息原样传入，不拼接上下文（之前拼接导致指令被淹没）
     try:
         from pydantic_ai.settings import ModelSettings
 
