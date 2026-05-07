@@ -13,6 +13,7 @@ export default function Chat() {
     conversationId,
     error,
     sendMessage,
+    cancelStreaming,
     loadConversation,
   } = useChatSession()
   const endRef = useRef<HTMLDivElement | null>(null)
@@ -87,6 +88,7 @@ export default function Chat() {
           onChange={setDraft}
           onSend={send}
           streaming={streaming}
+          onCancel={cancelStreaming}
         />
       </div>
     </div>
@@ -161,11 +163,13 @@ function InputBox({
   onChange,
   onSend,
   streaming,
+  onCancel,
 }: {
   draft: string
   onChange: (value: string) => void
   onSend: () => void
   streaming: boolean
+  onCancel: () => void
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const [phIndex, setPhIndex] = useState(0)
@@ -221,20 +225,29 @@ function InputBox({
         </span>
 
         <button
-          onClick={onSend}
-          disabled={!canSend}
+          onClick={streaming ? onCancel : onSend}
+          disabled={!streaming && !canSend}
           className={`
             flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150
             ${
-              canSend
-                ? 'bg-ink text-bg hover:scale-105 hover:bg-ink-deep'
-                : 'cursor-not-allowed bg-border text-text-subtle'
+              streaming
+                ? 'bg-danger text-bg hover:scale-105 hover:bg-danger/80'
+                : canSend
+                  ? 'bg-ink text-bg hover:scale-105 hover:bg-ink-deep'
+                  : 'cursor-not-allowed bg-border text-text-subtle'
             }
           `}
-          aria-label="发送消息"
+          aria-label={streaming ? '停止生成' : '发送消息'}
         >
           {streaming ? (
-            <span className="animate-pulse">...</span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+            </svg>
           ) : (
             <svg
               width="14"

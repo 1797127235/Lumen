@@ -254,6 +254,172 @@ async def stream_chat(
     yield _sse_done(conv.conversation_id, usage_data)
 
 
+async def stream_chat_ws(
+    db: AsyncSession,
+    user_id: str,
+    user_input: str,
+    conversation_id: str | None = None,
+    cancel_event: asyncio.Event | None = None,
+):
+    """
+    WebSocket 流式对话：
+    - yield dict 而非 SSE 字符串
+    - 支持 cancel_event 中途取消
+    - 取消时保存已生成内容（截断）
+    """
+    if cancel_event is None:
+        cancel_event = asyncio.Event()
+
+    # 获取或创建会话
+    if conversation_id:
+        conv = await db.get(Conversation, conversation_id)
+        if not conv or conv.user_id != user_id:
+            yield {"type": "error", "message": "会话不存在"}
+            return
+    else:
+        conv = Conversation(
+            user_id=user_id,
+            title=user_input[:30] + "..." if len(user_input) > 30 else user_input,
+        )
+        db.add(conv)
+        await db.flush()
+
+    yield {"type": "token", "content": "", "conversation_id": conv.conversation_id}
+
+    # 保存用户消息
+    user_message = Message(
+        conversation_id=conv.conversation_id,
+        role="user",
+        content=user_input,
+        intent="consultation",
+    )
+    db.add(user_message)
+    conv.message_count = (conv.message_count or 0) + 1
+    conv.last_message_at = datetime.now(UTC)
+    try:
+        await db.commit()
+    except Exception:
+        logger.exception("保存用户消息失败", conversation_id=conv.conversation_id)
+        await db.rollback()
+        yield {"type": "error", "message": "消息保存失败，请稍后重试"}
+        return
+
+    # PydanticAI Agent 流式处理
+    try:
+        from pydantic_ai.settings import ModelSettings
+
+        from app.backend.agent.pydantic_agent import get_agent
+
+        agent = get_agent()
+        deps = LumenDeps(
+            user_id=user_id,
+            db=db,
+            conversation_id=conv.conversation_id,
+            current_user_input=user_input,
+        )
+
+        full_content = ""
+        usage_data: dict | None = None
+        cancelled = False
+
+        try:
+            async with agent.run_stream(
+                user_input,
+                deps=deps,
+                model_settings=ModelSettings(max_tokens=4096),
+            ) as response:
+                async for text in response.stream_text(delta=True):
+                    if cancel_event.is_set():
+                        cancelled = True
+                        break
+                    full_content += text
+                    yield {"type": "token", "content": text, "conversation_id": conv.conversation_id}
+
+                if not cancelled:
+                    try:
+                        u = response.usage()
+                        usage_data = {
+                            "input": u.request_tokens or 0,
+                            "output": u.response_tokens or 0,
+                        }
+                    except Exception:
+                        pass
+
+        finally:
+            # 无论正常完成还是取消，都保存已生成的内容
+            if full_content:
+                db.add(
+                    Message(
+                        conversation_id=conv.conversation_id,
+                        role="assistant",
+                        content=full_content,
+                        intent="consultation",
+                    )
+                )
+                conv.message_count = (conv.message_count or 0) + 1
+                conv.last_message_at = datetime.now(UTC)
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    logger.warning("保存 AI 回复失败 (可能为部分)", conversation_id=conv.conversation_id)
+
+                # Agent 工具创建了事件 → commit 后触发投影
+                if deps.pending_event_ids:
+                    try:
+                        from app.backend.memory import get_memory
+
+                        await get_memory().sync_projections(user_id, deps.pending_event_ids)
+                    except Exception as e:
+                        logger.warning("记忆投影失败", error=str(e))
+
+                # ── 后台记忆审查 ──
+                if not cancelled and not deps.pending_event_ids:
+                    task = asyncio.create_task(
+                        _background_memory_review(
+                            user_id=user_id,
+                            user_message=user_input,
+                            assistant_response=full_content,
+                            conversation_id=conv.conversation_id,
+                        )
+                    )
+                    task.add_done_callback(_log_task_error)
+
+        if cancelled:
+            yield {"type": "cancelled", "conversation_id": conv.conversation_id}
+            return
+
+    except asyncio.CancelledError:
+        # 任务被取消，保存已生成内容
+        if full_content:
+            db.add(
+                Message(
+                    conversation_id=conv.conversation_id,
+                    role="assistant",
+                    content=full_content,
+                    intent="consultation",
+                )
+            )
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+        yield {"type": "cancelled", "conversation_id": conv.conversation_id}
+        return
+    except Exception:
+        logger.exception("生成 AI 回复失败", conversation_id=conv.conversation_id)
+        await db.rollback()
+        yield {"type": "error", "message": "生成回复失败，请稍后重试"}
+        return
+
+    # 滚动摘要
+    if conv.message_count >= 30 and conv.message_count % 10 == 0:
+        task = asyncio.create_task(_summarize_bg(conv.conversation_id))
+        task.add_done_callback(_log_task_error)
+
+    yield {"type": "done", "conversation_id": conv.conversation_id, "usage": usage_data}
+
+
 async def _summarize_bg(conversation_id: str) -> None:
     """后台摘要：独立 db session，内部重判触发条件防并发重复触发。"""
     from app.backend.db.base import get_async_session_maker

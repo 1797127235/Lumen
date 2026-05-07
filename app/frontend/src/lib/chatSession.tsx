@@ -1,12 +1,15 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from 'react'
-import { chatStream, getConversation } from './api'
+import { getConversation } from './api'
+import { ChatWS } from './wsClient'
+import { getUserId } from './userId'
 
 export type ChatMessage = {
   role: 'user' | 'assistant'
@@ -20,6 +23,7 @@ type ChatSessionValue = {
   conversationId: string | null
   error: string | null
   sendMessage: (text: string) => Promise<void>
+  cancelStreaming: () => void
   loadConversation: (id: string) => Promise<void>
   startNew: () => void
 }
@@ -48,45 +52,22 @@ function writeStoredConversationId(id: string | null) {
 export function ChatSessionProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
-  const [conversationId, setConversationId] = useState<string | null>(() => readStoredConversationId())
+  const [conversationId, setConversationId] = useState<string | null>(() =>
+    readStoredConversationId(),
+  )
   const [error, setError] = useState<string | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const loadingRef = useRef(false)
+  const wsRef = useRef<ChatWS | null>(null)
+  const completedRef = useRef(false)
+  const nextConversationIdRef = useRef<string | null>(null)
 
+  // 初始化 WebSocket
   useEffect(() => {
-    writeStoredConversationId(conversationId)
-  }, [conversationId])
-
-  // 卸载时 abort 进行中的请求
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-    }
-  }, [])
-
-  async function sendMessage(text: string) {
-    const content = text.trim()
-    if (!content || streaming || loadingRef.current) return
-
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content },
-      { role: 'assistant', content: '' },
-    ])
-    setStreaming(true)
-    setError(null)
-
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
-    let completed = false
-
-    let nextConversationId = conversationId
-    await chatStream(content, conversationId, {
-      signal: ctrl.signal,
+    const ws = new ChatWS({
       onToken: (delta, cid) => {
-        if (completed) return
-        if (!nextConversationId) {
-          nextConversationId = cid
+        if (completedRef.current) return
+        if (!nextConversationIdRef.current) {
+          nextConversationIdRef.current = cid
           setConversationId(cid)
         }
         if (!delta) return
@@ -100,11 +81,10 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         })
       },
       onDone: (cid, usage) => {
-        if (completed) return
-        completed = true
+        if (completedRef.current) return
+        completedRef.current = true
         setConversationId(cid)
         setStreaming(false)
-        abortRef.current = null
         if (usage) {
           setMessages((prev) => {
             const next = prev.slice()
@@ -116,12 +96,17 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           })
         }
       },
+      onCancelled: () => {
+        // 取消时强制结束流式状态，不检查 completedRef
+        completedRef.current = true
+        setStreaming(false)
+        // 取消时保留已生成内容，不删除
+      },
       onError: (message) => {
-        if (completed) return
-        completed = true
+        if (completedRef.current) return
+        completedRef.current = true
         setStreaming(false)
         setError(message)
-        abortRef.current = null
         // 移除末尾的空 assistant 消息
         setMessages((prev) => {
           const last = prev[prev.length - 1]
@@ -132,11 +117,46 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         })
       },
     })
-  }
+
+    ws.connect()
+    wsRef.current = ws
+
+    return () => {
+      ws.disconnect()
+    }
+  }, [])
+
+  useEffect(() => {
+    writeStoredConversationId(conversationId)
+  }, [conversationId])
+
+  const sendMessage = useCallback(
+    async function sendMessage(text: string) {
+      const content = text.trim()
+      if (!content || streaming || loadingRef.current) return
+
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content },
+        { role: 'assistant', content: '' },
+      ])
+      setStreaming(true)
+      setError(null)
+      completedRef.current = false
+      nextConversationIdRef.current = conversationId
+
+      wsRef.current?.send(content, conversationId ?? undefined, getUserId())
+    },
+    [streaming, conversationId],
+  )
+
+  const cancelStreaming = useCallback(function cancelStreaming() {
+    if (!streaming) return
+    wsRef.current?.cancel()
+    // onDone/onCancelled 回调会处理状态更新
+  }, [streaming])
 
   async function loadConversation(id: string) {
-    abortRef.current?.abort()
-    abortRef.current = null
     loadingRef.current = true
     setStreaming(false)
     setError(null)
@@ -162,8 +182,6 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
   }
 
   function startNew() {
-    abortRef.current?.abort()
-    abortRef.current = null
     loadingRef.current = false
     setMessages([])
     setConversationId(null)
@@ -179,6 +197,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         conversationId,
         error,
         sendMessage,
+        cancelStreaming,
         loadConversation,
         startNew,
       }}

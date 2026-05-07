@@ -11,7 +11,7 @@ from app.backend.config import apply_user_config, get_settings
 from app.backend.db.base import Base, get_engine, init_db
 from app.backend.logging_config import RequestLoggingMiddleware, get_logger, setup_logging
 from app.backend.models import *  # noqa — 确保所有模型注册到 Base
-from app.backend.routers import chat, config_router, health, memory
+from app.backend.routers import chat, chat_ws, config_router, health, memory
 
 logger = get_logger(__name__)
 
@@ -145,6 +145,7 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(health.router, prefix="/api")
 app.include_router(memory.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(chat_ws.router)
 app.include_router(config_router.router, prefix="/api")
 
 # ── 静态文件托管：dist/ 存在时始终挂载（开发/桌面/生产都可用） ──
