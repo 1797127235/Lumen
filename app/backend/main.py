@@ -33,16 +33,19 @@ async def lifespan(app: FastAPI):
     applied = apply_user_config(settings)
     if applied:
         logger.info("config.json 覆盖", keys=list(applied.keys()))
-    # Cognee 记忆层初始化（后台线程，不阻塞启动）
+    # Cognee 记忆层初始化（后台线程）+ cognify 定时循环（async task）
+    import asyncio
     import threading
 
-    from app.backend.agent.cognee_client import init_cognee
+    from app.backend.memory.cognee_admin import cognify_loop, init_cognee
 
     threading.Thread(target=init_cognee, daemon=True, name="cognee-init").start()
+    _cognee_tasks: list[asyncio.Task] = []
+    _cognee_tasks.append(asyncio.create_task(cognify_loop(), name="cognee-cognify-loop"))
 
     yield
     # 关闭时取消未完成的 Cognee 投影任务
-    from app.backend.services.lumen_memory import cancel_background_tasks
+    from app.backend.memory import cancel_background_tasks
 
     cancel_background_tasks()
     await engine.dispose()

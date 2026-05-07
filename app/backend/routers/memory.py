@@ -15,12 +15,11 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, text
 
-from app.backend.agent.cognee_client import get_cognee_status
 from app.backend.db.base import get_async_session_maker
+from app.backend.memory import get_memory
+from app.backend.memory.cognee_admin import get_cognee_status
+from app.backend.memory.projections.markdown import read_memory, sync_user_md_projection
 from app.backend.models.growth_event import GrowthEvent
-from app.backend.services import cognee_service
-from app.backend.services.md_projector import sync_user_md_projection
-from app.backend.services.memory_service import read_memory
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +126,9 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
         if get_cognee_status() == "ready":
             try:
                 # 索引清理是“尽力而为”：外部服务抖动不应导致 reset 失败
-                index_cleared = await cognee_service.clear_user_index(user_id)
+                from app.backend.memory.stores.semantic import SemanticStore
+
+                index_cleared = await SemanticStore().clear_index()
             except Exception as exc:
                 logger.warning("Cognee clear failed after reset: %s", exc)
 
@@ -178,8 +179,6 @@ async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
     _validate_user_id(user_id)
 
     try:
-        from app.backend.services.lumen_memory import get_memory
-
         result = await get_memory().rebuild(user_id)
         md_ok = result["md_success"]
         cognee_ok = result["cognee_success"]
@@ -209,9 +208,7 @@ async def search_memories(
     _validate_user_id(user_id)
 
     try:
-        from app.backend.services.lumen_memory import get_memory as _get_mem
-
-        memory = _get_mem()
+        memory = get_memory()
         items = await memory.recall(user_id, query, limit=limit)
         return [
             MemoryItem(
@@ -232,8 +229,6 @@ async def compensate_cognee(user_id: str = Query("demo_user")) -> dict:
     """补偿扫描：重试 Cognee 投影失败的事件。"""
     _validate_user_id(user_id)
     try:
-        from app.backend.services.lumen_memory import get_memory
-
         fixed = await get_memory().compensate_cognee(user_id)
         return {"user_id": user_id, "compensated": fixed}
     except Exception as exc:
@@ -256,76 +251,11 @@ async def delete_memory(event_id: str, user_id: str = Query("demo_user")) -> dic
             if event is None or event.user_id != user_id:
                 raise HTTPException(status_code=404, detail="记忆不存在")
 
-            # FTS5 DELETE 触发器在 SQLite 3.45 有兼容问题（SQL logic error）。
-            # 策略：删触发器 → 删主表 → drop + 重建 FTS → 重建触发器。
-            await db.execute(text("DROP TRIGGER IF EXISTS trg_growth_events_ad"))
-            await db.execute(text("DROP TRIGGER IF EXISTS trg_growth_events_tri_ad"))
-            await db.execute(text("DROP TRIGGER IF EXISTS trg_growth_events_au"))
-            await db.execute(text("DROP TRIGGER IF EXISTS trg_growth_events_tri_au"))
+            from app.backend.memory.stores.relational import GrowthEventRepository
 
+            repo = GrowthEventRepository(db)
             await db.execute(text("DELETE FROM growth_events WHERE id = :id"), {"id": event_id})
-
-            await db.execute(text("DROP TABLE IF EXISTS growth_events_fts"))
-            await db.execute(text("DROP TABLE IF EXISTS growth_events_fts_trigram"))
-            await db.execute(
-                text(
-                    "CREATE VIRTUAL TABLE growth_events_fts USING fts5("
-                    "event_type, entity_type, entity_id, payload_json)"
-                )
-            )
-            await db.execute(
-                text(
-                    "CREATE VIRTUAL TABLE growth_events_fts_trigram USING fts5("
-                    "event_type, entity_type, entity_id, payload_json, tokenize='trigram')"
-                )
-            )
-            await db.execute(
-                text(
-                    "INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json) "
-                    "SELECT rowid, event_type, entity_type, entity_id, COALESCE(payload_json, '') FROM growth_events"
-                )
-            )
-            await db.execute(
-                text(
-                    "INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json) "
-                    "SELECT rowid, event_type, entity_type, entity_id, COALESCE(payload_json, '') FROM growth_events"
-                )
-            )
-
-            # 重建触发器
-            await db.execute(
-                text(
-                    "CREATE TRIGGER trg_growth_events_ad AFTER DELETE ON growth_events BEGIN "
-                    "INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json); END"
-                )
-            )
-            await db.execute(
-                text(
-                    "CREATE TRIGGER trg_growth_events_tri_ad AFTER DELETE ON growth_events BEGIN "
-                    "INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json); END"
-                )
-            )
-            await db.execute(
-                text(
-                    "CREATE TRIGGER trg_growth_events_au AFTER UPDATE ON growth_events BEGIN "
-                    "INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json); "
-                    "INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json); END"
-                )
-            )
-            await db.execute(
-                text(
-                    "CREATE TRIGGER trg_growth_events_tri_au AFTER UPDATE ON growth_events BEGIN "
-                    "INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json); "
-                    "INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json) "
-                    "VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json); END"
-                )
-            )
-
+            await repo.rebuild_fts_index()
             await db.commit()
 
         # 删除事件后需要重新投影 `.md` 文件，确保用户画像与事件表一致。

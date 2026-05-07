@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.backend.agent.cognee_client import get_cognee_status
+from app.backend.memory.cognee_admin import get_cognee_status
 
 router = APIRouter(tags=["health"])
 

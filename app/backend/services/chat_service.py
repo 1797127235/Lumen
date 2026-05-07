@@ -96,7 +96,7 @@ async def _background_memory_review(
 
             # 如果审查 Agent 调了工具 → 触发投影
             if deps.pending_event_ids:
-                from app.backend.services.lumen_memory import get_memory
+                from app.backend.memory import get_memory
 
                 await get_memory().sync_projections(user_id, deps.pending_event_ids)
                 logger.info(
@@ -212,7 +212,7 @@ async def stream_chat(
                 # Agent 工具创建了事件 → commit 后触发投影
                 if deps.pending_event_ids:
                     try:
-                        from app.backend.services.lumen_memory import get_memory
+                        from app.backend.memory import get_memory
 
                         await get_memory().sync_projections(user_id, deps.pending_event_ids)
                     except Exception as e:

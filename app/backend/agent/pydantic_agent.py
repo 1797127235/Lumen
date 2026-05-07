@@ -105,6 +105,8 @@ def create_agent() -> Agent[LumenDeps, str]:
             "目标→memory_save('goals',方向,动机) | 技能→memory_save('skills',名称,程度)\n"
             "经历→memory_save('experiences',标题,描述) | 学校→update_profile() | 偏好→memory_save('preferences',名,内容)\n"
             "先保存再回答，一句话告知，不要只回「已记录」。\n\n"
+            "memory_search scope 选择：问技能/经历/画像→profile；问情绪/焦虑/内心→emotions；"
+            "问公司/行业/学长→reference；问历史对话→chat；跨领域或不确定→不传 scope。\n\n"
             "开场白：简短自然，不罗列功能，不问「有什么可以帮您」。"
             "示例：「我是 Lumen。你在哪个阶段，就从哪里说起。」"
         ),
@@ -127,7 +129,7 @@ def create_agent() -> Agent[LumenDeps, str]:
         parts = []
 
         # ── 结构化画像 + 语义召回 ──
-        from app.backend.services.lumen_memory import get_memory
+        from app.backend.memory import get_memory
 
         memory = get_memory()
         context = await memory.build_context(ctx.deps.user_id, user_input=ctx.deps.current_user_input)

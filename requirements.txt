@@ -28,7 +28,7 @@ pydantic-ai==1.89.1
 
 # 简历解析 + LLM 统一层
 markitdown>=0.0.1
-litellm>=1.30.0
+litellm>=1.30.0,<1.83.0
 
 # 记忆层：Cognee + Kuzu + LanceDB
 cognee==1.0.5
