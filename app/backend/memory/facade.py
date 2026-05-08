@@ -404,7 +404,7 @@ class LumenMemory:
     async def build_context(self, user_id: str, user_input: str | None = None) -> str:
         """构建 system prompt 记忆上下文。
 
-        1. 结构化画像（全量 .md files） — Frozen Snapshot 缓存
+        1. 分层注入快照（build_snapshot）— L0 固定块 + L1 近期块，5 分钟 TTL 缓存
         2. 如果提供 user_input，附加语义相关片段（过滤掉已在 L1 中的事件）
 
         输出用 <memory-context> 围栏标签包裹。

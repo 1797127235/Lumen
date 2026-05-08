@@ -236,23 +236,14 @@ async def build_snapshot(user_id: str) -> str:
         merge_skill_events,
     )
 
-    # ── 查询 1：全量事件（用于 L0 固定块）──
-    async with get_async_session_maker()() as db:
-        stmt_all = select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
-        result_all = await db.execute(stmt_all)
-        all_events = list(result_all.scalars().all())
-
-    # ── 查询 2：最近 30 天事件（用于 L1 近期块）──
+    # 一次全量查询，Python 内部分离 L0（固定块）和 L1（近期块）
     cutoff = datetime.now(UTC) - timedelta(days=_RECENT_MAX_AGE_DAYS)
     async with get_async_session_maker()() as db:
-        stmt_recent = (
-            select(GrowthEvent)
-            .where(GrowthEvent.user_id == user_id)
-            .where(GrowthEvent.created_at >= cutoff)
-            .order_by(GrowthEvent.created_at.desc())
-        )
-        result_recent = await db.execute(stmt_recent)
-        recent_events = list(result_recent.scalars().all())
+        stmt = select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
+        result = await db.execute(stmt)
+        all_events = list(result.scalars().all())
+
+    recent_events = [e for e in all_events if e.created_at and e.created_at >= cutoff]
 
     # 无数据时返回空标记
     if not all_events:
