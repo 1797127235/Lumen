@@ -77,11 +77,6 @@ export type MessageItem = {
   created_at: string;
 };
 
-export type SSEEvent =
-  | { type: "token"; content: string; conversation_id: string }
-  | { type: "done"; conversation_id: string; usage?: { input: number; output: number } }
-  | { type: "error"; message: string };
-
 function statusToZh(status: number): string {
   if (status === 401 || status === 403) return "让我先认识一下你.";
   if (status === 404) return "这条记录没找到.";
@@ -188,77 +183,79 @@ export function deleteConversation(conversation_id: string): Promise<{ deleted: 
   );
 }
 
-export type ChatStreamHandlers = {
-  onToken: (delta: string, conversationId: string) => void;
-  onDone: (conversationId: string, usage?: { input: number; output: number }) => void;
-  onError: (message: string) => void;
-  signal?: AbortSignal;
-};
+// ── Chat SSE ──
+
+export type SSEChatHandlers = {
+  onToken: (delta: string, conversationId: string) => void
+  onDone: (conversationId: string, usage?: { input: number; output: number }) => void
+  onTrace: (kind: 'call' | 'result', tool: string, content: string) => void
+  onError: (message: string) => void
+  signal?: AbortSignal
+}
 
 export async function chatStream(
   message: string,
   conversation_id: string | null,
-  h: ChatStreamHandlers,
+  h: SSEChatHandlers,
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: h.signal,
-      body: JSON.stringify({
-        message,
-        conversation_id: conversation_id ?? undefined,
-        user_id: getUserId(),
-      }),
-    });
-  } catch (e) {
-    if ((e as Error).name === "AbortError") return;
-    h.onError("信号断了一下,你再发一次试试?");
-    return;
-  }
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: h.signal,
+    body: JSON.stringify({
+      message,
+      conversation_id: conversation_id ?? undefined,
+      user_id: getUserId(),
+    }),
+  })
 
   if (!res.ok || !res.body) {
-    h.onError(statusToZh(res.status));
-    return;
+    h.onError(statusToZh(res.status))
+    return
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
 
-      let idx: number;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const line = raw.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) continue;
-        const payload = line.slice(5).trim();
-        if (!payload) continue;
-        let evt: SSEEvent;
-        try {
-          evt = JSON.parse(payload) as SSEEvent;
-        } catch {
-          continue;
-        }
-        if (evt.type === "token") {
-          h.onToken(evt.content, evt.conversation_id);
-        } else if (evt.type === "done") {
-          h.onDone(evt.conversation_id, evt.usage);
-        } else if (evt.type === "error") {
-          h.onError(evt.message);
-        }
+    let idx: number
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const raw = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      const line = raw.split('\n').find((l) => l.startsWith('data:'))
+      if (!line) continue
+      const payload = line.slice(5).trim()
+      if (!payload) continue
+
+      let ev: Record<string, unknown>
+      try { ev = JSON.parse(payload) } catch { continue }
+
+      switch (ev.type) {
+        case 'token':
+          h.onToken(String(ev.content ?? ''), String(ev.conversation_id ?? ''))
+          break
+        case 'trace':
+          h.onTrace(
+            String(ev.kind ?? 'call') as 'call' | 'result',
+            String(ev.tool ?? ''),
+            String(ev.content ?? ''),
+          )
+          break
+        case 'done':
+          h.onDone(
+            String(ev.conversation_id ?? ''),
+            ev.usage as { input: number; output: number } | undefined,
+          )
+          break
+        case 'error':
+          h.onError(String(ev.message ?? '未知错误'))
+          break
       }
-    }
-  } catch (e) {
-    if ((e as Error).name !== "AbortError") {
-      h.onError("我刚才走神了,你再问我一遍.");
     }
   }
 }

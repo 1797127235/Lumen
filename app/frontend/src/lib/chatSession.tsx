@@ -7,19 +7,12 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { getConversation } from './api'
-import { ChatWS } from './wsClient'
-import { getUserId } from './userId'
+import { chatStream, getConversation } from './api'
 
 export type TraceEntry = {
-  tool: string
-  args: string
-  result: string
-  done: boolean
-  thinking?: string  // thinking 的内容
-  duration?: string  // "6s"
+  tool: string; args: string; result: string; done: boolean
+  thinking?: string; duration?: string
 }
-
 export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
@@ -28,243 +21,185 @@ export type ChatMessage = {
 }
 
 type ChatSessionValue = {
-  messages: ChatMessage[]
-  streaming: boolean
-  conversationId: string | null
-  error: string | null
-  sendMessage: (text: string) => Promise<void>
-  cancelStreaming: () => void
-  loadConversation: (id: string) => Promise<void>
-  startNew: () => void
+  messages: ChatMessage[]; streaming: boolean; conversationId: string | null; error: string | null
+  sendMessage: (text: string) => Promise<void>; cancelStreaming: () => void
+  loadConversation: (id: string) => Promise<void>; startNew: () => void
 }
 
 const CHAT_CONV_STORAGE_KEY = 'lumen:chat-conversation-id'
-
 const ChatSessionContext = createContext<ChatSessionValue | null>(null)
 
-function readStoredConversationId(): string | null {
-  try {
-    return sessionStorage.getItem(CHAT_CONV_STORAGE_KEY)
-  } catch {
-    return null
-  }
+function stored(key: string): string | null {
+  try { return sessionStorage.getItem(key) } catch { return null }
+}
+function store(key: string, val: string | null) {
+  try { val ? sessionStorage.setItem(key, val) : sessionStorage.removeItem(key) } catch { /* */ }
 }
 
-function writeStoredConversationId(id: string | null) {
-  try {
-    if (id) sessionStorage.setItem(CHAT_CONV_STORAGE_KEY, id)
-    else sessionStorage.removeItem(CHAT_CONV_STORAGE_KEY)
-  } catch {
-    /* ignore storage failures */
-  }
-}
+type Background = { conversationId: string; messages: ChatMessage[]; streaming: boolean }
 
 export function ChatSessionProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
-  const [conversationId, setConversationId] = useState<string | null>(() =>
-    readStoredConversationId(),
-  )
+  const [conversationId, setConversationId] = useState<string | null>(() => stored(CHAT_CONV_STORAGE_KEY))
   const [error, setError] = useState<string | null>(null)
-  const loadingRef = useRef(false)
-  const wsRef = useRef<ChatWS | null>(null)
-  const completedRef = useRef(false)
-  const nextConversationIdRef = useRef<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const bgRef = useRef<Background | null>(null)
 
-  // 初始化 WebSocket
-  useEffect(() => {
-    const ws = new ChatWS({
-      onToken: (delta, cid) => {
-        if (completedRef.current) return
-        if (!nextConversationIdRef.current) {
-          nextConversationIdRef.current = cid
-          setConversationId(cid)
-        }
-        if (!delta) return
-        setMessages((prev) => {
-          const next = prev.slice()
-          const last = next[next.length - 1]
-          if (last && last.role === 'assistant') {
-            next[next.length - 1] = { ...last, content: last.content + delta }
-          }
-          return next
-        })
-      },
-      onDone: (cid, usage) => {
-        if (completedRef.current) return
-        completedRef.current = true
-        setConversationId(cid)
-        setStreaming(false)
-        if (usage) {
-          setMessages((prev) => {
-            const next = prev.slice()
-            const last = next[next.length - 1]
-            if (last && last.role === 'assistant') {
-              next[next.length - 1] = { ...last, usage }
-            }
-            return next
-          })
-        }
-      },
-      onCancelled: () => {
-        // 取消时强制结束流式状态，不检查 completedRef
-        completedRef.current = true
-        setStreaming(false)
-        // 取消时保留已生成内容，不删除
-      },
-      onError: (message) => {
-        if (completedRef.current) return
-        completedRef.current = true
-        setStreaming(false)
-        setError(message)
-        // 移除末尾的空 assistant 消息
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last && last.role === 'assistant' && !last.content) {
-            return prev.slice(0, -1)
-          }
-          return prev
-        })
-      },
-      onTrace: (kind, tool, content, duration) => {
-        if (completedRef.current) return
-        setMessages((prev) => {
-          const next = prev.slice()
-          const last = next[next.length - 1]
-          if (!last || last.role !== 'assistant') return prev
+  useEffect(() => { store(CHAT_CONV_STORAGE_KEY, conversationId) }, [conversationId])
 
-          const traces = last.traces ? [...last.traces] : []
+  // Route state updates to either React state (active) or background ref (detached stream)
+  function apply(fn: (prev: ChatMessage[]) => ChatMessage[]) {
+    if (bgRef.current) { bgRef.current.messages = fn(bgRef.current.messages) }
+    else { setMessages(fn) }
+  }
 
-          if (kind === 'call') {
-            traces.push({
-              tool,
-              args: content,
-              result: '',
-              done: false,
-              thinking: tool === 'thinking' ? '' : undefined,
-              duration: undefined,
-            })
-          } else {
-            // result: 匹配最后一个未完成的 trace
-            const idx = traces.map((t) => t.done).lastIndexOf(false)
-            if (idx >= 0) {
-              // 使用 trace 自己记录的 tool，而不是回调参数
-              if (traces[idx].tool === 'thinking') {
-                traces[idx] = {
-                  ...traces[idx],
-                  thinking: content,
-                  done: true,
-                  duration,
-                }
-              } else {
-                traces[idx] = {
-                  ...traces[idx],
-                  result: content,
-                  done: true,
-                }
-              }
-            }
-          }
+  const appendToken = useCallback((delta: string) =>
+    (prev: ChatMessage[]) => {
+      const next = prev.slice()
+      const last = next[next.length - 1]
+      if (last?.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + delta }
+      else next.push({ role: 'assistant' as const, content: delta })
+      return next
+    }, [])
 
-          next[next.length - 1] = { ...last, traces }
-          return next
-        })
-      },
-    })
+  const appendTrace = useCallback((kind: 'call' | 'result', tool: string, content: string) =>
+    (prev: ChatMessage[]) => {
+      const next = prev.slice()
+      const last = next[next.length - 1]
+      if (!last || last.role !== 'assistant') {
+        next.push({ role: 'assistant' as const, content: '', traces: [] })
+      }
+      const current = next[next.length - 1]
+      const traces = current.traces ? [...current.traces] : []
+      if (kind === 'call') traces.push({ tool, args: content, result: '', done: false })
+      else { const idx = traces.map(t => t.done).lastIndexOf(false); if (idx >= 0) traces[idx] = { ...traces[idx], result: content, done: true } }
+      next[next.length - 1] = { ...current, traces }
+      return next
+    }, [])
 
-    ws.connect()
-    wsRef.current = ws
+  const appendUsage = useCallback((usage: { input: number; output: number }) =>
+    (prev: ChatMessage[]) => {
+      const next = prev.slice()
+      const last = next[next.length - 1]
+      if (last?.role === 'assistant') next[next.length - 1] = { ...last, usage }
+      return next
+    }, [])
 
-    return () => {
-      ws.disconnect()
-    }
-  }, [])
+  const sendMessage = useCallback(async function sendMessage(text: string) {
+    const content = text.trim()
+    if (!content || abortRef.current) return
 
-  useEffect(() => {
-    writeStoredConversationId(conversationId)
-  }, [conversationId])
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const targetCid = conversationId
 
-  const sendMessage = useCallback(
-    async function sendMessage(text: string) {
-      const content = text.trim()
-      if (!content || streaming || loadingRef.current) return
-
-      setMessages((prev) => [
-        ...prev,
-        { role: 'user', content },
-        { role: 'assistant', content: '' },
-      ])
-      setStreaming(true)
-      setError(null)
-      completedRef.current = false
-      nextConversationIdRef.current = conversationId
-
-      wsRef.current?.send(content, conversationId ?? undefined, getUserId())
-    },
-    [streaming, conversationId],
-  )
-
-  const cancelStreaming = useCallback(function cancelStreaming() {
-    if (!streaming) return
-    wsRef.current?.cancel()
-    // onDone/onCancelled 回调会处理状态更新
-  }, [streaming])
-
-  async function loadConversation(id: string) {
-    loadingRef.current = true
-    setStreaming(false)
+    setMessages(prev => [...prev, { role: 'user', content }, { role: 'assistant', content: '' }])
+    setStreaming(true)
     setError(null)
 
     try {
+      await chatStream(content, targetCid, {
+        signal: ctrl.signal,
+        onToken: (delta, cid) => {
+          if (ctrl.signal.aborted) return
+          if (cid) setConversationId(prev => prev || cid)
+          if (delta) apply(appendToken(delta))
+        },
+        onDone: (_cid, usage) => {
+          if (ctrl.signal.aborted) return
+          if (bgRef.current) {
+            bgRef.current.streaming = false
+            if (usage) bgRef.current.messages = appendUsage(usage)(bgRef.current.messages)
+            if (conversationId === bgRef.current.conversationId) {
+              setMessages(bgRef.current.messages)
+              setStreaming(false)
+              setConversationId(bgRef.current.conversationId)
+              bgRef.current = null
+            }
+          } else {
+            setStreaming(false)
+            if (usage) apply(appendUsage(usage))
+          }
+        },
+        onTrace: (kind, tool, content) => {
+          if (!ctrl.signal.aborted) apply(appendTrace(kind, tool, content))
+        },
+        onError: (msg) => {
+          if (ctrl.signal.aborted) return
+          if (bgRef.current) { bgRef.current.streaming = false }
+          else {
+            setStreaming(false)
+            setError(msg)
+            setMessages(prev => { const last = prev[prev.length - 1]; return last?.role === 'assistant' && !last.content ? prev.slice(0, -1) : prev })
+          }
+        },
+      })
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError' && !bgRef.current) {
+        setStreaming(false)
+        setError('生成回复失败，请稍后重试')
+      }
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null
+    }
+  }, [conversationId, appendToken, appendTrace, appendUsage])
+
+  const cancelStreaming = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    bgRef.current = null
+    setStreaming(false)
+  }, [])
+
+  async function loadConversation(id: string) {
+    if (abortRef.current) return
+    if (id === conversationId && messages.length > 0) return
+
+    if (bgRef.current?.conversationId === id) {
+      setMessages(bgRef.current.messages)
+      setStreaming(bgRef.current.streaming)
+      setConversationId(bgRef.current.conversationId)
+      setError(null)
+      return
+    }
+
+    setStreaming(false)
+    setError(null)
+    try {
       const items = await getConversation(id)
-      setMessages(
-        items
-          .filter((item) => item.role === 'user' || item.role === 'assistant')
-          .map((item) => ({
-            role: item.role as 'user' | 'assistant',
-            content: item.content ?? '',
-          })),
-      )
+      setMessages(items.filter(i => i.role === 'user' || i.role === 'assistant').map(i => ({ role: i.role as 'user' | 'assistant', content: i.content ?? '' })))
       setConversationId(id)
     } catch (e) {
       setError((e as Error).message || '加载会话失败')
-      setConversationId(null)
-      setMessages([])
-    } finally {
-      loadingRef.current = false
+      if (!messages.length) { setConversationId(null); setMessages([]) }
     }
   }
 
   function startNew() {
-    loadingRef.current = false
-    setMessages([])
+    if (abortRef.current && conversationId) {
+      bgRef.current = { conversationId, messages: [], streaming: true }
+      abortRef.current = null
+    } else {
+      abortRef.current?.abort()
+      abortRef.current = null
+      bgRef.current = null
+    }
+    setMessages(prev => { if (bgRef.current) bgRef.current.messages = prev; return [] })
     setConversationId(null)
     setStreaming(false)
     setError(null)
   }
 
   return (
-    <ChatSessionContext.Provider
-      value={{
-        messages,
-        streaming,
-        conversationId,
-        error,
-        sendMessage,
-        cancelStreaming,
-        loadConversation,
-        startNew,
-      }}
-    >
+    <ChatSessionContext.Provider value={{ messages, streaming, conversationId, error, sendMessage, cancelStreaming, loadConversation, startNew }}>
       {children}
     </ChatSessionContext.Provider>
   )
 }
 
 export function useChatSession() {
-  const value = useContext(ChatSessionContext)
-  if (!value) {
-    throw new Error('useChatSession must be used within ChatSessionProvider')
-  }
-  return value
+  const c = useContext(ChatSessionContext)
+  if (!c) throw new Error('useChatSession must be used within ChatSessionProvider')
+  return c
 }

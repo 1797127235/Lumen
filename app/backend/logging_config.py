@@ -14,6 +14,7 @@ import logging
 import sys
 import uuid
 from contextvars import ContextVar
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +93,7 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
     # 配置文件 handler（JSON 格式，便于程序解析）
     if not json_logs:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
+        file_handler = RotatingFileHandler(
             LOG_FILE,
             maxBytes=10 * 1024 * 1024,  # 10MB
             backupCount=5,
@@ -106,28 +107,21 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
         )
         handlers.append(file_handler)
 
-    # 过滤噪音日志
-    _suppress_noisy_loggers()
+    # ── 噪音过滤器：handler 层面硬拦 sqlalchemy 低于 WARNING 的消息 ──
+    def _filter_sql(record: logging.LogRecord) -> bool:
+        return not (record.name.startswith("sqlalchemy") and record.levelno < logging.WARNING)
+
+    for h in handlers:
+        h.addFilter(_filter_sql)
+
+    # 其他噪音源直接设 level（这些不需要 filter，level 设置够用）
+    for name in ("uvicorn.access", "watchfiles", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     # 配置根日志器
     root_logger = logging.getLogger()
     root_logger.handlers = handlers
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-
-
-def _suppress_noisy_loggers() -> None:
-    """抑制过于详细的日志源。"""
-    noisy_loggers = [
-        "sqlalchemy.engine",  # SQL 查询日志
-        "sqlalchemy.pool",  # 连接池日志
-        "sqlalchemy.dialects",
-        "uvicorn.access",  # HTTP 访问日志（由我们自己的 middleware 替代）
-        "watchfiles",  # 文件监听日志
-        "httpx",  # HTTP 客户端日志
-        "httpcore",  # HTTP 核心日志
-    ]
-    for logger_name in noisy_loggers:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 # ── 请求日志中间件 ──────────────────────────────────────────

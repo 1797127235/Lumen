@@ -1,47 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { useChatSession } from '../lib/chatSession'
 import { parseThinkSegments } from '../lib/thinkSegments'
 
 export default function Chat() {
-  const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
   const {
     messages,
     streaming,
-    conversationId,
     error,
     sendMessage,
     cancelStreaming,
-    loadConversation,
   } = useChatSession()
   const endRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const fromUrl = searchParams.get('c')
-    if (fromUrl) {
-      if (fromUrl !== conversationId || messages.length === 0) {
-        void loadConversation(fromUrl)
-      }
-      return
-    }
-
-    if (conversationId) {
-      setSearchParams({ c: conversationId }, { replace: true })
-      if (messages.length === 0 && !streaming) {
-        void loadConversation(conversationId)
-      }
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (conversationId) {
-      setSearchParams({ c: conversationId }, { replace: true })
-    } else {
-      setSearchParams({}, { replace: true })
-    }
-  }, [conversationId, setSearchParams])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -55,8 +26,8 @@ export default function Chat() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[680px] flex-col px-md pt-xl pb-xl">
-      <div className="flex flex-1 flex-col gap-xl">
+    <div className="mx-auto flex h-screen max-w-[680px] flex-col px-md pt-xl pb-xl">
+      <div className="scroll-auto-hide flex min-h-0 flex-1 flex-col gap-xl overflow-y-auto">
         {messages.length === 0 && !streaming ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-md ink-fade-in">
             <p className="text-lg text-text">我是 Lumen，很高兴认识你。</p>
@@ -77,6 +48,10 @@ export default function Chat() {
             <UserBubble key={index} text={message.content} />
           ),
         )}
+
+        {streaming && messages[messages.length - 1]?.role !== 'assistant' ? (
+          <AssistantBubble text="" streaming={true} />
+        ) : null}
 
         {error ? <p className="text-sm text-danger">{error}</p> : null}
 

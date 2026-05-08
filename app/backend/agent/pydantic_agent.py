@@ -14,8 +14,10 @@ from app.backend.logging_config import get_logger
 logger = get_logger(__name__)
 
 # Agent 缓存：config hash 不变时复用实例，避免每次重新注册 tools/dynamic_prompt
+# _cached_agent_generation：每次重建递增，用于追踪请求是否使用陈旧 Agent
 _cached_agent: Agent[LumenDeps, str] | None = None
 _cached_config_hash: str = ""
+_cached_agent_generation: int = 0
 
 
 def _create_model() -> OpenAIChatModel:
@@ -148,10 +150,17 @@ def _config_fingerprint() -> str:
 
 def get_agent() -> Agent[LumenDeps, str]:
     """获取 Agent 实例（config hash 不变时复用缓存，减少重复注册开销）。"""
-    global _cached_agent, _cached_config_hash
+    global _cached_agent, _cached_config_hash, _cached_agent_generation
     fp = _config_fingerprint()
     if _cached_agent is not None and _cached_config_hash == fp:
         return _cached_agent
     _cached_agent = create_agent()
     _cached_config_hash = fp
+    _cached_agent_generation += 1
+    logger.info("Agent 已重建", generation=_cached_agent_generation)
     return _cached_agent
+
+
+def get_agent_generation() -> int:
+    """返回当前 Agent 代际号，用于请求执行期间检测 Agent 是否被重建。"""
+    return _cached_agent_generation

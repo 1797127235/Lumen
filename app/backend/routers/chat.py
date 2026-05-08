@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -19,8 +21,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 class ChatRequest(BaseModel):
     message: str
-    conversation_id: str | None = None  # 不传则新建会话
-    user_id: str = "demo_user"  # MVP 阶段先写死，后续接入 JWT
+    conversation_id: str | None = None
+    user_id: str = "demo_user"
 
 
 class ConversationSummary(BaseModel):
@@ -47,9 +49,19 @@ async def send_message(
     req: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """SSE 流式对话"""
+    """SSE 流式对话（Token/Done/Trace/Error）"""
+
+    async def sse_stream():
+        async for event in stream_chat(
+            db=db,
+            user_id=req.user_id,
+            user_input=req.message,
+            conversation_id=req.conversation_id,
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
     return StreamingResponse(
-        stream_chat(db, req.user_id, req.message, req.conversation_id),
+        sse_stream(),
         media_type="text/event-stream",
     )
 
