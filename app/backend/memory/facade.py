@@ -3,8 +3,9 @@
 保持 API 签名与旧 lumen_memory.py 兼容，内部使用新模块。
 Write:  remember() / remember_batch()
 Proj:   flush_projections() / sync_projections()
-Read:   recall() / build_context()
-Ops:    rebuild() / compensate_cognee()
+Read:   recall() / build_context() / list_events() / count_events() / get_memory_content()
+Ops:    delete_event() / delete_all_events() / reset() / rebuild() / compensate_cognee()
+Status: cognee_status()
 """
 
 from __future__ import annotations
@@ -190,6 +191,141 @@ class LumenMemory:
                 await db.rollback()
         invalidate_cache(user_id)
         return success
+
+    async def list_events(self, user_id: str) -> list[dict]:
+        """按时间倒序列出用户事件（含 key-value 去重）。
+
+        Returns:
+            [{"id": str, "memory": str, "created_at": str|None, "categories": [str]}, ...]
+        """
+        from sqlalchemy import select
+
+        _MERGE_TYPES = {"goal_updated", "preference_learned", "status_changed"}
+
+        async with get_async_session_maker()() as db:
+            result = await db.execute(
+                select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
+            )
+            events = result.scalars().all()
+
+        seen_keys: dict[str, set[str]] = {t: set() for t in _MERGE_TYPES}
+        items: list[dict] = []
+        for event in events:
+            if event.event_type in _MERGE_TYPES:
+                key = self._extract_kv_key(event.payload_json)
+                if key and key in seen_keys[event.event_type]:
+                    continue
+                if key:
+                    seen_keys[event.event_type].add(key)
+            items.append(
+                {
+                    "id": str(event.id),
+                    "memory": event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
+                    "created_at": event.created_at.isoformat() if event.created_at else None,
+                    "categories": [event.event_type] if event.event_type else [],
+                }
+            )
+        return items
+
+    @staticmethod
+    def _extract_kv_key(payload_json: str | None) -> str | None:
+        if not payload_json:
+            return None
+        try:
+            import json
+
+            payload = json.loads(payload_json)
+            return payload.get("key") if isinstance(payload, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def cognee_status() -> str:
+        """返回 Cognee 索引状态：'ready' | 'not_initialized' | 'error'。"""
+        from app.backend.memory.cognee_admin.cognify_loop import get_cognee_status
+
+        return get_cognee_status()
+
+    async def reset(self, user_id: str) -> dict:
+        """清空用户全部记忆（事件表 + .md + Cognee 索引）。
+
+        Returns:
+            {"deleted": int, "index_cleared": bool}
+        """
+        deleted = await self.delete_all_events(user_id)
+
+        index_cleared = False
+        if self.cognee_status() == "ready":
+            try:
+                store = SemanticStore()
+                index_cleared = await store.clear_index()
+            except Exception as exc:
+                logger.warning("Cognee clear failed after reset: %s", exc)
+
+        logger.info("Memory reset: user_id=%s, deleted=%d, index_cleared=%s", user_id, deleted, index_cleared)
+        return {"deleted": deleted, "index_cleared": index_cleared}
+
+    async def delete_event(self, user_id: str, event_id: str) -> tuple[bool, str | None]:
+        """删除单条事件并重建 FTS 索引 + .md 投影。"""
+        from sqlalchemy import text
+
+        async with get_async_session_maker()() as db:
+            event = await db.get(GrowthEvent, event_id)
+
+            if event is None:
+                return False, "记忆不存在"
+            if event.user_id != user_id:
+                return False, "无权删除该记忆"
+
+            repo = GrowthEventRepository(db)
+            try:
+                await repo.drop_fts_triggers()
+                await db.execute(text("DELETE FROM growth_events WHERE id = :id"), {"id": event_id})
+                await repo.rebuild_fts_index()
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                return False, "数据库操作失败"
+
+        await self.force_md_rebuild(user_id)
+        return True, None
+
+    async def count_events(self, user_id: str) -> int:
+        """统计用户的 GrowthEvent 数量。"""
+        from sqlalchemy import func as _func
+        from sqlalchemy import select
+
+        async with get_async_session_maker()() as db:
+            result = await db.execute(select(_func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
+            return result.scalar() or 0
+
+    async def delete_all_events(self, user_id: str) -> int:
+        """删除用户全部事件（含 FTS 重建 + .md 同步）。返回删除数。"""
+        from sqlalchemy import delete, select
+        from sqlalchemy import func as _func
+
+        async with get_async_session_maker()() as db:
+            result = await db.execute(select(_func.count(GrowthEvent.id)).where(GrowthEvent.user_id == user_id))
+            count = result.scalar() or 0
+            await db.execute(delete(GrowthEvent).where(GrowthEvent.user_id == user_id))
+            await db.commit()
+
+        # 同步 .md 到空状态
+        await sync_user_md_projection(user_id)
+        invalidate_cache(user_id)
+        return count
+
+    async def get_memory_content(self, user_id: str) -> str:
+        """读取用户 .md 画像内容，为空时自动触发投影同步。"""
+        from app.backend.memory.projections.markdown import read_memory
+        from app.backend.memory.projections.markdown import sync_user_md_projection as _sync_md
+
+        content = read_memory(user_id)
+        if not content.strip():
+            projected = await _sync_md(user_id)
+            if projected:
+                content = read_memory(user_id)
+        return content
 
     async def rebuild(self, user_id: str) -> dict:
         """全量重建 .md + Cognee 索引。"""
