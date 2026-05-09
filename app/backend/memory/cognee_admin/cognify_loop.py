@@ -67,7 +67,17 @@ def init_cognee() -> str:
 
         if embedding_api_key and embedding_base_url:
             _cognee.config.set_embedding_provider("openai")
-            _cognee.config.set_embedding_model(settings.embedding_model or "text-embedding-v4")
+            embedding_model = settings.embedding_model or "text-embedding-3-small"
+            # Cognee 内部调用 tiktoken.encoding_for_model() 做 chunking，
+            # DashScope 的 text-embedding-v4 等模型不在 tiktoken 映射表中，会抛 KeyError。
+            # 手动注册到 cl100k_base，保持 API 调用模型名不变。
+            try:
+                import tiktoken
+
+                tiktoken.encoding_for_model(embedding_model)
+            except KeyError:
+                tiktoken.model.MODEL_TO_ENCODING[embedding_model] = "cl100k_base"
+            _cognee.config.set_embedding_model(embedding_model)
             _cognee.config.set_embedding_api_key(embedding_api_key)
             _cognee.config.set_embedding_endpoint(embedding_base_url)
 

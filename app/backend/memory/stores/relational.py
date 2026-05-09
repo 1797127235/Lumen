@@ -197,3 +197,44 @@ class GrowthEventRepository(BaseRepository[GrowthEvent]):
         )
 
         logger.info("FTS index rebuilt")
+
+    async def get_batch(
+        self,
+        event_ids: list[str],
+        user_id: str | None = None,
+    ) -> list[GrowthEvent]:
+        """按 ID 批量查询事件。"""
+        if not event_ids:
+            return []
+        stmt = select(GrowthEvent).where(GrowthEvent.id.in_(event_ids))
+        if user_id:
+            stmt = stmt.where(GrowthEvent.user_id == user_id)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all_by_user(self, user_id: str) -> list[GrowthEvent]:
+        """查询用户的全部事件。"""
+        result = await self.db.execute(
+            select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_needing_projection(
+        self,
+        user_id: str,
+        projection_field: str = "projected_cognee_at",
+        limit: int = 50,
+    ) -> list[GrowthEvent]:
+        """查询尚未完成指定投影的事件（字段为 NULL）。"""
+        from sqlalchemy import null
+
+        field = getattr(GrowthEvent, projection_field)
+        stmt = (
+            select(GrowthEvent)
+            .where(GrowthEvent.user_id == user_id)
+            .where(field.is_(null()))
+            .order_by(GrowthEvent.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
