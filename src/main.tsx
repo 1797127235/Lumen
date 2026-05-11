@@ -9,6 +9,7 @@ import './index.css'
 import App from './App.tsx'
 import Chat from './pages/Chat.tsx'
 import Profile from './pages/Profile.tsx'
+import Knowledge from './pages/Knowledge.tsx'
 import Memories from './pages/Memories.tsx'
 import Settings from './pages/Settings.tsx'
 
@@ -23,6 +24,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="jd/:id" element={<Navigate to="/" replace />} />
           <Route path="targets" element={<Navigate to="/" replace />} />
           <Route path="targets/:id" element={<Navigate to="/" replace />} />
+          <Route path="knowledge" element={<Knowledge />} />
           <Route path="memories" element={<Memories />} />
           <Route path="settings" element={<Settings />} />
         </Route>

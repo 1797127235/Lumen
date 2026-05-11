@@ -9,11 +9,16 @@ import {
 } from 'react'
 import { chatStream, getConversation } from './api'
 
+function genId(): string {
+  return crypto.randomUUID()
+}
+
 export type TraceEntry = {
   tool: string; args: string; result: string; done: boolean
   thinking?: string; duration?: string
 }
 export type ChatMessage = {
+  id: string
   role: 'user' | 'assistant'
   content: string
   usage?: { input: number; output: number }
@@ -59,7 +64,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       const next = prev.slice()
       const last = next[next.length - 1]
       if (last?.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + delta }
-      else next.push({ role: 'assistant' as const, content: delta })
+      else next.push({ id: genId(), role: 'assistant' as const, content: delta })
       return next
     }, [])
 
@@ -68,7 +73,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       const next = prev.slice()
       const last = next[next.length - 1]
       if (!last || last.role !== 'assistant') {
-        next.push({ role: 'assistant' as const, content: '', traces: [] })
+        next.push({ id: genId(), role: 'assistant' as const, content: '', traces: [] })
       }
       const current = next[next.length - 1]
       const traces = current.traces ? [...current.traces] : []
@@ -94,7 +99,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     abortRef.current = ctrl
     const targetCid = conversationId
 
-    setMessages(prev => [...prev, { role: 'user', content }, { role: 'assistant', content: '' }])
+    setMessages(prev => [...prev, { id: genId(), role: 'user', content }, { id: genId(), role: 'assistant', content: '' }])
     setStreaming(true)
     setError(null)
 
@@ -168,7 +173,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     setError(null)
     try {
       const items = await getConversation(id)
-      setMessages(items.filter(i => i.role === 'user' || i.role === 'assistant').map(i => ({ role: i.role as 'user' | 'assistant', content: i.content ?? '' })))
+      setMessages(items.filter(i => i.role === 'user' || i.role === 'assistant').map(i => ({ id: genId(), role: i.role as 'user' | 'assistant', content: i.content ?? '' })))
       setConversationId(id)
     } catch (e) {
       setError((e as Error).message || '加载会话失败')

@@ -15,7 +15,7 @@
         "label": "main",
         "title": "Lumen",
         "width": 1100,
-        "height": 750,
+        "height": 850,
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true,

@@ -22,7 +22,7 @@ const OPEN_RE = /<think(?:ing)?\b[^>]*>/i
 const CLOSE_RE = /<\/think(?:ing)?>/i
 
 function trim(s: string): string {
-  return s.replace(/^\s+/, '').replace(/\s+$/, '')
+  return s.trim()
 }
 
 export function parseThinkSegments(input: string): ContentSegment[] {

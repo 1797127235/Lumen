@@ -1,34 +1,26 @@
 """Agent 系统提示快照 — 分层注入（固定块 + 近期上下文 + 语义召回）。
 
-L0 固定块：用户画像聚合（GrowthEvent → about_you.md / 字段拼接）
+L0 固定块：用户画像聚合（Profile GrowthEvent → about_you.md / 字段拼接）
 L1 近期上下文：最近对话的摘要（Conversation + Message，非原始事件）
-L2 语义召回：Cognee / FTS5 / .md 检索（由 facade.build_context 触发）
+L2 语义召回：FTS5 / Cognee 检索 Narrative 事件（由 facade.build_context 触发）
 
-L0 和 L1 使用不同的数据源（GrowthEvent vs Conversation），
-因此物理上不可能出现同一信息的聚合态和原始态重复注入。
+双管线架构：
+- Profile 事件（profile/skill/goal/preference/status）→ L0 only，不进搜索索引
+- Narrative 事件（experience/decision/document）→ L2 搜索索引
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from backend.db import get_async_session_maker
-from backend.domain.models import Conversation, GrowthEvent, Message
+from backend.domain.models import Conversation, Message
 from backend.logging_config import get_logger
 
 logger = get_logger(__name__)
-
-_FIXED_BUDGET = 800
-_FIXED_ALLOCATION = {
-    "identity": 300,
-    "goals": 200,
-    "skills": 200,
-    "preferences": 100,
-}
 
 _CONTEXT_MAX_CONVERSATIONS = 5
 _CONTEXT_MAX_MESSAGES_PER_CONV = 3
@@ -76,86 +68,18 @@ def get_context_conv_ids(user_id: str) -> set[str]:
     return entry.context_conv_ids
 
 
-def _truncate(text: str, limit: int, suffix: str = "…") -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - len(suffix)] + suffix
+# ── L0: 固定块（数据源 = about_you.md）───────────────────────────
 
 
-# ── L0: 固定块（画像聚合，数据源 = GrowthEvent）──────────────────
-
-
-def _build_fixed_block(
-    profile: dict,
-    goals: dict,
-    skills: dict,
-    preferences: dict,
-) -> str:
-    parts: list[str] = []
-    budget = _FIXED_BUDGET
-
-    identity_lines: list[str] = []
-    identity_lines.append("## 身份")
-    if profile.get("school_name"):
-        identity_lines.append(f"- 学校：{profile['school_name']}")
-    if profile.get("major"):
-        identity_lines.append(f"- 专业：{profile['major']}")
-    if profile.get("grade"):
-        identity_lines.append(f"- 年级：{profile['grade']}")
-    if profile.get("target_direction"):
-        identity_lines.append(f"- 目标：{profile['target_direction']}")
-    if profile.get("city"):
-        identity_lines.append(f"- 城市：{profile['city']}")
-    identity_text = "\n".join(identity_lines)
-    identity_truncated = _truncate(identity_text, _FIXED_ALLOCATION["identity"])
-    parts.append(identity_truncated)
-    budget -= len(identity_truncated)
-
-    if goals:
-        goals_lines = ["## 目标"]
-        for name, detail in list(goals.items())[:5]:
-            goals_lines.append(f"- {name}：{str(detail)[:60]}")
-        goals_text = "\n".join(goals_lines)
-        goals_truncated = _truncate(goals_text, _FIXED_ALLOCATION["goals"])
-        parts.append(goals_truncated)
-        budget -= len(goals_truncated)
-
-    if skills:
-        skills_lines = ["## 技能"]
-        for name, info in list(skills.items())[:8]:
-            level = info.get("level", "")
-            skills_lines.append(f"- {name}" + (f"（{level}）" if level else ""))
-        skills_text = "\n".join(skills_lines)
-        skills_truncated = _truncate(skills_text, _FIXED_ALLOCATION["skills"])
-        parts.append(skills_truncated)
-        budget -= len(skills_truncated)
-
-    if preferences and budget > 50:
-        pref_lines = ["## 偏好"]
-        for key, value in list(preferences.items())[:5]:
-            pref_lines.append(f"- {key}：{str(value)[:40]}")
-        pref_text = "\n".join(pref_lines)
-        pref_truncated = _truncate(pref_text, max(budget, _FIXED_ALLOCATION["preferences"]))
-        parts.append(pref_truncated)
-
-    return "\n\n".join(parts)
-
-
-def _build_fixed_block_v2(
-    user_id: str,
-    profile: dict,
-    goals: dict,
-    skills: dict,
-    preferences: dict,
-) -> str:
-    """L0 固定块 v2：优先使用 AI 综合画像，降级到字段拼接。"""
+def _build_fixed_block_v2(user_id: str) -> str:
+    """L0 固定块：仅使用 AI 综合画像（about_you.md）。"""
     from backend.memory.markdown import read_about_you
 
     about_you = read_about_you(user_id)
     if about_you and len(about_you.strip()) > 50:
         return f"## AI 对你的理解\n{about_you.strip()}"
 
-    return _build_fixed_block(profile, goals, skills, preferences)
+    return ""
 
 
 # ── L1: 近期上下文（数据源 = Conversation + Message）────────────
@@ -167,8 +91,8 @@ def _build_context_block(
 ) -> tuple[str, set[str]]:
     """从最近对话中提取上下文摘要。
 
-    与 L0 不同：L0 聚合 GrowthEvent 得到"用户是谁"，
-    L1 从对话记录提取"最近在聊什么" — 数据源完全分离，不存在重复。
+    与 L0 不同：L0 来自 about_you.md（「用户是谁」），
+    L1 从对话记录提取「最近在聊什么」— 数据源分离，避免重复注入。
     """
     if not conversations:
         return "", set()
@@ -267,43 +191,17 @@ async def build_snapshot(user_id: str) -> str:
     if cached and (datetime.now(UTC) - cached.created_at) < timedelta(minutes=_CACHE_TTL_MINUTES):
         return cached.content
 
-    from backend.memory.events_merger import (
-        merge_dict_events,
-        merge_profile_events,
-        merge_skill_events,
-    )
+    fixed_block = _build_fixed_block_v2(user_id)
 
     async with get_async_session_maker()() as db:
-        # L0: 从 GrowthEvent 聚合画像
-        stmt = select(GrowthEvent).where(GrowthEvent.user_id == user_id).order_by(GrowthEvent.created_at.desc())
-        result = await db.execute(stmt)
-        all_events = list(result.scalars().all())
-
-        # L1: 从 Conversation + Message 提取近期上下文
         conversations, messages_by_conv = await _fetch_recent_conversations(user_id, db)
 
-    if not all_events and not conversations:
+    if not fixed_block and not conversations:
         content = "【用户画像为空】"
         _cache_insert(
             _CacheEntry(user_id=user_id, content=content, created_at=datetime.now(UTC), context_conv_ids=set())
         )
         return content
-
-    # L0 固定块
-    fixed_block = ""
-    if all_events:
-        events_by_type: dict[str, list] = defaultdict(list)
-        for event in all_events:
-            events_by_type[event.event_type].append(event)
-
-        profile = merge_profile_events(events_by_type.get("profile_updated", []))
-        goals = merge_dict_events(events_by_type.get("goal_updated", []))
-        skills = merge_skill_events(
-            events_by_type.get("skill_added", []) + events_by_type.get("skill_level_changed", [])
-        )
-        preferences = merge_dict_events(events_by_type.get("preference_learned", []))
-
-        fixed_block = _build_fixed_block_v2(user_id, profile, goals, skills, preferences)
 
     # L1 近期上下文
     context_block, conv_ids = _build_context_block(conversations, messages_by_conv)

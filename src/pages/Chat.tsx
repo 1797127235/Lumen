@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { uploadKnowledgeFile } from '../lib/api'
 import { useChatSession } from '../lib/chatSession'
 import { parseThinkSegments } from '../lib/thinkSegments'
 
 export default function Chat() {
   const [draft, setDraft] = useState('')
+  const [uploadToast, setUploadToast] = useState('')
+  const toastTimer = useRef<number | null>(null)
   const {
     messages,
     streaming,
@@ -18,15 +21,40 @@ export default function Chat() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming])
 
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    }
+  }, [])
+
+  const showToast = useCallback((msg: string) => {
+    setUploadToast(msg)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setUploadToast(''), 3000)
+  }, [])
+
   async function send() {
     const text = draft.trim()
     if (!text || streaming) return
     setDraft('')
-    await sendMessage(text)
+    try {
+      await sendMessage(text)
+    } catch {
+      setDraft(text)
+    }
+  }
+
+  async function handleUpload(file: File) {
+    try {
+      const res = await uploadKnowledgeFile(file)
+      showToast(`已上传 ${res.filename}，正在处理...`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '上传失败')
+    }
   }
 
   return (
-    <div className="mx-auto flex h-screen max-w-[680px] flex-col px-md pt-xl pb-xl">
+    <div className="mx-auto flex h-full max-w-[680px] flex-col px-md pt-xl pb-xl">
       <div className="scroll-auto-hide flex min-h-0 flex-1 flex-col gap-xl overflow-y-auto">
         {messages.length === 0 && !streaming ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-md ink-fade-in">
@@ -38,14 +66,14 @@ export default function Chat() {
         {messages.map((message, index) =>
           message.role === 'assistant' ? (
             <AssistantBubble
-              key={index}
+              key={message.id}
               text={message.content}
               streaming={streaming && index === messages.length - 1}
               usage={message.usage}
               traces={message.traces}
             />
           ) : (
-            <UserBubble key={index} text={message.content} />
+            <UserBubble key={message.id} text={message.content} />
           ),
         )}
 
@@ -59,12 +87,16 @@ export default function Chat() {
       </div>
 
       <div className="mt-xl">
+        {uploadToast && (
+          <div className="mb-xs text-xs text-text-subtle">{uploadToast}</div>
+        )}
         <InputBox
           draft={draft}
           onChange={setDraft}
           onSend={send}
           streaming={streaming}
           onCancel={cancelStreaming}
+          onUpload={handleUpload}
         />
       </div>
     </div>
@@ -146,12 +178,14 @@ function InputBox({
   onSend,
   streaming,
   onCancel,
+  onUpload,
 }: {
   draft: string
   onChange: (value: string) => void
   onSend: () => void
   streaming: boolean
   onCancel: () => void
+  onUpload?: (file: File) => void
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const [phIndex, setPhIndex] = useState(0)
@@ -202,9 +236,34 @@ function InputBox({
       />
 
       <div className="flex items-center justify-between px-3 pt-0 pb-2">
-        <span className="select-none text-[11px] text-text-subtle/60">
-           {draft.length > 0 ? `${draft.length} 字` : 'Shift + Enter 换行'}
-        </span>
+        <div className="flex items-center gap-xs">
+          {onUpload && (
+            <>
+              <input
+                type="file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onUpload(file)
+                  e.currentTarget.value = ''
+                }}
+                className="hidden"
+                id="chat-file-upload"
+              />
+              <label
+                htmlFor="chat-file-upload"
+                className="cursor-pointer text-text-subtle/60 hover:text-text-muted transition-colors"
+                title="上传文件"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+              </label>
+            </>
+          )}
+          <span className="select-none text-[11px] text-text-subtle/60">
+            {draft.length > 0 ? `${draft.length} 字` : 'Shift + Enter 换行'}
+          </span>
+        </div>
 
         <button
           onClick={streaming ? onCancel : onSend}

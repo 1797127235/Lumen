@@ -8,8 +8,12 @@ from backend.agent.deps import LumenDeps
 
 
 def register_all_tools(agent: Agent[LumenDeps, str]) -> None:
-    from backend.agent import tool_memory_save, tool_memory_search, tool_profile
+    from backend.agent.tools import (
+        register_memory_save,
+        register_memory_search,
+        register_profile,
+    )
 
-    tool_memory_search.register(agent)
-    tool_memory_save.register(agent)
-    tool_profile.register(agent)
+    register_memory_search(agent)
+    register_memory_save(agent)
+    register_profile(agent)

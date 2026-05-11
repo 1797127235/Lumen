@@ -9,7 +9,9 @@ from pydantic_ai.models.openai import OpenAIChatModel
 
 from backend.agent.deps import LumenDeps
 from backend.config import get_settings
+from backend.domain.models import Conversation
 from backend.logging_config import get_logger
+from backend.memory import get_memory
 
 logger = get_logger(__name__)
 
@@ -41,14 +43,6 @@ def _create_model() -> OpenAIChatModel:
             "未配置 LLM API Key。请在设置页面配置 API Key，或在 .env 文件中设置 DASHSCOPE_API_KEY 或 LLM_API_KEY。"
         )
 
-    # DeepSeek OpenAI 兼容端点
-    if provider == "deepseek" and not base_url:
-        base_url = "https://api.deepseek.com"
-
-    # DashScope OpenAI 兼容端点
-    if provider == "dashscope" and not base_url:
-        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
     if not base_url:
         raise ValueError(
             f"未配置 LLM Base URL。请在设置页面配置 Base URL，"
@@ -57,7 +51,6 @@ def _create_model() -> OpenAIChatModel:
 
     logger.info("创建模型", provider=provider, model=model_name, base_url=base_url, has_key=bool(api_key))
 
-    # PydanticAI OpenAI Provider 使用纯模型名（不带 provider 前缀）
     model_id = model_name
 
     return OpenAIChatModel(
@@ -95,6 +88,9 @@ def create_agent() -> Agent[LumenDeps, str]:
             "先保存再回答，一句话告知，不要只回「已记录」。\n\n"
             "memory_search scope 选择：问技能/经历/画像→profile；问情绪/焦虑/内心→emotions；"
             "问公司/行业/学长→reference；问历史对话→chat；跨领域或不确定→不传 scope。\n"
+            "memory_search search_mode 选择：\n"
+            "  具体关键词（「Python」「实习」「项目」）→ search_mode='keyword'\n"
+            "  时间范围（「最近做了什么」「这周」「这几天」）→ search_mode='grep' + time_filter='recent_7d'\n"
             "调用任何工具后必须生成文字回复，不能以工具调用结束对话；"
             "memory_search 搜到内容时把结果告诉用户，搜不到时说明并给出建议。\n\n"
             "开场白：简短自然，不罗列功能，不问「有什么可以帮您」。"
@@ -111,16 +107,12 @@ def create_agent() -> Agent[LumenDeps, str]:
     # 语义上正确：上下文是系统级背景信息，模型能区分「指令+背景」和「用户请求」
     @agent.system_prompt
     async def dynamic_prompt(ctx: RunContext[LumenDeps]) -> str:
-        from backend.models import Conversation
-
         db = ctx.deps.db
         parts = []
 
         # ── 结构化画像 + 语义召回 ──
-        from backend.memory import get_memory
-
-        memory = get_memory()
-        context = await memory.build_context(ctx.deps.user_id, user_input=ctx.deps.current_user_input)
+        memory_instance = get_memory()
+        context = await memory_instance.build_context(ctx.deps.user_id, user_input=ctx.deps.current_user_input)
         if context.strip():
             ctx.deps.build_context_cache = context
             parts.append(context)

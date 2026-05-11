@@ -39,11 +39,6 @@ def init_cognee() -> str:
 
         llm_api_key = settings.llm_api_key or settings.dashscope_api_key
         llm_base_url = settings.llm_base_url
-        if not llm_base_url:
-            if settings.llm_provider == "dashscope":
-                llm_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            elif settings.llm_provider == "deepseek":
-                llm_base_url = "https://api.deepseek.com"
 
         if llm_api_key and llm_base_url:
             _cognee.config.set_llm_provider("openai")
@@ -53,8 +48,6 @@ def init_cognee() -> str:
 
         embedding_api_key = settings.embedding_api_key or llm_api_key
         embedding_base_url = settings.embedding_base_url
-        if not embedding_base_url and settings.embedding_provider == "dashscope":
-            embedding_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
         if embedding_api_key and embedding_base_url:
             _cognee.config.set_embedding_provider("openai")

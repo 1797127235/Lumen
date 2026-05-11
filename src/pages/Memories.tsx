@@ -90,7 +90,7 @@ export default function Memories() {
   const cogneeNotReady = stats !== null && stats.status !== "ready";
 
   return (
-    <div className="mx-auto max-w-[720px] px-md py-xl">
+    <div className="mx-auto max-w-[720px] px-md py-xl min-h-full">
       <div className="mb-lg flex items-center justify-between gap-md">
         <h1 className="text-xl font-han text-ink">记忆</h1>
         <button

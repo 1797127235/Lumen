@@ -1,17 +1,22 @@
 """记忆层门面 — LumenMemory 统一入口。
 
-保持 API 签名与旧 lumen_memory.py 兼容，内部使用新模块。
+保持 API 签名兼容，内部使用新模块。
 Write:  remember() / remember_batch()
 Proj:   flush_projections() / sync_projections()
 Read:   recall() / build_context() / list_events() / count_events() / get_memory_content()
-Ops:    delete_event() / delete_all_events() / reset() / rebuild() / compensate_cognee()
+        list_events_by_time_range() — grep 模式时间过滤（不依赖搜索）
+Ops:    delete_event() / delete_all_events() / reset() / rebuild()
 Status: cognee_status()
+
+双管线架构：
+- Profile 事件 → .md 投影 + L0 固定注入（不进搜索索引）
+- Narrative 事件 → FTS5 索引 + L2 按需召回（Cognee 保留供 Phase 2 外部数据）
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db import get_async_session_maker
 from backend.domain.models import GrowthEvent
 from backend.logging_config import get_logger
+from backend.memory.classifier import NARRATIVE_EVENT_TYPES
 from backend.memory.markdown import sync_user_md_projection
 from backend.memory.relational_store import GrowthEventRepository
 from backend.memory.search import MemoryItem, search_all
@@ -37,6 +43,48 @@ def cancel_background_tasks() -> None:
         if not task.done():
             task.cancel()
     _background_tasks.clear()
+
+
+# ── time_filter 解析（grep 模式）──────────────────────────────────
+
+_TIME_FILTER_DELTA: dict[str, timedelta] = {
+    "today": timedelta(days=0),
+    "yesterday": timedelta(days=1),
+    "recent_3d": timedelta(days=3),
+    "recent_7d": timedelta(days=7),
+    "recent_30d": timedelta(days=30),
+}
+
+
+def _parse_time_filter(time_filter: str | None) -> tuple[datetime | None, datetime | None]:
+    """解析 time_filter 为 UTC (time_start, time_end)。
+
+    统一使用 UTC，与 SQLite created_at func.now() 同一时钟。
+    """
+    if not time_filter:
+        return None, None
+
+    now = datetime.now(UTC)
+
+    if time_filter in _TIME_FILTER_DELTA:
+        delta = _TIME_FILTER_DELTA[time_filter]
+        if time_filter == "today":
+            return now.replace(hour=0, minute=0, second=0, microsecond=0), None
+        if time_filter == "yesterday":
+            end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return end - timedelta(days=1), end
+        return now - delta, None
+
+    if "~" in time_filter:
+        parts = time_filter.split("~", 1)
+        try:
+            start = datetime.strptime(parts[0].strip(), "%Y-%m-%d").replace(tzinfo=UTC)
+            end = datetime.strptime(parts[1].strip(), "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+            return start, end
+        except ValueError:
+            pass
+
+    return None, None
 
 
 class EventSpec(TypedDict, total=False):
@@ -149,56 +197,26 @@ class LumenMemory:
             logger.warning("AI understanding update skipped", user_id=user_id, error=str(exc))
 
     async def flush_projections(self, user_id: str, event_ids: list[str] | None = None) -> None:
-        """同步 .md 文件 + 异步投 Cognee。自开 session 路径调用。"""
+        """同步 .md 文件。自开 session 路径调用。
+
+        Profile 事件 → .md 投影 + AI 综合画像更新
+        Narrative 事件 → FTS5 触发器自动增量索引（无需手动同步）
+        """
         await sync_user_md_projection(user_id)
         invalidate_cache(user_id)
         if event_ids:
-            task = asyncio.create_task(self._sync_cognee(event_ids, user_id=user_id))
+            task = asyncio.create_task(self._update_understanding(user_id))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
-            task2 = asyncio.create_task(self._update_understanding(user_id))
-            _background_tasks.add(task2)
-            task2.add_done_callback(_background_tasks.discard)
 
     async def sync_projections(self, user_id: str, event_ids: list[str] | None = None) -> None:
         """外部 db 路径专用。调用方 commit 后调用。"""
         await sync_user_md_projection(user_id)
         invalidate_cache(user_id)
         if event_ids:
-            task = asyncio.create_task(self._sync_cognee(event_ids, user_id=user_id))
+            task = asyncio.create_task(self._update_understanding(user_id))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
-            task2 = asyncio.create_task(self._update_understanding(user_id))
-            _background_tasks.add(task2)
-            task2.add_done_callback(_background_tasks.discard)
-
-    async def _sync_cognee(self, event_ids: list[str], user_id: str | None = None) -> None:
-        """后台异步：将事件文本投影到 Cognee。"""
-        try:
-            async with get_async_session_maker()() as db:
-                repo = GrowthEventRepository(db)
-                events = await repo.get_batch(event_ids, user_id=user_id)
-
-            store = SemanticStore()
-            success_count = 0
-            for event in events:
-                content = store.build_event_content(event)
-                if not content:
-                    continue
-                ok = await store.ingest(
-                    content=content,
-                    doc_id=f"event:{event.id}",
-                    dataset="lumen_profile",
-                )
-                if ok:
-                    async with get_async_session_maker()() as db:
-                        event.projected_cognee_at = datetime.now(UTC)
-                        await db.commit()
-                    success_count += 1
-
-            logger.debug("Cognee projection done", success=success_count, total=len(events))
-        except Exception as exc:
-            logger.warning("Cognee projection skipped", count=len(event_ids) if event_ids else 0, error=str(exc))
 
     async def force_md_rebuild(self, user_id: str) -> bool:
         """强制全量重建 .md，不检查 dirty 标记。删除事件后调用。"""
@@ -358,11 +376,8 @@ class LumenMemory:
         return content
 
     async def rebuild(self, user_id: str) -> dict:
-        """全量重建 .md + Cognee 索引。"""
-        from backend.memory.cognify_loop import get_cognee_status
+        """全量重建 .md 投影 + FTS5 索引。"""
         from backend.memory.markdown import project_user_to_md
-
-        status = get_cognee_status()
 
         async with get_async_session_maker()() as db:
             md_success = await project_user_to_md(db, user_id)
@@ -373,50 +388,52 @@ class LumenMemory:
 
         invalidate_cache(user_id)
 
-        cognee_success: bool | None = None
-        index_cleared = False
-        if status == "ready":
-            store = SemanticStore()
-            index_cleared = await store.clear_index()
-            async with get_async_session_maker()() as db:
-                repo = GrowthEventRepository(db)
-                events = await repo.get_all_by_user(user_id)
-                for event in events:
-                    content = store.build_event_content(event)
-                    if content:
-                        await store.ingest(content=content, doc_id=f"event:{event.id}")
-            cognee_success = index_cleared
+        # FTS5 触发器自动维护，无需手动索引
+        return {"md_success": md_success}
 
-        return {
-            "md_success": md_success,
-            "cognee_success": cognee_success,
-            "index_cleared": index_cleared,
-        }
-
-    async def compensate_cognee(self, user_id: str, limit: int = 50) -> int:
-        """补偿扫描：重试 projected_cognee_at IS NULL 的事件。返回成功数。"""
-        from backend.memory.cognify_loop import get_cognee_status
-
-        if get_cognee_status() != "ready":
-            return 0
+    async def list_events_by_time_range(
+        self,
+        user_id: str,
+        time_start: datetime | None = None,
+        time_end: datetime | None = None,
+        limit: int = 200,
+    ) -> list[MemoryItem]:
+        """Grep 模式：按时间范围列出 Narrative 事件，不依赖搜索。
+        借鉴 akashic-agent 的 grep search_mode。
+        """
+        from sqlalchemy import select as _sel
 
         async with get_async_session_maker()() as db:
-            repo = GrowthEventRepository(db)
-            events = await repo.get_needing_projection(user_id, projection_field="projected_cognee_at", limit=limit)
-            if not events:
-                return 0
+            stmt = (
+                _sel(GrowthEvent)
+                .where(
+                    GrowthEvent.user_id == user_id,
+                    GrowthEvent.event_type.in_(NARRATIVE_EVENT_TYPES),
+                )
+                .order_by(GrowthEvent.created_at.desc())
+            )
+            if time_start:
+                stmt = stmt.where(GrowthEvent.created_at >= time_start)
+            if time_end:
+                stmt = stmt.where(GrowthEvent.created_at < time_end)
+            if limit:
+                stmt = stmt.limit(limit)
 
-            store = SemanticStore()
-            success_count = 0
-            for event in events:
-                content = store.build_event_content(event)
-                if content and await store.ingest(content=content, doc_id=f"event:{event.id}"):
-                    event.projected_cognee_at = datetime.now(UTC)
-                    success_count += 1
-            await db.commit()
+            result = await db.execute(stmt)
+            events = list(result.scalars().all())
 
-        logger.info("Cognee compensation done", user_id=user_id, retried=len(events), success=success_count)
-        return success_count
+        items: list[MemoryItem] = []
+        for event in events:
+            content = event.payload_json or f"{event.event_type}: {event.entity_type or ''}"
+            items.append(
+                MemoryItem(
+                    id=str(event.id),
+                    content=content[:500],
+                    created_at=event.created_at.isoformat() if event.created_at else None,
+                    categories=[event.event_type] if event.event_type else [],
+                )
+            )
+        return items
 
     async def recall(
         self,
@@ -424,27 +441,37 @@ class LumenMemory:
         query: str,
         limit: int = 10,
         datasets: list[str] | None = None,
+        *,
+        search_mode: str = "keyword",
+        time_filter: str | None = None,
     ) -> list[MemoryItem]:
-        """搜索记忆：Cognee 语义 → FTS5 全文 → .md 兜底。
+        """搜索记忆：FTS5 全文。
 
-        datasets=None 时 Cognee 搜全部 dataset。
+        search_mode:
+          - "keyword" (默认): FTS5 关键词匹配
+          - "grep": 时间范围过滤（不依赖搜索），配合 time_filter 使用
+
+        time_filter: 仅 grep 模式生效
+          - "today" | "yesterday" | "recent_3d" | "recent_7d" | "recent_30d"
+          - "YYYY-MM-DD~YYYY-MM-DD" 绝对范围
         """
+        if search_mode == "grep":
+            time_start, time_end = _parse_time_filter(time_filter)
+            return await self.list_events_by_time_range(user_id, time_start, time_end, limit=limit)
+
         return await search_all(user_id, query, limit=limit, datasets=datasets)
 
     async def build_context(self, user_id: str, user_input: str | None = None) -> str:
         """构建 system prompt 记忆上下文。
 
-        1. 分层注入快照（build_snapshot）— L0 固定块 + L1 近期对话上下文，5 分钟 TTL 缓存
-        2. 如果提供 user_input，附加语义相关片段（L2 与 L1 数据源不同，无需去重）
+        1. 分层注入快照（build_snapshot）— L0 Profile 固定块 + L1 近期对话，5 分钟 TTL
+        2. 如果提供 user_input，L2 语义召回 Narrative 事件（FTS5 keyword 搜索）
 
-        L0（GrowthEvent 聚合）和 L1（Conversation 摘要）使用不同数据源，
-        因此物理上不可能出现同一信息以聚合态和原始态重复注入。
-        输出用 <memory-context> 围栏标签包裹。
+        双管线：L0（Profile 事件聚合）和 L2（Narrative 事件搜索）数据源不同，
+        物理上不可能重复注入。
         """
         static_ctx = await build_snapshot(user_id)
 
-        # L2 语义召回：L2 数据源（GrowthEvent 向量/FTS5）与 L1（Conversation）不同，
-        # 不会重复，但保留 recent_ids 过滤以防极端情况。
         recent_ids = get_recent_event_ids(user_id)
 
         dynamic_parts: list[str] = []
@@ -452,14 +479,12 @@ class LumenMemory:
             try:
                 items = await self.recall(user_id, user_input, limit=5)
                 if items:
-                    lines = ["【相关记忆（语义检索）】"]
+                    lines = ["【相关记忆】"]
                     for item in items:
-                        # L2 item.id 是 event/cognee hash，L1 recent_ids 是 conv id，
-                        # 不会碰撞，此过滤仅作为防御性检查。
                         if item.id in recent_ids:
                             continue
                         lines.append(f"- {item.content[:300]}")
-                    if len(lines) > 1:  # 不只是标题行
+                    if len(lines) > 1:
                         dynamic_parts.append("\n".join(lines))
             except Exception:
                 pass

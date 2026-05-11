@@ -59,7 +59,8 @@
 html, body, #root {
   margin: 0;
   padding: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: var(--color-bg);
   color: var(--color-text);
 }
@@ -89,11 +90,17 @@ button, input, textarea {
   color: inherit;
   background: none;
   border: none;
-  outline: none;
   padding: 0;
 }
 
-button { cursor: pointer; }
+button { cursor: pointer; outline: none; }
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
 
 a {
   color: var(--color-ink);

@@ -152,6 +152,7 @@ export default function Sidebar() {
       {/* 页面导航 */}
       <div className="flex flex-col gap-2xs border-t border-border-soft pt-xs mt-xs">
         <NavLink to="/profile" className={navLinkClass}>画像</NavLink>
+        <NavLink to="/knowledge" className={navLinkClass}>文档管理</NavLink>
         <NavLink to="/memories" className={navLinkClass}>记忆</NavLink>
       </div>
 

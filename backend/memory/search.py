@@ -1,9 +1,9 @@
 """统一搜索层 — 从多个存储源召回记忆。
 
-优先级：Cognee 语义 → SQLite FTS5 全文
+主路径：FTS5 全文搜索（Narrative 事件 only）
+可选路径：Cognee 语义搜索（Phase 2 外部数据用）
 
-不再使用 .md 子串兜底 — 同一数据已在 FTS5 和 Cognee 中有索引，
-.md 是第三份副本，兜底意味着主流程不完善。"""
+Profile 事件不走搜索索引 — L0 固定注入已覆盖。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from backend.db import get_async_session_maker
 from backend.logging_config import get_logger
+from backend.memory.classifier import NARRATIVE_EVENT_TYPES
 from backend.memory.datasets import ALL_DATASETS
 
 logger = get_logger(__name__)
@@ -36,11 +37,13 @@ async def search_all(
     limit: int = 10,
     *,
     datasets: list[str] | None = None,
-    include_cognee: bool = True,
+    include_cognee: bool = False,
 ) -> list[MemoryItem]:
-    """多源搜索记忆。
+    """搜索 Narrative 事件记忆。
 
-    Cognee（语义）→ FTS5（全文）→ .md（子串兜底），三选二去重。
+    FTS5（全文）→ Cognee（语义，可选 Phase 2）。
+
+    include_cognee: 默认 False — Cognee 留作 Phase 2 外部数据接入。
     datasets=None 时 Cognee 搜全部 dataset。
     """
     seen: set[str] = set()
@@ -104,7 +107,7 @@ def _escape_fts5(query: str) -> str:
 
 
 async def _search_fts5(user_id: str, query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
-    """SQLite FTS5 全文搜索。"""
+    """SQLite FTS5 全文搜索 — 仅搜索 Narrative 事件。"""
     results: list[MemoryItem] = []
     try:
         fts_table = "growth_events_fts_trigram" if _CJK_RE.search(query) else "growth_events_fts"
@@ -113,7 +116,12 @@ async def _search_fts5(user_id: str, query: str, limit: int, seen: set[str]) -> 
             rows = (
                 await db.execute(
                     _fts_query(fts_table),
-                    {"uid": user_id, "q": safe_query, "lim": limit},
+                    {
+                        "uid": user_id,
+                        "etypes": tuple(NARRATIVE_EVENT_TYPES),
+                        "q": safe_query,
+                        "lim": limit,
+                    },
                 )
             ).all()
 
@@ -140,7 +148,9 @@ def _fts_query(table_name: str):
         SELECT ge.id, ge.payload_json, ge.event_type, ge.entity_type, ge.created_at
         FROM growth_events ge
         JOIN {table_name} fts ON fts.rowid = ge.rowid
-        WHERE ge.user_id = :uid AND {table_name} MATCH :q
+        WHERE ge.user_id = :uid
+          AND ge.event_type IN :etypes
+          AND {table_name} MATCH :q
         ORDER BY ge.created_at DESC
         LIMIT :lim
     """)

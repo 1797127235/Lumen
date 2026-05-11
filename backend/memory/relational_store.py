@@ -9,8 +9,8 @@ from typing import Any, Generic, TypeVar
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.domain.models import GrowthEvent
 from backend.logging_config import get_logger
-from backend.models import GrowthEvent
 
 logger = get_logger(__name__)
 

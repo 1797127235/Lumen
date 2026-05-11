@@ -1,5 +1,7 @@
 import { getUserId } from "./userId";
 
+const cachedUserId = getUserId();
+
 export type SkillItem = { name: string; level: string; context?: string | null };
 
 export type TargetStatus =
@@ -101,40 +103,40 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function getMemoryContent(): Promise<{ content: string }> {
   return http<{ content: string }>(
-    `/api/memory/me?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/memory/me?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
 export function resetMemory(): Promise<{ deleted: number }> {
   return http<{ deleted: number }>(
-    `/api/memory/reset?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/memory/reset?user_id=${encodeURIComponent(cachedUserId)}`,
     { method: "POST" },
   );
 }
 
 export function getBoard(): Promise<BoardResponse> {
   return http<BoardResponse>(
-    `/api/targets/board?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets/board?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
 export function getTarget(targetId: string): Promise<TargetDetail> {
   return http<TargetDetail>(
-    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
 /** 排队后台重新生成行动建议；返回当前详情，需轮询 getTarget 直至 agent_advice 更新 */
 export function regenerateTargetAdvice(targetId: string): Promise<TargetDetail> {
   return http<TargetDetail>(
-    `/api/targets/${encodeURIComponent(targetId)}/regenerate-advice?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets/${encodeURIComponent(targetId)}/regenerate-advice?user_id=${encodeURIComponent(cachedUserId)}`,
     { method: "POST" },
   );
 }
 
 export function createTarget(payload: TargetCreatePayload): Promise<TargetDetail> {
   return http<TargetDetail>(
-    `/api/targets?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets?user_id=${encodeURIComponent(cachedUserId)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -148,7 +150,7 @@ export function updateTarget(
   patch: TargetUpdatePayload,
 ): Promise<TargetDetail> {
   return http<TargetDetail>(
-    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(cachedUserId)}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -159,26 +161,26 @@ export function updateTarget(
 
 export function deleteTarget(targetId: string): Promise<{ deleted: boolean }> {
   return http<{ deleted: boolean }>(
-    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/targets/${encodeURIComponent(targetId)}?user_id=${encodeURIComponent(cachedUserId)}`,
     { method: "DELETE" },
   );
 }
 
 export function getChatHistory(limit = 20): Promise<ConversationSummary[]> {
   return http<ConversationSummary[]>(
-    `/api/chat/history?user_id=${encodeURIComponent(getUserId())}&limit=${limit}`,
+    `/api/chat/history?user_id=${encodeURIComponent(cachedUserId)}&limit=${limit}`,
   );
 }
 
 export function getConversation(conversation_id: string): Promise<MessageItem[]> {
   return http<MessageItem[]>(
-    `/api/chat/${encodeURIComponent(conversation_id)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/chat/${encodeURIComponent(conversation_id)}?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
 export function deleteConversation(conversation_id: string): Promise<{ deleted: boolean }> {
   return http<{ deleted: boolean }>(
-    `/api/chat/${encodeURIComponent(conversation_id)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/chat/${encodeURIComponent(conversation_id)}?user_id=${encodeURIComponent(cachedUserId)}`,
     { method: "DELETE" },
   );
 }
@@ -205,7 +207,7 @@ export async function chatStream(
     body: JSON.stringify({
       message,
       conversation_id: conversation_id ?? undefined,
-      user_id: getUserId(),
+      user_id: cachedUserId,
     }),
   })
 
@@ -331,7 +333,7 @@ export type MemoryStats = {
 
 export function getMemoryStats(): Promise<MemoryStats> {
   return http<MemoryStats>(
-    `/api/memory/stats?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/memory/stats?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
@@ -344,13 +346,199 @@ export type MemoryItem = {
 
 export function getMemoryList(): Promise<MemoryItem[]> {
   return http<MemoryItem[]>(
-    `/api/memory/list?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/memory/list?user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }
 
 export function deleteMemory(id: string): Promise<{ deleted: string }> {
   return http<{ deleted: string }>(
-    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(getUserId())}`,
+    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(cachedUserId)}`,
     { method: "DELETE" },
+  );
+}
+
+// ── Knowledge ──
+
+export interface KnowledgeFile {
+  id: string;
+  filename: string;
+  file_type: string;
+  size_bytes: number;
+  status: "pending" | "processing" | "ready" | "failed";
+  chunk_count: number;
+  preview: string | null;
+  error_message: string | null;
+  created_at: string | null;
+}
+
+export interface KnowledgeFileStatus {
+  id: string;
+  status: string;
+  chunk_count: number;
+  preview: string | null;
+  error_message: string | null;
+}
+
+export async function uploadKnowledgeFile(
+  file: File,
+): Promise<{ id: string; filename: string; status: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("user_id", cachedUserId);
+  const res = await fetch("/api/knowledge/upload", {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "上传失败" }));
+    throw new Error(err.detail || "上传失败");
+  }
+  return res.json();
+}
+
+export async function getKnowledgeFiles(
+  userId?: string,
+): Promise<{ files: KnowledgeFile[]; total: number }> {
+  const uid = userId || cachedUserId;
+  const res = await fetch(`/api/knowledge/list?user_id=${encodeURIComponent(uid)}`);
+  return res.json();
+}
+
+export async function getKnowledgeFileStatus(
+  fileId: string,
+  userId?: string,
+): Promise<KnowledgeFileStatus> {
+  const uid = userId || cachedUserId;
+  const res = await fetch(
+    `/api/knowledge/${encodeURIComponent(fileId)}/status?user_id=${encodeURIComponent(uid)}`,
+  );
+  return res.json();
+}
+
+export async function deleteKnowledgeFile(
+  fileId: string,
+  userId?: string,
+): Promise<void> {
+  const uid = userId || cachedUserId;
+  await fetch(
+    `/api/knowledge/${encodeURIComponent(fileId)}?user_id=${encodeURIComponent(uid)}`,
+    { method: "DELETE" },
+  );
+}
+
+// ── Resume Upload ──
+
+export type ResumeUploadResult = {
+  ok: boolean;
+  events: number;
+  profile: Record<string, unknown>;
+  skills: Record<string, unknown>[];
+  experiences: Record<string, unknown>[];
+};
+
+export async function uploadResume(file: File): Promise<ResumeUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("user_id", cachedUserId);
+  const res = await fetch("/api/memory/upload-resume", {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "上传失败" }));
+    throw new Error(err.detail || "上传失败");
+  }
+  return res.json();
+}
+
+// ── Structured Profile (重度改版配套) ──
+
+export type StructuredProfile = {
+  profile: Record<string, unknown>;
+  skills: Array<{
+    name: string;
+    level: string;
+    context?: string | null;
+    source?: string | null;
+  }>;
+  experiences: Array<{
+    title: string;
+    description: string;
+    period?: string | null;
+    tech_stack?: string | null;
+    role?: string | null;
+    source?: string | null;
+  }>;
+  goals: Record<string, string>;
+  preferences: Record<string, string>;
+  status: Record<string, string>;
+  decisions: Array<Record<string, unknown>>;
+};
+
+export function getStructuredProfile(): Promise<StructuredProfile> {
+  return http<StructuredProfile>(
+    `/api/memory/profile-structured?user_id=${encodeURIComponent(cachedUserId)}`,
+  );
+}
+
+export type ProfileUpdatePayload = {
+  profile?: Record<string, unknown>;
+  skills?: Array<Record<string, unknown>>;
+  experiences?: Array<Record<string, unknown>>;
+};
+
+export async function updateStructuredProfile(payload: ProfileUpdatePayload): Promise<{ updated: number; message: string }> {
+  return http<{ updated: number; message: string }>(
+    `/api/memory/profile-update?user_id=${encodeURIComponent(cachedUserId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+// ── AI Understanding (画像层新设计) ──
+
+export type AboutYouResponse = {
+  about_you: string;
+  updated_at: string;
+  patterns: Array<{
+    insight: string;
+    category: string;
+    evidence_count: number;
+    first_seen: string;
+    updated_at: string;
+  }>;
+  now_status: Record<string, string>;
+  journey: Array<{
+    id: string;
+    type: string;
+    content: string;
+    date: string | null;
+  }>;
+};
+
+export function getAIUnderstanding(): Promise<AboutYouResponse> {
+  return http<AboutYouResponse>(
+    `/api/memory/understanding?user_id=${encodeURIComponent(cachedUserId)}`,
+  );
+}
+
+export function refreshAIUnderstanding(): Promise<{ message: string; chars: number }> {
+  return http<{ message: string; chars: number }>(
+    `/api/memory/understanding/refresh?user_id=${encodeURIComponent(cachedUserId)}`,
+    { method: "POST" },
+  );
+}
+
+export function correctAIUnderstanding(text: string): Promise<{ message: string; chars: number }> {
+  return http<{ message: string; chars: number }>(
+    `/api/memory/understanding/correct?user_id=${encodeURIComponent(cachedUserId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
   );
 }

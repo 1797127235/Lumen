@@ -6,12 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from backend.api import chat
+from backend.api.routers import config, health, knowledge, memory
 from backend.config import apply_user_config, get_settings
 from backend.db import Base, get_engine, init_db
 from backend.db_migrations import migrate_sqlite
+from backend.domain.models import *  # noqa — 确保所有模型注册到 Base
 from backend.logging_config import RequestLoggingMiddleware, get_logger, setup_logging
-from backend.models import *  # noqa — 确保所有模型注册到 Base
-from backend.services import chat, config, health, memory
 
 logger = get_logger(__name__)
 
@@ -78,6 +79,7 @@ app.include_router(health.router, prefix="/api")
 app.include_router(memory.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
+app.include_router(knowledge.router, prefix="/api")
 
 # ── 静态文件托管：dist/ 存在时始终挂载（开发/桌面/生产都可用） ──
 if True:  # 始终启用（桌面/生产模式依赖此挂载）

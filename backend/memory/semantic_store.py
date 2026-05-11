@@ -9,6 +9,7 @@ from typing import Any
 
 from backend.config import USER_DATA_DIR
 from backend.logging_config import get_logger
+from backend.memory.classifier import is_indexable
 from backend.memory.datasets import DATASET_PROFILE
 
 logger = get_logger(__name__)
@@ -17,7 +18,7 @@ logger = get_logger(__name__)
 class SemanticStore:
     @staticmethod
     def build_event_content(event: Any) -> str | None:
-        from backend.models import GrowthEvent as _GE
+        from backend.domain.models import GrowthEvent as _GE
 
         if not isinstance(event, _GE) or not event.payload_json:
             return None
@@ -30,9 +31,8 @@ class SemanticStore:
         if not isinstance(payload, dict):
             return payload if isinstance(payload, str) else None
 
-        if event.event_type in ("profile_updated", "skill_added", "skill_level_changed"):
-            if event.event_type == "profile_updated" and payload.get("memory_md"):
-                return payload["memory_md"]
+        # Profile 事件不进 Cognee — L0 已注入，索引会语义重复
+        if not is_indexable(event.event_type):
             return None
 
         parts = [f"[{event.event_type}]"]
