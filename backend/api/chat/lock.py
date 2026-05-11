@@ -1,8 +1,11 @@
 """对话并发锁管理"""
 
 from __future__ import annotations
+
 import asyncio
+
 from backend.logging_config import get_logger
+
 logger = get_logger(__name__)
 
 _MAX_HISTORY_LOCKS = 128

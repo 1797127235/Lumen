@@ -1,11 +1,14 @@
 """PydanticAI Agent 流事件处理器"""
 
 from __future__ import annotations
+
 import json
 from typing import Any
+
 from backend.logging_config import get_logger
 
 logger = get_logger(__name__)
+
 
 class EventHandlers:
     """PydanticAI Agent 流事件处理器

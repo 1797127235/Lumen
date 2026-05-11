@@ -2,13 +2,18 @@
 从 services/chat_service.py 提取。当 conv 消息数达到阈值时，
 将窗口外的旧消息压缩为摘要并写入 Conversation.summary。
 """
+
 from __future__ import annotations
+
 import asyncio
 from typing import Any, cast
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.domain.models import Conversation, Message
 from backend.logging_config import get_logger
+
 logger = get_logger(__name__)
 _SUMMARY_WINDOW = 10
 _MAX_SUMMARY_LOCKS = 128
@@ -22,6 +27,7 @@ _SUMMARIZE_PROMPT = (
 )
 
 _summary_locks: dict[str, asyncio.Lock] = {}
+
 
 def _prune_summary_locks() -> None:
     """清理已释放的摘要锁。"""

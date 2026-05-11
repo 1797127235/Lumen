@@ -60,6 +60,7 @@ def get_recent_event_ids(user_id: str) -> set[str]:
     L2 去重现在基于对话 ID 而非事件 ID。
     """
     import warnings
+
     warnings.warn(
         "get_recent_event_ids is deprecated, use get_context_conv_ids instead",
         DeprecationWarning,

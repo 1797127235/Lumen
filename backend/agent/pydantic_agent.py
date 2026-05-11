@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
+
 from backend.agent.deps import LumenDeps
 from backend.config import get_settings
 from backend.domain.models import Conversation
