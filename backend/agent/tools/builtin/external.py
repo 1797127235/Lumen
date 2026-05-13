@@ -23,7 +23,7 @@ async def handle_data_source_search(args: dict[str, Any], ctx: ToolRuntimeContex
     if not query:
         return "[工具错误] 请提供搜索关键词。"
 
-    results = await _search_external_fts5(query, limit, set())
+    results = await _search_external_fts5(query, limit, set(), ctx.user_id)
     if not results:
         return "未找到相关外部文档。"
 
@@ -78,9 +78,9 @@ async def handle_data_source_get_item(args: dict[str, Any], ctx: ToolRuntimeCont
                 text("""
                     SELECT title, uri, content, connector_type, data_source_id, indexed_at
                     FROM external_items
-                    WHERE id = :id AND deleted_at IS NULL
+                    WHERE id = :id AND user_id = :uid AND deleted_at IS NULL
                 """),
-                {"id": item_id},
+                {"id": item_id, "uid": ctx.user_id},
             )
         ).first()
 

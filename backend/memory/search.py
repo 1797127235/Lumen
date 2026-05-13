@@ -8,6 +8,7 @@ Profile 事件不走搜索索引 — L0 固定注入已覆盖。"""
 from __future__ import annotations
 
 import re as _re
+from typing import Any
 
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -58,7 +59,7 @@ async def search_all(
         results.extend(await _search_fts5(user_id, query, limit, seen))
 
     if source_scope in ("external", "all"):
-        results.extend(await _search_external_fts5(query, limit, seen))
+        results.extend(await _search_external_fts5(query, limit, seen, user_id))
 
     return results[:limit]
 
@@ -168,7 +169,7 @@ def _fts_query(table_name: str):
     """)
 
 
-async def _search_external_fts5(query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
+async def _search_external_fts5(query: str, limit: int, seen: set[str], user_id: str | None = None) -> list[MemoryItem]:
     """FTS5 全文搜索 external_items — Phase 2 外部数据。
 
     CJK 短查询（1-2 字）走 LIKE fallback，因为 trigram tokenizer
@@ -182,9 +183,15 @@ async def _search_external_fts5(query: str, limit: int, seen: set[str]) -> list[
         is_cjk = bool(_CJK_RE.search(query))
         # CJK 短查询（< 3 CJK 字符）→ LIKE fallback
         if is_cjk and _count_cjk_chars(query) < 3:
-            return await _search_external_like(query, limit, seen)
+            return await _search_external_like(query, limit, seen, user_id)
 
         fts_table = "external_items_fts_trigram" if is_cjk else "external_items_fts"
+        params: dict[str, Any] = {"q": safe_query, "lim": limit}
+        user_filter = ""
+        if user_id:
+            user_filter = "AND ei.user_id = :uid AND (ds.status = 'active' OR ds.id IS NULL)"
+            params["uid"] = user_id
+
         async with get_async_session_maker()() as db:
             rows = (
                 await db.execute(
@@ -198,10 +205,11 @@ async def _search_external_fts5(query: str, limit: int, seen: set[str]) -> list[
                         JOIN {fts_table} fts ON fts.rowid = ei.rowid
                         WHERE {fts_table} MATCH :q
                           AND ei.deleted_at IS NULL
+                          {user_filter}
                         ORDER BY ei.indexed_at DESC
                         LIMIT :lim
                     """),
-                    {"q": safe_query, "lim": limit},
+                    params,
                 )
             ).all()
 
@@ -246,17 +254,23 @@ def _count_cjk_chars(query: str) -> int:
     return sum(1 for ch in query if _CJK_RE.match(ch))
 
 
-async def _search_external_like(query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
+async def _search_external_like(query: str, limit: int, seen: set[str], user_id: str | None = None) -> list[MemoryItem]:
     """LIKE fallback — CJK 短查询（1-2 字）时 trigram 无法命中。"""
     results: list[MemoryItem] = []
     # 安全转义 LIKE 通配符（用 ! 作为 ESCAPE 字符，避免反斜杠跨层转义问题）
     escaped = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     like_pattern = "%" + escaped + "%"
+    params: dict[str, Any] = {"q": like_pattern, "lim": limit}
+    user_filter = ""
+    if user_id:
+        user_filter = "AND ei.user_id = :uid AND (ds.status = 'active' OR ds.id IS NULL)"
+        params["uid"] = user_id
+
     try:
         async with get_async_session_maker()() as db:
             rows = (
                 await db.execute(
-                    text("""
+                    text(f"""
                         SELECT
                             ei.id, ei.content, ei.connector_type, ei.external_id,
                             ei.uri, ei.title, ei.indexed_at, ei.updated_at,
@@ -265,10 +279,11 @@ async def _search_external_like(query: str, limit: int, seen: set[str]) -> list[
                         LEFT JOIN data_sources ds ON ds.id = ei.data_source_id
                         WHERE ei.content LIKE :q ESCAPE '!'
                           AND ei.deleted_at IS NULL
+                          {user_filter}
                         ORDER BY ei.indexed_at DESC
                         LIMIT :lim
                     """),
-                    {"q": like_pattern, "lim": limit},
+                    params,
                 )
             ).all()
 
