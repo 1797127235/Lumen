@@ -45,37 +45,62 @@ async def lifespan(app: FastAPI):
     _cognee_tasks: list[asyncio.Task] = []
     _cognee_tasks.append(asyncio.create_task(cognify_loop(), name="cognee-cognify-loop"))
 
-    # ── 外部数据摄入（条件启动）──
-    _ingestion_task: asyncio.Task | None = None
-    if settings.external_data_enabled:
-        from backend.config import USER_DATA_DIR
-        from backend.ingestion import init_pipeline
-        from backend.ingestion.connectors.filesystem import FilesystemConnector
+    # ── 外部数据摄入（始终初始化，支持 API 创建的数据源）──
+    from backend.config import USER_DATA_DIR
+    from backend.ingestion import init_pipeline
 
-        store_dir = USER_DATA_DIR
-        store_dir.mkdir(exist_ok=True)
+    store_dir = USER_DATA_DIR
+    store_dir.mkdir(exist_ok=True)
+    pipeline = init_pipeline(store_dir)
 
-        pipeline = init_pipeline(store_dir)
+    async def _bootstrap_ingestion() -> None:
+        """等待 DB 就绪后，加载 data_sources 并启动扫描/监听。"""
+        try:
+            await asyncio.sleep(2)  # 等待 DB 完全初始化
+            from sqlalchemy import select
 
-        dirs = settings.external_data_dir_list
-        if dirs:
-            pipeline.register(FilesystemConnector(dirs))
+            from backend.data_sources.models import DataSource
+            from backend.data_sources.registry import create_connector
+            from backend.data_sources.service import create_data_source
+            from backend.db import get_async_session_maker
 
-            # 后台全量扫描（不阻塞启动）
-            async def _run_initial_scan(p) -> None:
-                try:
-                    await asyncio.sleep(2)  # 等待 DB 完全初始化
-                    summary = await p.run_full_scan()
-                    logger.info("ingestion.initial_scan_complete", summary=summary)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("ingestion.initial_scan_failed", error=str(exc))
+            async with get_async_session_maker()() as db:
+                # 查询 active data_sources
+                result = await db.execute(select(DataSource).where(DataSource.status == "active"))
+                sources = list(result.scalars().all())
 
-            _ingestion_task = asyncio.create_task(_run_initial_scan(pipeline), name="external-ingestion-initial-scan")
+                # 如果 DB 为空但 .env 有 EXTERNAL_DATA_DIRS，自动创建（向后兼容）
+                if not sources and settings.external_data_dir_list:
+                    dirs = settings.external_data_dir_list
+                    ds = await create_data_source(
+                        db,
+                        user_id="demo_user",
+                        name="本地文件夹",
+                        type="local_folder",
+                        config={"paths": dirs},
+                    )
+                    sources = [ds]
+
+                # 注册连接器
+                for ds in sources:
+                    connector = create_connector(ds)
+                    if connector:
+                        pipeline.register(connector)
+
+            # 后台全量扫描
+            summary = await pipeline.run_full_scan()
+            logger.info("ingestion.initial_scan_complete", summary=summary)
 
             # 启动文件监听
             pipeline.start_watching_all()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("ingestion.bootstrap_failed", error=str(exc))
+
+    _ingestion_task: asyncio.Task | None = asyncio.create_task(
+        _bootstrap_ingestion(), name="external-ingestion-bootstrap"
+    )
 
     yield
 
@@ -85,16 +110,14 @@ async def lifespan(app: FastAPI):
     cancel_background_tasks()
 
     # 清理外部数据摄入
-    if settings.external_data_enabled:
-        import contextlib
+    import contextlib
 
-        from backend.ingestion import get_pipeline
+    from backend.ingestion import get_pipeline
 
-        with contextlib.suppress(AssertionError):
-            # pipeline 未初始化（无目录配置时）— 静默跳过
-            get_pipeline().stop_watching_all()
-        if _ingestion_task and not _ingestion_task.done():
-            _ingestion_task.cancel()
+    with contextlib.suppress(AssertionError):
+        get_pipeline().stop_watching_all()
+    if _ingestion_task and not _ingestion_task.done():
+        _ingestion_task.cancel()
 
     await engine.dispose()
 

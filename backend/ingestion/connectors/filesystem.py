@@ -152,7 +152,7 @@ class FilesystemConnector(DataSourceConnector):
                 if not event.is_directory:
                     if self._is_supported(event.src_path):
                         doc_id = str(Path(event.src_path).resolve())
-                        asyncio.run_coroutine_threadsafe(on_delete(connector.source_id, doc_id), self._loop)
+                        asyncio.run_coroutine_threadsafe(on_delete(connector._data_source_id, doc_id), self._loop)
                     if self._is_supported(event.dest_path):
                         self._schedule_change(event.dest_path)
 

@@ -284,14 +284,16 @@ async def test_pipeline_handle_delete(migrated_db) -> None:
             await db.execute(
                 text(
                     """
-                    INSERT INTO external_items (id, source_id, doc_id, content, content_hash, metadata_json)
-                    VALUES (:id, :sid, :did, :content, :hash, :meta)
+                    INSERT INTO external_items (id, data_source_id, source_id, doc_id, external_id, content, content_hash, metadata_json)
+                    VALUES (:id, :dsid, :sid, :did, :eid, :content, :hash, :meta)
                 """
                 ),
                 {
                     "id": "fs:del",
+                    "dsid": "ds_filesystem",
                     "sid": "filesystem",
                     "did": "/x/del.md",
+                    "eid": "/x/del.md",
                     "content": "to be deleted",
                     "hash": "hdel",
                     "meta": json.dumps({}),
@@ -304,14 +306,14 @@ async def test_pipeline_handle_delete(migrated_db) -> None:
         assert pipeline._store.is_indexed("/x/del.md", "hdel")
 
         # 执行删除
-        await pipeline.handle_delete("filesystem", "/x/del.md")
+        await pipeline.handle_delete("ds_filesystem", "/x/del.md")
 
         # DB 中应无记录
         async with get_async_session_maker()() as db:
             rows = (
                 await db.execute(
-                    text("SELECT COUNT(*) FROM external_items WHERE doc_id = :did"),
-                    {"did": "/x/del.md"},
+                    text("SELECT COUNT(*) FROM external_items WHERE data_source_id = :dsid AND external_id = :eid"),
+                    {"dsid": "ds_filesystem", "eid": "/x/del.md"},
                 )
             ).scalar()
             assert rows == 0

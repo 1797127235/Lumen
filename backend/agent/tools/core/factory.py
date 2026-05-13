@@ -28,7 +28,6 @@ def create_tool_runtime() -> tuple[ToolRegistry, ToolDispatcher, ToolsetResolver
     Returns:
         (registry, dispatcher, resolver)
     """
-    from backend.config import get_settings
 
     registry = ToolRegistry()
     resolver = ToolsetResolver()
@@ -211,30 +210,28 @@ def create_tool_runtime() -> tuple[ToolRegistry, ToolDispatcher, ToolsetResolver
         )
     )
 
-    # ── 注册外部文档工具（条件注册）──
-    settings = get_settings()
-    if settings.external_data_enabled:
-        registry.register(
-            ToolDefinition(
-                name="search_external_docs",
-                description=(
-                    "搜索用户本地文档（Obsidian 笔记、Markdown 文件等）。"
-                    "当用户提到某个技术、项目或想法，但对话记忆中找不到时，"
-                    "可用此工具搜索外部笔记。"
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索关键词"},
-                        "limit": {"type": "integer", "description": "最多返回条数", "default": 5},
-                    },
-                    "required": ["query"],
+    # ── 注册外部文档工具 ──
+    registry.register(
+        ToolDefinition(
+            name="search_external_docs",
+            description=(
+                "搜索用户本地文档（Obsidian 笔记、Markdown 文件等）。"
+                "当用户提到某个技术、项目或想法，但对话记忆中找不到时，"
+                "可用此工具搜索外部笔记。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词"},
+                    "limit": {"type": "integer", "description": "最多返回条数", "default": 5},
                 },
-                category="builtin",
-                read_only=True,
-                handler=handle_search_external_docs,
-            )
+                "required": ["query"],
+            },
+            category="builtin",
+            read_only=True,
+            handler=handle_search_external_docs,
         )
+    )
 
     # ── 定义 toolsets ──
     resolver.register(
@@ -245,10 +242,8 @@ def create_tool_runtime() -> tuple[ToolRegistry, ToolDispatcher, ToolsetResolver
         ),
     )
 
-    # chat-core toolset 改为条件构建
-    chat_core_tools = ["memory_search", "memory_save", "get_profile", "update_profile"]
-    if settings.external_data_enabled:
-        chat_core_tools.append("search_external_docs")
+    # chat-core toolset
+    chat_core_tools = ["memory_search", "memory_save", "get_profile", "update_profile", "search_external_docs"]
 
     resolver.register(
         "chat-core",

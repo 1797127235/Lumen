@@ -96,7 +96,7 @@ class IngestionPipeline:
                     :id, :user_id, :ds_id, :ctype, :source_id, :doc_id, :ext_id,
                     :uri, :title, :content, :hash, :meta, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
-                ON CONFLICT(source_id, doc_id) DO UPDATE SET
+                ON CONFLICT(data_source_id, external_id) DO UPDATE SET
                     user_id = excluded.user_id,
                     data_source_id = excluded.data_source_id,
                     connector_type = excluded.connector_type,
@@ -132,19 +132,19 @@ class IngestionPipeline:
         logger.info("ingestion.file_changed", external_id=doc.external_id)
         await self._ingest_with_retry(doc)
 
-    async def handle_delete(self, connector_type: str, external_id: str) -> None:
+    async def handle_delete(self, data_source_id: str, external_id: str) -> None:
         """文件删除回调：从 external_items 移除并清理 store。"""
         async with get_async_session_maker()() as db:
             await db.execute(
-                text("DELETE FROM external_items WHERE source_id=:sid AND doc_id=:did"),
-                {"sid": connector_type, "did": external_id},
+                text("DELETE FROM external_items WHERE data_source_id=:dsid AND external_id=:eid"),
+                {"dsid": data_source_id, "eid": external_id},
             )
             await db.commit()
         with self._store._lock:
             self._store._state["indexed"].pop(external_id, None)
             self._store._state["failed"].pop(external_id, None)
             self._store._save()
-        logger.info("ingestion.deleted", connector_type=connector_type, external_id=external_id)
+        logger.info("ingestion.deleted", data_source_id=data_source_id, external_id=external_id)
 
     def start_watching_all(self) -> None:
         """启动所有连接器的增量监听。loop 在主线程获取，显式传入 watchdog 线程。"""

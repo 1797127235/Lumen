@@ -59,7 +59,7 @@ class DataSourceConnector(ABC):
         """启动增量监听。
         Args:
             on_change: 文件新增/修改时的回调，参数为 RawDocument。
-            on_delete: 文件删除时的回调，参数为 (connector_type, external_id)。
+            on_delete: 文件删除时的回调，参数为 (data_source_id, external_id)。
             loop: 主线程的事件循环，由调用方显式传入。
         """
 

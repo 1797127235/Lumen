@@ -154,23 +154,15 @@ def create_agent() -> Agent[LumenDeps, str]:
 
 
 def _config_fingerprint() -> str:
-    """计算完整配置指纹（LLM + 工具配置），用于判断是否需要重建 Agent。
-
-    包含外部数据配置，确保 external_data_enabled 变化时 Agent 和工具列表刷新。
-    """
+    """计算完整配置指纹（LLM + 工具配置），用于判断是否需要重建 Agent。"""
     s = get_settings()
-    raw = (
-        f"{s.llm_provider}|{s.llm_model}|{s.llm_api_key or s.dashscope_api_key}|{s.llm_base_url}"
-        f"|{s.external_data_enabled}|{','.join(s.external_data_dir_list)}"
-    )
+    raw = f"{s.llm_provider}|{s.llm_model}|{s.llm_api_key or s.dashscope_api_key}|{s.llm_base_url}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _tool_fingerprint() -> str:
     """计算工具配置指纹，用于判断是否需要重建工具运行时。"""
-    s = get_settings()
-    raw = f"{s.external_data_enabled}|{','.join(s.external_data_dir_list)}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+    return "v1"
 
 
 def get_agent() -> Agent[LumenDeps, str]:
