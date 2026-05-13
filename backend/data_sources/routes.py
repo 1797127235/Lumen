@@ -7,7 +7,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.data_sources.schemas import DataSourceCreate, DataSourceRead, DataSourceUpdate
 from backend.data_sources.service import (
     create_data_source,
     delete_data_source,
@@ -18,6 +17,7 @@ from backend.data_sources.service import (
     update_data_source,
 )
 from backend.db import get_db
+from backend.domain.schemas.data_source import DataSourceCreate, DataSourceRead, DataSourceUpdate
 from backend.ingestion import get_pipeline
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])

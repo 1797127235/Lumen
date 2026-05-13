@@ -1,5 +1,6 @@
 """领域模型 Schemas — 按领域拆分导出"""
 
+from backend.domain.schemas.data_source import DataSourceCreate, DataSourceRead, DataSourceUpdate
 from backend.domain.schemas.memory import ENTITY_TYPE_MAP, EVENT_PAYLOAD_MAP, EventType
 from backend.domain.schemas.profile import (
     DecisionPayload,
@@ -17,8 +18,13 @@ from backend.domain.schemas.profile import (
 )
 
 __all__ = [
-    # profile
+    "ENTITY_TYPE_MAP",
+    "EVENT_PAYLOAD_MAP",
+    "DataSourceCreate",
+    "DataSourceRead",
+    "DataSourceUpdate",
     "DecisionPayload",
+    "EventType",
     "ExperiencePayload",
     "KeyValuePayload",
     "PortfolioLink",
@@ -30,8 +36,4 @@ __all__ = [
     "SkillItem",
     "SkillPayload",
     "WorkExperienceItem",
-    # memory
-    "ENTITY_TYPE_MAP",
-    "EVENT_PAYLOAD_MAP",
-    "EventType",
 ]
