@@ -74,6 +74,55 @@ async def migrate_sqlite(conn) -> None:
         """INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
             SELECT rowid, event_type, entity_type, entity_id, payload_json FROM growth_events
             WHERE rowid NOT IN (SELECT rowid FROM growth_events_fts_trigram)""",
+        # ── external_items: 外部数据文档索引（Phase 2a）──
+        """CREATE TABLE IF NOT EXISTS external_items (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            doc_id TEXT NOT NULL,
+            content TEXT,
+            content_hash TEXT,
+            metadata_json TEXT,
+            indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source_id, doc_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_external_items_source_doc ON external_items (source_id, doc_id)",
+        """CREATE VIRTUAL TABLE IF NOT EXISTS external_items_fts USING fts5(
+            content
+        )""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_ai AFTER INSERT ON external_items BEGIN
+            INSERT INTO external_items_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_ad AFTER DELETE ON external_items BEGIN
+            DELETE FROM external_items_fts WHERE rowid = old.rowid;
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_au AFTER UPDATE ON external_items BEGIN
+            DELETE FROM external_items_fts WHERE rowid = old.rowid;
+            INSERT INTO external_items_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END""",
+        """INSERT INTO external_items_fts(rowid, content)
+            SELECT rowid, content FROM external_items
+            WHERE rowid NOT IN (SELECT rowid FROM external_items_fts)""",
+        """CREATE VIRTUAL TABLE IF NOT EXISTS external_items_fts_trigram USING fts5(
+            content,
+            tokenize='trigram'
+        )""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_tri_ai AFTER INSERT ON external_items BEGIN
+            INSERT INTO external_items_fts_trigram(rowid, content)
+            VALUES (new.rowid, new.content);
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_tri_ad AFTER DELETE ON external_items BEGIN
+            DELETE FROM external_items_fts_trigram WHERE rowid = old.rowid;
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_external_items_tri_au AFTER UPDATE ON external_items BEGIN
+            DELETE FROM external_items_fts_trigram WHERE rowid = old.rowid;
+            INSERT INTO external_items_fts_trigram(rowid, content)
+            VALUES (new.rowid, new.content);
+        END""",
+        """INSERT INTO external_items_fts_trigram(rowid, content)
+            SELECT rowid, content FROM external_items
+            WHERE rowid NOT IN (SELECT rowid FROM external_items_fts_trigram)""",
     ]:
         try:
             await conn.execute(text(sql))

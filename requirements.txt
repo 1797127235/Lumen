@@ -35,6 +35,9 @@ cognee==1.0.5
 kuzu==0.11.3
 lancedb==0.30.2
 
+# 外部数据接入：文件系统监听
+watchdog>=4.0.0
+
 # Dev / CI
 ruff==0.15.8
 pytest>=8.0.0

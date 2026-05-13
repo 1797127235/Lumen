@@ -44,11 +44,57 @@ async def lifespan(app: FastAPI):
     _cognee_tasks: list[asyncio.Task] = []
     _cognee_tasks.append(asyncio.create_task(cognify_loop(), name="cognee-cognify-loop"))
 
+    # ── 外部数据摄入（条件启动）──
+    _ingestion_task: asyncio.Task | None = None
+    if settings.external_data_enabled:
+        from backend.config import USER_DATA_DIR
+        from backend.ingestion import init_pipeline
+        from backend.ingestion.connectors.filesystem import FilesystemConnector
+
+        store_dir = USER_DATA_DIR
+        store_dir.mkdir(exist_ok=True)
+
+        pipeline = init_pipeline(store_dir)
+
+        dirs = settings.external_data_dir_list
+        if dirs:
+            pipeline.register(FilesystemConnector(dirs))
+
+            # 后台全量扫描（不阻塞启动）
+            async def _run_initial_scan(p) -> None:
+                try:
+                    await asyncio.sleep(2)  # 等待 DB 完全初始化
+                    summary = await p.run_full_scan()
+                    logger.info("ingestion.initial_scan_complete", summary=summary)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("ingestion.initial_scan_failed", error=str(exc))
+
+            _ingestion_task = asyncio.create_task(_run_initial_scan(pipeline), name="external-ingestion-initial-scan")
+
+            # 启动文件监听
+            pipeline.start_watching_all()
+
     yield
+
     # 关闭时取消未完成的 Cognee 投影任务
     from backend.memory import cancel_background_tasks
 
     cancel_background_tasks()
+
+    # 清理外部数据摄入
+    if settings.external_data_enabled:
+        import contextlib
+
+        from backend.ingestion import get_pipeline
+
+        with contextlib.suppress(AssertionError):
+            # pipeline 未初始化（无目录配置时）— 静默跳过
+            get_pipeline().stop_watching_all()
+        if _ingestion_task and not _ingestion_task.done():
+            _ingestion_task.cancel()
+
     await engine.dispose()
 
 

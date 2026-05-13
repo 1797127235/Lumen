@@ -110,3 +110,16 @@ class UpdateProfileArgs(TypedDict):
     bio: NotRequired[str]
     english_level: NotRequired[str]
     expected_salary: NotRequired[str]
+
+
+# ── 外部文档工具 ──
+
+
+class SearchExternalDocsArgs(TypedDict):
+    """search_external_docs 工具的输入参数。"""
+
+    query: str
+    """搜索关键词。"""
+
+    limit: NotRequired[int]
+    """最多返回条数。"""

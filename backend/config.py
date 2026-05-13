@@ -98,9 +98,6 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""  # 空 = 使用 llm_api_key
     embedding_base_url: str = ""
 
-    # ── 旧字段（保留，不参与 fallback）──
-    dashscope_api_key: str = ""
-
     # ── 数据库 ──
     database_url: str = ""
 
@@ -114,6 +111,18 @@ class Settings(BaseSettings):
     # 示例：AGENT_WORKSPACE_DIR=E:\\MyHub\\career-os
     agent_workspace_dir: str = ""
 
+    # ── 外部数据接入 ──
+    external_data_enabled: bool = False
+    external_data_dirs: str = ""
+    # 格式：逗号分隔的目录路径，如 "C:\\Obsidian,C:\\Notes"
+
+    @property
+    def external_data_dir_list(self) -> list[str]:
+        """解析逗号分隔的目录路径为列表。"""
+        if not self.external_data_dirs:
+            return []
+        return [d.strip() for d in self.external_data_dirs.split(",") if d.strip()]
+
     # ── 应用 ──
     debug: bool = True
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
@@ -124,6 +133,16 @@ class Settings(BaseSettings):
         if not self.database_url:
             _ensure_user_data_dir()
             self.database_url = f"sqlite+aiosqlite:///{USER_DATA_DIR}/lumen.db"
+        # 修复 Windows .env 中文编码问题：直接读取 .env 文件覆盖
+        env_path = Path(__file__).parents[1] / ".env"
+        if env_path.exists():
+            raw = env_path.read_text(encoding="utf-8")
+            for line in raw.splitlines():
+                if line.startswith("EXTERNAL_DATA_DIRS="):
+                    val = line[len("EXTERNAL_DATA_DIRS=") :].strip()
+                    if val:
+                        self.external_data_dirs = val
+                    break
 
 
 _settings: Settings | None = None

@@ -52,6 +52,7 @@ class PathPolicy:
     @classmethod
     def resolve(cls, raw_path: str, ctx: ToolRuntimeContext) -> tuple[Path | None, str]:
         """解析路径，返回 (resolved_path, error_message)。"""
+
         if not raw_path:
             return None, "路径不能为空"
 
@@ -109,6 +110,7 @@ class LoopGuardPolicy:
     @classmethod
     def check(cls, tool: ToolDefinition, ctx: ToolRuntimeContext, args: dict[str, Any]) -> tuple[bool, str]:
         """检查本次调用是否触发循环，返回 (allow, message)。"""
+
         calls = ctx.tool_state.get("_tool_calls", [])
         if not calls:
             return True, ""
@@ -148,6 +150,7 @@ class LoopGuardPolicy:
     @classmethod
     def record(cls, tool: ToolDefinition, ctx: ToolRuntimeContext, args: dict[str, Any], ok: bool) -> None:
         """记录本次调用。"""
+
         fingerprint = {
             "tool": tool.name,
             "path": args.get("path", ""),
@@ -204,7 +207,6 @@ class ResultPolicy:
 
 class ApprovalPolicy:
     """审批策略：检查是否需要用户确认。
-
     当前实现：写操作工具默认需要审批标记，实际审批逻辑在 UI 层。
     """
 

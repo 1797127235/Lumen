@@ -170,6 +170,7 @@ class MemorySearcher:
         *,
         search_mode: str = "keyword",
         time_filter: str | None = None,
+        source_scope: str = "narrative",  # "narrative" | "external" | "all"
     ) -> list[MemoryItem]:
         """搜索记忆：FTS5 全文。
 
@@ -180,12 +181,14 @@ class MemorySearcher:
         time_filter: 仅 grep 模式生效
           - "today" | "yesterday" | "recent_3d" | "recent_7d" | "recent_30d"
           - "YYYY-MM-DD~YYYY-MM-DD" 绝对范围
+
+        source_scope: 控制搜索范围 — narrative（默认）/ external / all
         """
         if search_mode == "grep":
             time_start, time_end = _parse_time_filter(time_filter)
             return await self.list_events_by_time_range(user_id, time_start, time_end, limit=limit)
 
-        return await search_all(user_id, query, limit=limit, datasets=datasets)
+        return await search_all(user_id, query, limit=limit, datasets=datasets, source_scope=source_scope)
 
     async def build_context(
         self,

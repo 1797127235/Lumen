@@ -38,6 +38,7 @@ async def search_all(
     *,
     datasets: list[str] | None = None,
     include_cognee: bool = False,
+    source_scope: str = "narrative",  # "narrative" | "external" | "all"
 ) -> list[MemoryItem]:
     """搜索 Narrative 事件记忆。
 
@@ -45,13 +46,19 @@ async def search_all(
 
     include_cognee: 默认 False — Cognee 留作 Phase 2 外部数据接入。
     datasets=None 时 Cognee 搜全部 dataset。
+    source_scope: 控制搜索范围 — narrative（默认，仅事件）/ external（仅外部文档）/ all（两者）
     """
     seen: set[str] = set()
     results: list[MemoryItem] = []
 
-    if include_cognee:
+    if include_cognee and source_scope in ("narrative", "all"):
         results.extend(await _search_cognee(query, limit, seen, datasets=datasets))
-    results.extend(await _search_fts5(user_id, query, limit, seen))
+
+    if source_scope in ("narrative", "all"):
+        results.extend(await _search_fts5(user_id, query, limit, seen))
+
+    if source_scope in ("external", "all"):
+        results.extend(await _search_external_fts5(query, limit, seen))
 
     return results[:limit]
 
@@ -159,3 +166,99 @@ def _fts_query(table_name: str):
         ORDER BY ge.created_at DESC
         LIMIT :lim
     """)
+
+
+async def _search_external_fts5(query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
+    """FTS5 全文搜索 external_items — Phase 2 外部数据。
+
+    CJK 短查询（1-2 字）走 LIKE fallback，因为 trigram tokenizer
+    至少需要 3 个字符才能命中。3 字及以上走 FTS5。
+    """
+    results: list[MemoryItem] = []
+    safe_query = _escape_fts5(query)
+    if not safe_query:
+        return results
+    try:
+        is_cjk = bool(_CJK_RE.search(query))
+        # CJK 短查询（< 3 CJK 字符）→ LIKE fallback
+        if is_cjk and _count_cjk_chars(query) < 3:
+            return await _search_external_like(query, limit, seen)
+
+        fts_table = "external_items_fts_trigram" if is_cjk else "external_items_fts"
+        async with get_async_session_maker()() as db:
+            rows = (
+                await db.execute(
+                    text(f"""
+                        SELECT ei.id, ei.content, ei.source_id, ei.doc_id, ei.indexed_at
+                        FROM external_items ei
+                        JOIN {fts_table} fts ON fts.rowid = ei.rowid
+                        WHERE {fts_table} MATCH :q
+                        ORDER BY ei.indexed_at DESC
+                        LIMIT :lim
+                    """),
+                    {"q": safe_query, "lim": limit},
+                )
+            ).all()
+
+            for row in rows:
+                eid = f"ext:{row[0]}"
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                created_at = row[4]
+                results.append(
+                    MemoryItem(
+                        id=eid,
+                        content=row[1][:500] if row[1] else "",
+                        created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
+                        categories=[f"external:{row[2]}"],
+                    )
+                )
+    except Exception as exc:
+        logger.warning("external_fts5 search failed", error=str(exc))
+    return results
+
+
+def _count_cjk_chars(query: str) -> int:
+    """统计查询中的 CJK 字符数。"""
+    return sum(1 for ch in query if _CJK_RE.match(ch))
+
+
+async def _search_external_like(query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
+    """LIKE fallback — CJK 短查询（1-2 字）时 trigram 无法命中。"""
+    results: list[MemoryItem] = []
+    # 安全转义 LIKE 通配符（用 ! 作为 ESCAPE 字符，避免反斜杠跨层转义问题）
+    escaped = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    like_pattern = "%" + escaped + "%"
+    try:
+        async with get_async_session_maker()() as db:
+            rows = (
+                await db.execute(
+                    text("""
+                        SELECT ei.id, ei.content, ei.source_id, ei.doc_id, ei.indexed_at
+                        FROM external_items ei
+                        WHERE ei.content LIKE :q ESCAPE '!'
+                        ORDER BY ei.indexed_at DESC
+                        LIMIT :lim
+                    """),
+                    {"q": like_pattern, "lim": limit},
+                )
+            ).all()
+
+            for row in rows:
+                eid = f"ext:{row[0]}"
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                created_at = row[4]
+                results.append(
+                    MemoryItem(
+                        id=eid,
+                        content=row[1][:500] if row[1] else "",
+                        created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
+                        categories=[f"external:{row[2]}"],
+                    )
+                )
+    except Exception as exc:
+        logger.warning("external LIKE search failed", error=str(exc))
+    return results
