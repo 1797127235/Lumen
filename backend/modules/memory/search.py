@@ -1,8 +1,7 @@
 """统一搜索层 — 从多个存储源召回记忆。
 
-主路径：FTS5 全文搜索（Narrative 事件 only）
-可选路径：Cognee 语义搜索（Phase 2 外部数据用）
-新增路径：DocumentIndexProvider 语义搜索（LanceDB/HRR）
+主路径：FTS5 全文搜索（Narrative 事件 + 外部文档）
+语义路径：DocumentIndexProvider（Cognee/LanceDB/HRR），统一覆盖全部数据
 
 Profile 事件不走搜索索引 — L0 固定注入已覆盖。"""
 
@@ -17,7 +16,6 @@ from sqlalchemy import text
 from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
 from backend.modules.memory.classifier import NARRATIVE_EVENT_TYPES
-from backend.modules.memory.datasets import ALL_DATASETS
 
 logger = get_logger(__name__)
 
@@ -45,65 +43,28 @@ async def search_all(
     limit: int = 10,
     *,
     datasets: list[str] | None = None,
-    include_cognee: bool = False,
     include_provider: bool = True,
     source_scope: str = "narrative",  # "narrative" | "external" | "all"
 ) -> list[MemoryItem]:
-    """搜索 Narrative 事件记忆。
+    """搜索记忆：FTS5（关键词）+ Provider（语义，统一）。
 
-    FTS5（全文）→ Cognee（语义，可选 Phase 2）→ Provider（语义，LanceDB/HRR）。
-
-    include_cognee: 默认 False — Cognee 语义搜索。
-    include_provider: 默认 True — DocumentIndexProvider 语义搜索（LanceDB/HRR）。
-    datasets=None 时 Cognee 搜全部 dataset。
+    include_provider: 默认 True — 通过 DocumentIndexProvider 做语义搜索。
     source_scope: 控制搜索范围 — narrative（默认，仅事件）/ external（仅外部文档）/ all（两者）
     """
     seen: set[str] = set()
     results: list[MemoryItem] = []
 
-    if include_cognee and source_scope in ("narrative", "external", "all"):
-        results.extend(await _search_cognee(query, limit, seen, datasets=datasets))
+    # Provider 语义搜索：统一覆盖 narrative + external
+    if include_provider:
+        results.extend(await _search_provider(query, limit, seen))
 
     if source_scope in ("narrative", "all"):
         results.extend(await _search_fts5(user_id, query, limit, seen))
 
     if source_scope in ("external", "all"):
         results.extend(await _search_external_fts5(query, limit, seen, user_id))
-        if include_provider:
-            results.extend(await _search_provider(query, limit, seen))
 
     return results[:limit]
-
-
-async def _search_cognee(
-    query: str,
-    limit: int,
-    seen: set[str],
-    *,
-    datasets: list[str] | None = None,
-) -> list[MemoryItem]:
-    """Cognee 语义搜索。datasets=None 时搜全部 dataset。"""
-    results: list[MemoryItem] = []
-    try:
-        from backend.modules.memory.semantic_store import SemanticStore
-
-        store = SemanticStore()
-        search_datasets = datasets if datasets is not None else ALL_DATASETS
-        texts = await store.search(query, datasets=search_datasets, top_k=limit)
-        for text_content in texts:
-            content = text_content.strip()
-            if not content or content in seen:
-                continue
-            seen.add(content)
-            results.append(
-                MemoryItem(
-                    id=f"cognee:{hash(content)}",
-                    content=content[:500],
-                )
-            )
-    except Exception as exc:
-        logger.warning("Cognee search skipped", error=str(exc))
-    return results
 
 
 _FTS5_SPECIAL_RE = _re.compile(r'[+\-*"()^@]')
@@ -182,7 +143,6 @@ def _fts_query(table_name: str):
 
 async def _search_external_fts5(query: str, limit: int, seen: set[str], user_id: str | None = None) -> list[MemoryItem]:
     """FTS5 全文搜索 external_items — Phase 2 外部数据。
-
     CJK 短查询（1-2 字）走 LIKE fallback，因为 trigram tokenizer
     至少需要 3 个字符才能命中。3 字及以上走 FTS5。
     """

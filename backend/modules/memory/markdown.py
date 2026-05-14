@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import USER_DATA_DIR
 from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
-from backend.modules.memory.constants import MD_CHAR_LIMITS
 from backend.modules.memory.events_merger import (
     _build_experiences_section,
     _build_skills_section,
@@ -27,6 +26,13 @@ from backend.modules.memory.events_merger import (
 from backend.modules.memory.models import GrowthEvent
 
 logger = get_logger(__name__)
+
+# .md 文件字符限制（原 constants.py，仅本文件使用）
+MD_CHAR_LIMITS: dict[str, int] = {
+    "memory": 8000,  # 合并后综合画像总上限
+    "about_you": 2000,  # AI 生成画像
+    "patterns": 2000,  # 模式洞察（预留）
+}
 
 MEMORY_CHAR_LIMIT = MD_CHAR_LIMITS["memory"]
 COMBINED_TOTAL_LIMIT = sum(MD_CHAR_LIMITS.values())  # ~14000，合并后总上限

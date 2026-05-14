@@ -34,7 +34,6 @@ async def handle_memory_search(args: dict[str, Any], ctx: ToolRuntimeContext) ->
         search_mode=search_mode,
         time_filter=time_filter,
         source_scope="external" if scope == "knowledge" else "narrative",
-        include_cognee=scope in ("knowledge", "reference", None),
     )
     if items:
         data = "\n".join(f"- [{item.categories[0] if item.categories else '?'}] {item.content[:300]}" for item in items)
