@@ -32,5 +32,8 @@ class NullProvider(DocumentIndexProvider):
     ) -> None:
         pass
 
+    async def clear(self) -> bool:
+        return True
+
     def get_tool_schemas(self) -> list[dict]:
         return []

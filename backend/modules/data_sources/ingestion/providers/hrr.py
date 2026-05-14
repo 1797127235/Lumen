@@ -156,6 +156,18 @@ class HRRProvider(DocumentIndexProvider):
         await asyncio.to_thread(self._persist)
         logger.info("hrr.document_synced", doc_id=doc_id, sentences=len(sentences))
 
+    async def clear(self) -> bool:
+        """清空 HRR 索引（内存 + 磁盘）。"""
+        self._documents.clear()
+        if self._db_path.exists():
+            try:
+                self._db_path.unlink()
+                logger.info("hrr.index_cleared", path=str(self._db_path))
+            except Exception as exc:
+                logger.error("hrr.clear_failed", error=str(exc))
+                return False
+        return True
+
     def _encode_text(self, text: str) -> np.ndarray | None:
         """文本 → HRR 向量。"""
         words = self._tokenize(text)

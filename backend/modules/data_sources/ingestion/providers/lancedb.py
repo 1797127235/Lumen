@@ -130,6 +130,18 @@ class LanceDBProvider(DocumentIndexProvider):
         self._table.add(rows)
         logger.info("lancedb.document_synced", doc_id=doc_id, chunks=len(rows))
 
+    async def clear(self) -> bool:
+        """清空 LanceDB 表。"""
+        try:
+            if self._table is not None:
+                self._db.drop_table(self._table_name, ignore_missing=True)
+                self._table = None
+            logger.info("lancedb.index_cleared", table=self._table_name)
+            return True
+        except Exception as exc:
+            logger.error("lancedb.clear_failed", error=str(exc))
+            return False
+
     def _chunk_text(self, text: str, chunk_size: int = 512, overlap: int = 50) -> list[str]:
         """简单 overlap 分块。"""
         return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]

@@ -8,7 +8,6 @@ from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
 from backend.modules.memory.markdown import sync_user_md_projection
 from backend.modules.memory.models import GrowthEvent
-from backend.modules.memory.semantic_store import SemanticStore
 from backend.modules.memory.snapshot import invalidate_cache
 
 logger = get_logger(__name__)
@@ -148,12 +147,13 @@ class ProjectionManager:
         deleted = await self.delete_all_events(user_id)
 
         index_cleared = False
-        if self.cognee_status() == "ready":
-            try:
-                store = SemanticStore()
-                index_cleared = await store.clear_index()
-            except Exception as exc:
-                logger.warning("Cognee clear failed after reset: %s", exc)
+        try:
+            from backend.modules.data_sources.ingestion.document_index_provider import get_document_index_provider
+
+            provider = get_document_index_provider()
+            index_cleared = await provider.clear()
+        except Exception as exc:
+            logger.warning("Provider clear failed after reset: %s", exc)
 
         logger.info("Memory reset: user_id=%s, deleted=%d, index_cleared=%s", user_id, deleted, index_cleared)
         return {"deleted": deleted, "index_cleared": index_cleared}

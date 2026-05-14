@@ -55,6 +55,10 @@ class DocumentIndexProvider(ABC):
         """Provider 可以暴露自己的工具给 Agent。默认空列表。"""
         return []
 
+    async def clear(self) -> bool:
+        """清空所有索引数据。返回是否成功。默认空操作。"""
+        return True
+
     async def handle_tool_call(self, name: str, args: dict) -> str:
         """处理 Agent 的工具调用。默认抛异常。"""
         raise NotImplementedError(f"Tool {name} not supported by {self.name}")
