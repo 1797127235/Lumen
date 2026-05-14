@@ -9,9 +9,9 @@ import './index.css'
 import App from './App.tsx'
 import Chat from './pages/Chat.tsx'
 import Profile from './pages/Profile.tsx'
-import Knowledge from './pages/Knowledge.tsx'
 import Memories from './pages/Memories.tsx'
-import Settings from './pages/Settings.tsx'
+
+import KnowledgeBase from './pages/KnowledgeBase.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -24,9 +24,9 @@ createRoot(document.getElementById('root')!).render(
           <Route path="jd/:id" element={<Navigate to="/" replace />} />
           <Route path="targets" element={<Navigate to="/" replace />} />
           <Route path="targets/:id" element={<Navigate to="/" replace />} />
-          <Route path="knowledge" element={<Knowledge />} />
           <Route path="memories" element={<Memories />} />
-          <Route path="settings" element={<Settings />} />
+
+          <Route path="knowledge-base" element={<KnowledgeBase />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useSearchParams } from 'react-router-dom'
 import { ChatSessionProvider, useChatSession } from './lib/chatSession'
 import Sidebar from './components/Sidebar'
+import Settings from './pages/Settings'
 
 function ChatUrlSync() {
   const loc = useLocation()
@@ -27,6 +28,14 @@ function ChatUrlSync() {
 }
 
 export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    const handler = () => setSettingsOpen(true)
+    window.addEventListener('lumen-open-settings', handler)
+    return () => window.removeEventListener('lumen-open-settings', handler)
+  }, [])
+
   return (
     <ChatSessionProvider>
       <ChatUrlSync />
@@ -34,6 +43,7 @@ export default function App() {
         <Sidebar />
         <main className="flex-1 min-w-0 h-full overflow-y-auto"><Outlet /></main>
       </div>
+      <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </ChatSessionProvider>
   )
 }

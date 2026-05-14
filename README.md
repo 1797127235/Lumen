@@ -38,11 +38,16 @@ pip install -r requirements.txt
 #   LLM_API_KEY=your-key
 # 方式二：启动后在设置页填写
 
-# 启动桌面应用（自动启动 Python 后端 + Vite 前端 + Tauri 窗口）
+# 方式一：Web 本地开发
+# Windows: 双击 start.bat
+# PowerShell: .\start.ps1
+# 打开 http://localhost:5173
+
+# 方式二：启动桌面应用（自动拉起 Python 后端 + Vite 前端 + Tauri 窗口）
 cargo tauri dev
 ```
 
-一行命令，全部自动拉起。Python 后端作为 sidecar 子进程由 Rust 管理生命周期，关闭窗口自动结束。
+桌面模式下，Python 后端作为 sidecar 子进程由 Rust 管理生命周期，关闭窗口自动结束。
 
 
 ## 架构
@@ -88,6 +93,18 @@ cargo tauri dev
 | 记忆 | growth_events → .md + Cognee | 事件溯源 + 语义索引 |
 
 ---
+
+## 项目结构
+
+```
+backend/          FastAPI 后端（Agent、API、Application、Domain、Memory、Ingestion）
+src/              React 19 前端（Vite + Tailwind CSS 4）
+src-tauri/        Tauri v2 桌面壳（Rust）
+tests/            pytest 测试用例
+docs/             设计文档与 Story 记录
+```
+
+详见 [`AGENTS.md`](AGENTS.md) 了解完整的文件树、API 列表和架构决策。
 
 ## 开发
 

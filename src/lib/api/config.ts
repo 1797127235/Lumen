@@ -1,4 +1,4 @@
-import { cachedUserId, http } from "./core";
+import { http } from "./core";
 
 export type Config = {
   // LLM

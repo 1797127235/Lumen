@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db import Base, get_async_session_maker, get_db, init_db
+from backend.core.db import Base, get_async_session_maker, get_db, init_db
 from backend.main import app
 
 # ── 测试用内存数据库 ─────────────────────────────────────
@@ -19,11 +19,13 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 async def setup_db():
     """测试会话开始时建表，结束时清理"""
     init_db(TEST_DATABASE_URL)
-    from backend.db import get_engine
+    from backend.core.db import get_engine
+    from backend.core.migrations import migrate_sqlite
 
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(conn)
     yield
     await engine.dispose()
 
