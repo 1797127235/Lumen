@@ -367,7 +367,7 @@ CREATE TABLE external_index_status (
 | 搜索结果为空 | 检查 `external_data.search.queried` 日志，确认 query 和 scope |
 | 索引卡住 | 检查 `external_data.scan_completed` 是否到达，对比 `indexed_files`/`total_files` |
 | MCP 不可用 | 检查 `external_data.mcp_timeout` 频率，确认 MCP Server 进程 |
-| Cognee 失败 | 检查 `semantic_store.py` 的 error 日志 |
+| Cognee 失败 | 检查 `CogneeProvider` 或 `cognify_loop.py` 的 error 日志 |
 
 **调试端点**（仅 DEBUG 模式）：
 ```

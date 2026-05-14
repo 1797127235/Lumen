@@ -93,12 +93,12 @@ Phase 2c (1-2周):
   → L2 新增 search_mode="semantic"（Cognee）
 ```
 
-**召回路径（扩展现有 L2）：**
+**召回路径（统一语义搜索）：**
 ```
 facade.recall()
   ├── search_mode="keyword"  → FTS5（Narrative + External）
   ├── search_mode="grep"     → time-filtered SQL
-  └── search_mode="semantic" → Cognee（External，Phase 2c）
+  └── search_mode="semantic" → DocumentIndexProvider.prefetch()（可插拔：Cognee/LanceDB/HRR）
 ```
 
 **主动洞察（Phase 3 路线图）：**

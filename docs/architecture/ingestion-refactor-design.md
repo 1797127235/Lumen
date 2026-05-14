@@ -194,7 +194,7 @@ _PARSER_REGISTRY: list[DocumentParser] = [
 - 生成 `DocumentSection` 树
 - 收集内部链接 `[[...]]` 和外部链接
 
-### 3.4 DocumentIndexProvider 层（新增，替代 Chunker + SemanticStore）
+### 3.4 DocumentIndexProvider 层（可插拔语义索引后端）
 
 **设计目标**：解耦 Pipeline 与具体向量存储后端，接口极简——Pipeline 只调 `prefetch()` 和 `sync_document()`，完全不知道背后是 Cognee、LanceDB、HRR 还是无存储。
 
@@ -780,7 +780,7 @@ class IngestionOrchestrator:
 1. Pipeline 增加 batch buffer
 2. 改为 ORM bulk insert
 3. 创建 `DocumentIndexProvider` ABC + `CogneeProvider`
-4. 将 `semantic_store.py` 改造为 `CogneeProvider`
+4. 删除 `semantic_store.py`，其逻辑内联到 `CogneeProvider`（`prefetch`/`sync_document`/`clear`）
 5. Pipeline 注入 DocumentIndexProvider，移除硬编码 Cognee 调用
 6. 增加 `backpressure` 配置
 7. Agent 工具从 DocumentIndexProvider 动态获取（`get_tool_schemas`）

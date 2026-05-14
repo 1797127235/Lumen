@@ -45,8 +45,7 @@ career-os/
 │   │       │   ├── memory.py             # memory_search, memory_save
 │   │       │   ├── profile.py            # get_profile, update_profile
 │   │       │   ├── files.py              # 文件读写工具
-│   │       │   ├── external.py           # search_external_docs（外部数据搜索）
-│   │       │   └── schemas.py            # 工具参数 TypedDict 定义
+│   │       │   └── external.py           # search_external_docs（外部数据搜索）
 │   │       ├── core/                     # 工具运行时核心
 │   │       │   ├── registry.py           # ToolRegistry（工具注册表）
 │   │       │   ├── dispatcher.py         # ToolDispatcher（调用分发）
@@ -100,15 +99,18 @@ career-os/
 │   │   ├── markdown.py         # .md 文件读写
 │   │   ├── writer.py           # 事件写入
 │   │   ├── relational_store.py # SQLite 关系存储
-│   │   ├── semantic_store.py   # Cognee 语义存储
 │   │   ├── cognify_loop.py     # Cognee 后台 cognify 任务
 │   │   ├── classifier.py       # 事件分类
 │   │   ├── understanding.py    # AI 综合画像生成
 │   │   ├── snapshot.py         # 记忆快照
 │   │   ├── events_merger.py    # 事件合并
-│   │   ├── chunker.py          # 文本分块
 │   │   ├── datasets.py         # Cognee dataset 管理
-│   │   └── constants.py        # 记忆层常量
+│   │   ├── projection.py       # growth_events → .md 投影
+│   │   ├── markdown.py         # .md 文件读写
+│   │   ├── writer.py           # 事件写入
+│   │   ├── relational_store.py # SQLite 关系存储
+│   │   ├── search.py           # 全文搜索（FTS5 + Provider）
+│   │   └── searcher.py         # recall() 统一召回入口
 │   └── utils/
 │       ├── date_utils.py       # 日期工具
 │       ├── json_utils.py       # JSON 工具
