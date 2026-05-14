@@ -23,5 +23,8 @@ export async function http<T>(url: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(detail);
   }
-  return res.json() as Promise<T>;
+  // 204 No Content or empty body → skip JSON parse
+  const text = await res.text();
+  if (!text) return undefined as unknown as T;
+  return JSON.parse(text) as T;
 }
