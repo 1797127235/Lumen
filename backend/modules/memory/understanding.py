@@ -188,8 +188,6 @@ async def _get_journey(user_id: str) -> list[dict]:
         "goal_updated": "目标调整",
         "status_changed": "状态变化",
         "decision_made": "关键决策",
-        "memory_saved": "新记忆",
-        "chat_message": "对话",
     }
 
     async with get_async_session_maker()() as db:
@@ -199,7 +197,7 @@ async def _get_journey(user_id: str) -> list[dict]:
                 GrowthEvent.user_id == user_id,
                 GrowthEvent.event_type.notin_(["profile_updated"]),
             )
-            .order_by(GrowthEvent.created_at.desc())
+            .order_by(GrowthEvent.created_at.asc())
             .limit(50)
         )
         result = await db.execute(stmt)

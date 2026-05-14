@@ -70,12 +70,6 @@ async def search_all(
 _FTS5_SPECIAL_RE = _re.compile(r'[+\-*"()^@]')
 
 
-def _sanitize_fts5(query: str) -> str | None:
-    """移除 FTS5 保留操作符，避免语法错误（如 C++、C#）。"""
-    sanitized = _FTS5_SPECIAL_RE.sub(" ", query).strip()
-    return sanitized or None
-
-
 def _escape_fts5(query: str) -> str | None:
     """安全转义 FTS5 MATCH 查询。
 
