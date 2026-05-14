@@ -3,23 +3,49 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import os
 from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
 
 from backend.core.logging import get_logger
-from backend.modules.data_sources.ingestion.connector import DataSourceConnector, RawDocument
+from backend.modules.data_sources.ingestion.connector import DataSourceConnector, RawBytes
 
 logger = get_logger(__name__)
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".markdown"}
+SUPPORTED_EXTENSIONS = {".md", ".txt", ".markdown", ".pdf", ".html", ".htm"}
 MAX_FILE_SIZE_BYTES = 500 * 1024
-# 摄入时内容截断上限（字符数）
-MAX_CONTENT_CHARS = 50000
+
+
+def _guess_mime_type(path: Path) -> str | None:
+    """猜测文件 mime-type，优先 python-magic，回退到 mimetypes 模块。"""
+    try:
+        import magic
+
+        return magic.from_file(str(path), mime=True)
+    except ImportError:
+        mime, _ = mimetypes.guess_type(str(path))
+        return mime
+
+
+def _detect_charset(data: bytes) -> str:
+    """检测文件编码，优先 charset-normalizer，回退到 utf-8。"""
+    try:
+        from charset_normalizer import detect
+
+        result = detect(data)
+        if result and result["encoding"]:
+            return result["encoding"]
+    except ImportError:
+        pass
+    return "utf-8"
 
 
 class FilesystemConnector(DataSourceConnector):
-    """扫描本地目录中的 Markdown / 文本文件。"""
+    """扫描本地目录中的 Markdown / 文本文件。
+
+    Phase 2 改造后只读取原始字节，不做任何解析或截断。
+    """
 
     _source_id = "local_folder"
 
@@ -39,6 +65,10 @@ class FilesystemConnector(DataSourceConnector):
     def source_id(self) -> str:
         return self._source_id
 
+    @property
+    def data_source_id(self) -> str:
+        return self._data_source_id
+
     def is_configured(self) -> bool:
         return any(d.is_dir() for d in self._dirs)
 
@@ -46,7 +76,23 @@ class FilesystemConnector(DataSourceConnector):
         """检查路径是否包含隐藏目录（以 . 开头）。"""
         return any(part.startswith(".") for part in path.parts)
 
-    async def scan(self) -> AsyncIterator[RawDocument]:
+    def _is_binary(self, data: bytes) -> bool:
+        """简单启发式：检查是否包含 null byte 或控制字符（除换行/制表外）。"""
+        if b"\x00" in data[:1024]:
+            return True
+        # 允许 UTF-8 多字节序列：检查无效 UTF-8 比例
+        sample = data[:2048]
+        try:
+            sample.decode("utf-8")
+            return False  # 能解码为 UTF-8 → 不是二进制
+        except UnicodeDecodeError:
+            pass
+        # 回退：检查控制字符比例
+        text_chars = set(range(32, 127)) | {9, 10, 13, 127}
+        non_text = sum(1 for b in sample if b not in text_chars)
+        return non_text / len(sample) > 0.30
+
+    async def scan(self) -> AsyncIterator[RawBytes]:  # type: ignore[override]
         for directory in self._dirs:
             if not directory.is_dir():
                 logger.warning("ingestion.filesystem.dir_not_found", path=str(directory))
@@ -66,29 +112,40 @@ class FilesystemConnector(DataSourceConnector):
                     yield doc
                 await asyncio.sleep(0)  # 让出事件循环，避免阻塞
 
-    def _read_file(self, path: Path, stat: os.stat_result | None = None) -> RawDocument | None:
+    def _read_file(self, path: Path, stat: os.stat_result | None = None) -> RawBytes | None:
         try:
-            content = path.read_text(encoding="utf-8", errors="ignore").strip()
-            if not content:
+            # 大小检查
+            file_size = stat.st_size if stat else path.stat().st_size
+            if file_size > MAX_FILE_SIZE_BYTES:
+                logger.debug("ingestion.filesystem.file_too_large", path=str(path), size=file_size)
                 return None
-            # 超大文件截断（字符数）
-            if len(content) > MAX_CONTENT_CHARS:
-                logger.debug("ingestion.filesystem.file_truncated", path=str(path), original_len=len(content))
-                content = content[:MAX_CONTENT_CHARS]
+
+            data = path.read_bytes()
+            if not data:
+                return None
+
+            # 二进制文件过滤
+            if self._is_binary(data):
+                logger.debug("ingestion.filesystem.binary_skipped", path=str(path))
+                return None
+
+            mime_type = _guess_mime_type(path)
             mtime = stat.st_mtime if stat else path.stat().st_mtime
             resolved = path.resolve()
-            return RawDocument(
-                user_id=self._user_id,
+
+            return RawBytes(
                 data_source_id=self._data_source_id,
-                connector_type=self.source_id,
                 external_id=str(resolved),
                 uri=resolved.as_uri(),
-                title=path.stem,
-                content=content,
+                content_bytes=data,
+                mime_type=mime_type,
                 metadata={
                     "extension": path.suffix,
                     "last_modified": mtime,
+                    "size": file_size,
                 },
+                last_modified=mtime,
+                user_id=self._user_id,
             )
         except Exception as exc:
             logger.warning("ingestion.filesystem.read_error", path=str(path), error=str(exc))
@@ -96,7 +153,7 @@ class FilesystemConnector(DataSourceConnector):
 
     def start_watching(
         self,
-        on_change: Callable[[RawDocument], Coroutine],
+        on_change: Callable[[RawBytes], Coroutine],
         on_delete: Callable[[str, str], Coroutine],
         *,
         loop: asyncio.AbstractEventLoop,
@@ -117,22 +174,30 @@ class FilesystemConnector(DataSourceConnector):
                 self._loop = loop
                 self._timers: dict[str, asyncio.TimerHandle] = {}
 
-            def _is_supported(self, path: str) -> bool:
-                return Path(path).suffix.lower() in SUPPORTED_EXTENSIONS
+            def _decode_path(self, path) -> str:
+                """将 watchdog 路径（可能为 bytes）解码为 str。"""
+                if isinstance(path, bytes):
+                    return path.decode("utf-8", errors="replace")
+                return path
 
-            def _schedule_change(self, src_path: str) -> None:
+            def _is_supported(self, path) -> bool:
+                p = self._decode_path(path)
+                return Path(p).suffix.lower() in SUPPORTED_EXTENSIONS
+
+            def _schedule_change(self, src_path) -> None:
                 """防抖：DEBOUNCE_SECONDS 内的重复事件只处理最后一次。"""
-                handle = self._timers.pop(src_path, None)
+                path = self._decode_path(src_path)
+                handle = self._timers.pop(path, None)
                 if handle:
                     handle.cancel()
 
                 def _fire():
-                    self._timers.pop(src_path, None)
-                    doc = connector._read_file(Path(src_path))
+                    self._timers.pop(path, None)
+                    doc = connector._read_file(Path(path))
                     if doc:
                         asyncio.run_coroutine_threadsafe(on_change(doc), self._loop)
 
-                self._timers[src_path] = loop.call_later(DEBOUNCE_SECONDS, _fire)
+                self._timers[path] = loop.call_later(DEBOUNCE_SECONDS, _fire)
 
             def on_modified(self, event):  # type: ignore[override]
                 if not event.is_directory and self._is_supported(event.src_path):
@@ -144,14 +209,16 @@ class FilesystemConnector(DataSourceConnector):
 
             def on_deleted(self, event):  # type: ignore[override]
                 if not event.is_directory and self._is_supported(event.src_path):
-                    doc_id = str(Path(event.src_path).resolve())
-                    asyncio.run_coroutine_threadsafe(on_delete(connector.source_id, doc_id), self._loop)
+                    path = self._decode_path(event.src_path)
+                    doc_id = str(Path(path).resolve())
+                    asyncio.run_coroutine_threadsafe(on_delete(connector._data_source_id, doc_id), self._loop)
 
             def on_moved(self, event):  # type: ignore[override]
                 # 重命名 = 旧路径删除 + 新路径新增
                 if not event.is_directory:
                     if self._is_supported(event.src_path):
-                        doc_id = str(Path(event.src_path).resolve())
+                        path = self._decode_path(event.src_path)
+                        doc_id = str(Path(path).resolve())
                         asyncio.run_coroutine_threadsafe(on_delete(connector._data_source_id, doc_id), self._loop)
                     if self._is_supported(event.dest_path):
                         self._schedule_change(event.dest_path)

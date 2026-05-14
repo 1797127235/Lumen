@@ -163,6 +163,19 @@ async def migrate_sqlite(conn) -> None:
         """INSERT INTO external_items_fts_trigram(rowid, content)
             SELECT rowid, content FROM external_items
             WHERE rowid NOT IN (SELECT rowid FROM external_items_fts_trigram)""",
+        # ── ingestion_state: 摄入状态追踪（替代 JSON IngestionStore）──
+        """CREATE TABLE IF NOT EXISTS ingestion_state (
+            data_source_id TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'indexed',
+            error_message TEXT,
+            retry_count INTEGER DEFAULT 0,
+            indexed_at TIMESTAMP,
+            PRIMARY KEY (data_source_id, external_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_ingestion_state_ds ON ingestion_state (data_source_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ingestion_state_status ON ingestion_state (status)",
     ]:
         try:
             await conn.execute(text(sql))

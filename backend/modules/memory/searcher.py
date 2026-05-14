@@ -8,9 +8,19 @@ from datetime import UTC, datetime, timedelta
 from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
 from backend.modules.memory.classifier import NARRATIVE_EVENT_TYPES
+
+# build_context 召回数据集：排除 DATASET_PROFILE（画像已由 build_snapshot 覆盖）
+from backend.modules.memory.datasets import (
+    DATASET_CHAT,
+    DATASET_KNOWLEDGE,
+    DATASET_REFERENCE,
+    DATASET_REFLECTION,
+)
 from backend.modules.memory.models import GrowthEvent
 from backend.modules.memory.search import MemoryItem, search_all
 from backend.modules.memory.snapshot import build_snapshot, get_context_conv_ids
+
+_RECALL_DATASETS = [DATASET_CHAT, DATASET_KNOWLEDGE, DATASET_REFERENCE, DATASET_REFLECTION]
 
 logger = get_logger(__name__)
 
@@ -171,8 +181,9 @@ class MemorySearcher:
         search_mode: str = "keyword",
         time_filter: str | None = None,
         source_scope: str = "narrative",  # "narrative" | "external" | "all"
+        include_cognee: bool = False,
     ) -> list[MemoryItem]:
-        """搜索记忆：FTS5 全文。
+        """搜索记忆：FTS5 + 可选 Cognee 语义。
 
         search_mode:
           - "keyword" (默认): FTS5 关键词匹配
@@ -183,12 +194,20 @@ class MemorySearcher:
           - "YYYY-MM-DD~YYYY-MM-DD" 绝对范围
 
         source_scope: 控制搜索范围 — narrative（默认）/ external / all
+        include_cognee: 启用 Cognee 语义搜索
         """
         if search_mode == "grep":
             time_start, time_end = _parse_time_filter(time_filter)
             return await self.list_events_by_time_range(user_id, time_start, time_end, limit=limit)
 
-        return await search_all(user_id, query, limit=limit, datasets=datasets, source_scope=source_scope)
+        return await search_all(
+            user_id,
+            query,
+            limit=limit,
+            datasets=datasets,
+            source_scope=source_scope,
+            include_cognee=include_cognee,
+        )
 
     async def build_context(
         self,
@@ -200,9 +219,9 @@ class MemorySearcher:
         """构建 system prompt 记忆上下文。
 
         1. 分层注入快照（build_snapshot）— L0 Profile 固定块 + L1 近期对话，5 分钟 TTL
-        2. 如果提供 user_input，L2 语义召回 Narrative 事件（FTS5 keyword 搜索）
+        2. 如果提供 user_input，L2 语义召回（FTS5 + Cognee，覆盖 narrative + external）
 
-        双管线：L0（Profile 事件聚合）和 L2（Narrative 事件搜索）数据源不同，
+        双管线：L0（Profile 事件聚合）和 L2（多源搜索）数据源不同，
         物理上不可能重复注入。
         """
         static_ctx = await build_snapshot(user_id)
@@ -212,7 +231,14 @@ class MemorySearcher:
         dynamic_parts: list[str] = []
         if user_input:
             try:
-                items = await self.recall(user_id, user_input, limit=5)
+                items = await self.recall(
+                    user_id,
+                    user_input,
+                    limit=8,
+                    source_scope="all",
+                    include_cognee=True,
+                    datasets=_RECALL_DATASETS,
+                )
                 if items:
                     lines = ["【相关记忆】"]
                     for item in items:

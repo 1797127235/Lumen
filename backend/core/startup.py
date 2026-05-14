@@ -17,7 +17,6 @@ from backend.core.migrations import migrate_sqlite
 from backend.modules.data_sources.ingestion import get_pipeline, init_pipeline
 from backend.modules.data_sources.models import DataSource
 from backend.modules.data_sources.registry import create_connector
-from backend.modules.data_sources.service import create_data_source
 
 logger = get_logger(__name__)
 
@@ -53,33 +52,38 @@ def _init_cognee() -> list[asyncio.Task]:
 
 
 async def _bootstrap_ingestion() -> None:
-    """等待 DB 就绪后，加载 data_sources 并启动扫描/监听。"""
+    """等待 DB 就绪后，加载 data_sources 并启动扫描/监听。
+
+    仅当用户通过 UI/API 显式配置了 data_sources 时才启动，
+    不再从 .env 的 EXTERNAL_DATA_DIRS 自动创建（避免 unsolicited ingestion）。
+    """
     try:
         await asyncio.sleep(2)
-        settings = get_settings()
         store_dir = USER_DATA_DIR
         store_dir.mkdir(exist_ok=True)
         pipeline = init_pipeline(store_dir)
+        await pipeline.start()
 
         async with get_async_session_maker()() as db:
             result = await db.execute(select(DataSource).where(DataSource.status == "active"))
             sources = list(result.scalars().all())
 
-            # 向后兼容：.env 有 EXTERNAL_DATA_DIRS 时自动创建
-            if not sources and settings.external_data_dir_list:
-                ds = await create_data_source(
-                    db,
-                    user_id="demo_user",
-                    name="本地文件夹",
-                    type="local_folder",
-                    config={"paths": settings.external_data_dir_list},
-                )
-                sources = [ds]
-
             for ds in sources:
                 connector = create_connector(ds)
                 if connector:
                     pipeline.register(connector)
+
+        if not pipeline._connectors:
+            logger.info("ingestion.no_sources_configured", skip=True)
+            return
+
+        # Phase 1: 自动迁移旧 JSON 状态到 DB（幂等）
+        try:
+            migrate_stats = await pipeline._store.migrate_from_json()
+            if migrate_stats["migrated"] > 0:
+                logger.info("ingestion.migrated_from_json", stats=migrate_stats)
+        except Exception as exc:
+            logger.warning("ingestion.migrate_failed", error=str(exc))
 
         summary = await pipeline.run_full_scan()
         logger.info("ingestion.initial_scan_complete", summary=summary)
@@ -101,6 +105,9 @@ async def _shutdown(
 
     with contextlib.suppress(AssertionError):
         get_pipeline().stop_watching_all()
+
+    with contextlib.suppress(AssertionError):
+        await get_pipeline().stop()
 
     if ingestion_task and not ingestion_task.done():
         ingestion_task.cancel()

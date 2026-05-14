@@ -52,7 +52,7 @@ async def search_all(
     seen: set[str] = set()
     results: list[MemoryItem] = []
 
-    if include_cognee and source_scope in ("narrative", "all"):
+    if include_cognee and source_scope in ("narrative", "external", "all"):
         results.extend(await _search_cognee(query, limit, seen, datasets=datasets))
 
     if source_scope in ("narrative", "all"):

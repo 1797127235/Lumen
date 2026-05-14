@@ -163,11 +163,14 @@ async def trigger_sync(
             if ok:
                 count += 1
 
+        # 清理已从文件系统删除的文件
+        cleanup_count = await pipeline.cleanup_deleted(source_id, connector)
+
         ds.last_sync_at = datetime.now(UTC)
         ds.last_error = None
         await db.commit()
-        logger.info("data_source.synced", source_id=source_id, indexed=count)
-        return {"ok": True, "indexed": count}
+        logger.info("data_source.synced", source_id=source_id, indexed=count, cleaned=cleanup_count)
+        return {"ok": True, "indexed": count, "cleaned": cleanup_count}
     except Exception as exc:
         ds.last_error = str(exc)[:500]
         await db.commit()

@@ -155,6 +155,45 @@ async def resume_source(
     return _to_read(ds)
 
 
+# ── 摄入状态迁移（Phase 1）──
+
+
+@router.post("/ingestion/migrate")
+async def migrate_ingestion_state() -> dict[str, Any]:
+    """将旧 JSON 状态迁移到 DB。"""
+    try:
+        pipeline = get_pipeline()
+    except AssertionError:
+        raise HTTPException(status_code=503, detail="摄入管线未初始化")
+
+    stats = await pipeline._store.migrate_from_json()
+    return {"ok": True, "stats": stats}
+
+
+@router.post("/ingestion/rollback")
+async def rollback_ingestion_state() -> dict[str, Any]:
+    """回滚：从备份 JSON 恢复，清空 DB 状态。"""
+    try:
+        pipeline = get_pipeline()
+    except AssertionError:
+        raise HTTPException(status_code=503, detail="摄入管线未初始化")
+
+    ok = await pipeline._store.rollback()
+    return {"ok": ok}
+
+
+@router.get("/ingestion/verify")
+async def verify_ingestion_migration() -> dict[str, Any]:
+    """校验迁移一致性。"""
+    try:
+        pipeline = get_pipeline()
+    except AssertionError:
+        raise HTTPException(status_code=503, detail="摄入管线未初始化")
+
+    result = await pipeline._store.verify_migration()
+    return {"ok": True, **result}
+
+
 # ── 内部辅助 ──
 
 
