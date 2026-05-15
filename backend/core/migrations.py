@@ -12,6 +12,89 @@ from backend.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ── GrowthEvent FTS5 DDL（供 migrations.py 和 relational_store.py 共享）──
+
+_GROWTH_EVENTS_FTS_DDL: list[str] = [
+    # FTS5 主表
+    """CREATE VIRTUAL TABLE IF NOT EXISTS growth_events_fts USING fts5(
+        event_type, entity_type, entity_id, payload_json
+    )""",
+    # Trigram 表（CJK 子串搜索）
+    """CREATE VIRTUAL TABLE IF NOT EXISTS growth_events_fts_trigram USING fts5(
+        event_type, entity_type, entity_id, payload_json,
+        tokenize='trigram'
+    )""",
+    # 回填已有数据
+    """INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
+        SELECT rowid, event_type, entity_type, entity_id, COALESCE(payload_json, '') FROM growth_events
+        WHERE rowid NOT IN (SELECT rowid FROM growth_events_fts)""",
+    """INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
+        SELECT rowid, event_type, entity_type, entity_id, COALESCE(payload_json, '') FROM growth_events
+        WHERE rowid NOT IN (SELECT rowid FROM growth_events_fts_trigram)""",
+    # AFTER INSERT 触发器
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_ai AFTER INSERT ON growth_events BEGIN
+        INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_ai AFTER INSERT ON growth_events BEGIN
+        INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
+    END""",
+    # AFTER DELETE 触发器
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_ad AFTER DELETE ON growth_events BEGIN
+        INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_ad AFTER DELETE ON growth_events BEGIN
+        INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+    END""",
+    # AFTER UPDATE 触发器
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_au AFTER UPDATE ON growth_events BEGIN
+        INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_au AFTER UPDATE ON growth_events BEGIN
+        INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
+        VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
+    END""",
+]
+
+_GROWTH_EVENTS_FTS_TRIGGER_NAMES = [
+    "trg_growth_events_ai",
+    "trg_growth_events_tri_ai",
+    "trg_growth_events_ad",
+    "trg_growth_events_tri_ad",
+    "trg_growth_events_au",
+    "trg_growth_events_tri_au",
+]
+
+
+def get_growth_events_fts_ddl() -> list[str]:
+    """返回 GrowthEvent FTS5 表和触发器的完整 DDL（幂等，含回填）。"""
+    return list(_GROWTH_EVENTS_FTS_DDL)
+
+
+async def rebuild_growth_events_fts(conn) -> None:
+    """全量重建 GrowthEvent FTS5 索引（DROP + CREATE + 回填）。
+
+    用于批量删除等场景，调用方负责事务管理。
+    """
+    # 1. 移除触发器
+    for name in _GROWTH_EVENTS_FTS_TRIGGER_NAMES:
+        await conn.execute(text(f"DROP TRIGGER IF EXISTS {name}"))
+    # 2. 移除旧 FTS 表
+    await conn.execute(text("DROP TABLE IF EXISTS growth_events_fts"))
+    await conn.execute(text("DROP TABLE IF EXISTS growth_events_fts_trigram"))
+    # 3. 重建
+    for sql in _GROWTH_EVENTS_FTS_DDL:
+        await conn.execute(text(sql))
+    logger.info("GrowthEvent FTS index rebuilt")
+
 
 async def migrate_sqlite(conn) -> None:
     """幂等加列：create_all 不 ALTER 已有表，SQLite 需手动补列。"""
@@ -29,51 +112,6 @@ async def migrate_sqlite(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_growth_events_unprojected_md ON growth_events (user_id, projected_md_at)",
         "CREATE INDEX IF NOT EXISTS ix_growth_events_unprojected_cognee ON growth_events (user_id, projected_cognee_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_growth_events_user_dedupe ON growth_events (user_id, dedupe_key)",
-        # FTS5 全文索引（独立表，非 external content，避免 UUID rowid 不兼容）
-        """CREATE VIRTUAL TABLE IF NOT EXISTS growth_events_fts USING fts5(
-            event_type, entity_type, entity_id, payload_json
-        )""",
-        # FTS5 同步触发器
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_ai AFTER INSERT ON growth_events BEGIN
-            INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
-        END""",
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_ad AFTER DELETE ON growth_events BEGIN
-            INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
-        END""",
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_au AFTER UPDATE ON growth_events BEGIN
-            INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
-            INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
-        END""",
-        # 回填已有数据
-        """INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
-            SELECT rowid, event_type, entity_type, entity_id, payload_json FROM growth_events
-            WHERE rowid NOT IN (SELECT rowid FROM growth_events_fts)""",
-        # Trigram FTS5：CJK 子串搜索（3 字节重叠，中文/日文/韩文友好）
-        """CREATE VIRTUAL TABLE IF NOT EXISTS growth_events_fts_trigram USING fts5(
-            event_type, entity_type, entity_id, payload_json,
-            tokenize='trigram'
-        )""",
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_ai AFTER INSERT ON growth_events BEGIN
-            INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
-        END""",
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_ad AFTER DELETE ON growth_events BEGIN
-            INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
-        END""",
-        """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_au AFTER UPDATE ON growth_events BEGIN
-            INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
-            INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
-            VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
-        END""",
-        """INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
-            SELECT rowid, event_type, entity_type, entity_id, payload_json FROM growth_events
-            WHERE rowid NOT IN (SELECT rowid FROM growth_events_fts_trigram)""",
         # ── data_sources: 用户数据源连接（Phase 2b）──
         """CREATE TABLE IF NOT EXISTS data_sources (
             id TEXT PRIMARY KEY,
@@ -182,3 +220,11 @@ async def migrate_sqlite(conn) -> None:
         except Exception as e:
             if "duplicate column" not in str(e).lower() and "already exists" not in str(e).lower():
                 logger.warning("SQLite 迁移失败", sql=sql[:100], error=str(e))
+
+    # GrowthEvent FTS5 表和触发器（共享 DDL，与 relational_store.py 共用）
+    for sql in _GROWTH_EVENTS_FTS_DDL:
+        try:
+            await conn.execute(text(sql))
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning("FTS DDL 失败", sql=sql[:100], error=str(e))

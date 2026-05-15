@@ -26,7 +26,7 @@ class TestNullProvider:
     @pytest.mark.asyncio
     async def test_prefetch_empty(self) -> None:
         provider = NullProvider()
-        assert await provider.prefetch("anything") == ""
+        assert await provider.prefetch("anything") == []
 
     @pytest.mark.asyncio
     async def test_sync_noop(self) -> None:
@@ -115,11 +115,12 @@ class TestHRRProvider:
 
             # 搜索与 ML 相关的内容
             result = await provider.prefetch("machine learning")
-            assert "doc1" in result or "doc2" in result
+            doc_ids = {h.doc_id for h in result}
+            assert "doc1" in doc_ids or "doc2" in doc_ids
 
             # 搜索不相关内容应返回空或低分
             result = await provider.prefetch("xyzabc123")
-            assert result == "" or "doc1" not in result
+            assert result == [] or "doc1" not in {h.doc_id for h in result}
 
     @pytest.mark.asyncio
     async def test_sync_overwrite(self) -> None:

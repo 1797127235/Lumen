@@ -158,13 +158,15 @@ async def trigger_sync(
     # 执行同步
     try:
         count = 0
+        scanned_ids: set[str] = set()
         async for doc in connector.scan():
+            scanned_ids.add(doc.external_id)
             ok = await pipeline._ingest_with_retry(doc)
             if ok:
                 count += 1
 
         # 清理已从文件系统删除的文件
-        cleanup_count = await pipeline.cleanup_deleted(source_id, connector)
+        cleanup_count = await pipeline.cleanup_deleted(source_id, scanned_ids)
 
         ds.last_sync_at = datetime.now(UTC)
         ds.last_error = None

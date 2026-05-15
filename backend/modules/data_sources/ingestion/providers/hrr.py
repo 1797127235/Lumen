@@ -26,7 +26,7 @@ import numpy as np
 
 from backend.core.config import USER_DATA_DIR
 from backend.core.logging import get_logger
-from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider
+from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider, ProviderHit
 
 logger = get_logger(__name__)
 
@@ -91,16 +91,15 @@ class HRRProvider(DocumentIndexProvider):
             except Exception as exc:
                 logger.warning("hrr.index_load_failed", error=str(exc))
 
-    async def prefetch(self, query: str) -> str:
-        """HRR 召回：query → HRR vector → 余弦相似度 top-k。"""
+    async def prefetch(self, query: str) -> list[ProviderHit]:
+        """HRR 召回：query → HRR vector → 余弦相似度 top-k → 结构化结果。"""
         if not self._documents:
-            return ""
+            return []
 
         query_vec = self._encode_text(query)
         if query_vec is None:
-            return ""
+            return []
 
-        # 计算余弦相似度
         scores: list[tuple[float, dict[str, Any]]] = []
         for doc in self._documents:
             sim = self._cosine_similarity(query_vec, doc["vector"])
@@ -110,15 +109,19 @@ class HRRProvider(DocumentIndexProvider):
         top = scores[:10]
 
         if not top or top[0][0] < 0.05:
-            return ""
+            return []
 
-        lines: list[str] = []
-        for _, (sim, doc) in enumerate(top, 1):
-            text = doc.get("text", "")
-            doc_id = doc.get("doc_id", "unknown")
-            lines.append(f"[来源: {doc_id} (相似度: {sim:.2f})]\n{text[:500]}")
-
-        return "\n\n".join(lines)
+        hits: list[ProviderHit] = []
+        for sim, doc in top:
+            hits.append(
+                ProviderHit(
+                    doc_id=doc.get("doc_id", "unknown"),
+                    content=doc.get("text", "")[:500],
+                    score=float(sim),
+                    metadata=doc.get("metadata", {}),
+                )
+            )
+        return hits
 
     async def sync_document(
         self,
@@ -349,5 +352,8 @@ class HRRProvider(DocumentIndexProvider):
 
     async def handle_tool_call(self, name: str, args: dict) -> str:
         if name == "data_source_search":
-            return await self.prefetch(args["query"])
+            hits = await self.prefetch(args["query"])
+            if not hits:
+                return "未找到相关内容。"
+            return "\n\n".join(f"[来源: {h.doc_id} (相似度: {h.score:.2f})]\n{h.content}" for h in hits)
         raise NotImplementedError(f"Tool {name} not supported")

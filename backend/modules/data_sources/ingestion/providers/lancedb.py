@@ -11,7 +11,7 @@ from typing import Any
 
 from backend.core.config import USER_DATA_DIR
 from backend.core.logging import get_logger
-from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider
+from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider, ProviderHit
 
 logger = get_logger(__name__)
 
@@ -78,22 +78,27 @@ class LanceDBProvider(DocumentIndexProvider):
 
         logger.info("lancedb.initialized", db_path=str(self._db_path))
 
-    async def prefetch(self, query: str) -> str:
-        """向量召回：query → embedding → ANN search → 拼装结果。"""
+    async def prefetch(self, query: str) -> list[ProviderHit]:
+        """向量召回：query → embedding → ANN search → 结构化结果。"""
         if self._table is None:
-            return ""
+            return []
 
         query_vec = (await asyncio.to_thread(self._embedder.encode, query)).tolist()
         results = self._table.search(query_vec).metric("cosine").limit(10).to_list()
         if not results:
-            return ""
+            return []
 
-        lines: list[str] = []
+        hits: list[ProviderHit] = []
         for row in results:
-            text = row.get("chunk_text", "")
-            doc_id = row.get("doc_id", "unknown")
-            lines.append(f"[来源: {doc_id}]\n{text[:500]}")
-        return "\n\n".join(lines)
+            hits.append(
+                ProviderHit(
+                    doc_id=row.get("doc_id", "unknown"),
+                    content=row.get("chunk_text", "")[:500],
+                    score=float(1.0 - row.get("_distance", 1.0)),  # cosine distance → similarity
+                    metadata=json.loads(row.get("metadata", "{}")),
+                )
+            )
+        return hits
 
     async def sync_document(
         self,
@@ -169,5 +174,8 @@ class LanceDBProvider(DocumentIndexProvider):
 
     async def handle_tool_call(self, name: str, args: dict) -> str:
         if name == "data_source_search":
-            return await self.prefetch(args["query"])
+            hits = await self.prefetch(args["query"])
+            if not hits:
+                return "未找到相关内容。"
+            return "\n\n".join(f"[来源: {h.doc_id}]\n{h.content}" for h in hits)
         raise NotImplementedError(f"Tool {name} not supported")

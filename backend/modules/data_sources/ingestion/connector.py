@@ -7,7 +7,7 @@ import functools
 import hashlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -57,27 +57,6 @@ class StructuredDocument:
     content_hash: str
     user_id: str = "demo_user"  # 从 RawBytes / DataSource 传递
     connector_type: str = "unknown"
-
-
-# ── Phase 1 兼容：RawDocument 保留但标记为 deprecated ──
-
-
-@dataclass
-class RawDocument:
-    """从外部数据源读取的原始文档（Phase 1 兼容，即将废弃）。"""
-
-    user_id: str  # 当前用户（如 "demo_user"）
-    data_source_id: str  # 用户建立的连接 ID（如 "ds_xxx"）
-    connector_type: str  # "local_folder" / "web_url" / "github_repo"
-    external_id: str  # 源系统内唯一 ID（文件绝对路径、URL、GitHub path）
-    uri: str  # 可展示引用地址（file:///...、https://...）
-    title: str  # 文档标题（用于 Agent 和前端展示）
-    content: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @functools.cached_property
-    def content_hash(self) -> str:
-        return hashlib.sha256(self.content.encode()).hexdigest()
 
 
 class DataSourceConnector(ABC):

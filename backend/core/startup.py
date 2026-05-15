@@ -1,10 +1,12 @@
-"""应用生命周期 — 启动/关闭编排。"""
+"""应用生命周期 — 启动/关闭编排。
+
+Cognee 初始化已移入 CogneeProvider.initialize()，仅在 CogneeProvider 被选中时运行。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -41,25 +43,14 @@ async def _init_db() -> None:
             await migrate_sqlite(conn)
 
 
-def _init_cognee() -> list[asyncio.Task]:
-    from backend.modules.memory.cognify_loop import cognify_loop, init_cognee
-
-    threading.Thread(target=init_cognee, daemon=True, name="cognee-init").start()
-    tasks: list[asyncio.Task] = [
-        asyncio.create_task(cognify_loop(), name="cognee-cognify-loop"),
-    ]
-    return tasks
-
-
 async def _bootstrap_ingestion() -> None:
     """等待 DB 就绪后，加载 data_sources 并启动扫描/监听。
 
     仅当用户通过 UI/API 显式配置了 data_sources 时才启动，
     不再从 .env 的 EXTERNAL_DATA_DIRS 自动创建（避免 unsolicited ingestion）。
     """
+    pipeline = None
     try:
-        # Cognee 在后台线程初始化（_init_cognee），给 2 秒 grace period
-        # 避免 ingestion 启动时 Cognee 还没 ready。后续可改为显式事件通知。
         await asyncio.sleep(2)
         store_dir = USER_DATA_DIR
         store_dir.mkdir(exist_ok=True)
@@ -79,14 +70,6 @@ async def _bootstrap_ingestion() -> None:
             logger.info("ingestion.no_sources_configured", skip=True)
             return
 
-        # Phase 1: 自动迁移旧 JSON 状态到 DB（幂等）
-        try:
-            migrate_stats = await pipeline._store.migrate_from_json()
-            if migrate_stats["migrated"] > 0:
-                logger.info("ingestion.migrated_from_json", stats=migrate_stats)
-        except Exception as exc:
-            logger.warning("ingestion.migrate_failed", error=str(exc))
-
         summary = await pipeline.run_full_scan()
         logger.info("ingestion.initial_scan_complete", summary=summary)
         pipeline.start_watching_all()
@@ -94,11 +77,13 @@ async def _bootstrap_ingestion() -> None:
         raise
     except Exception as exc:
         logger.warning("ingestion.bootstrap_failed", error=str(exc))
+        if pipeline is not None:
+            with contextlib.suppress(Exception):
+                await pipeline.stop()
 
 
 async def _shutdown(
     engine,
-    cognee_tasks: list[asyncio.Task],
     ingestion_task: asyncio.Task | None,
 ) -> None:
     from backend.modules.memory import cancel_background_tasks
@@ -114,10 +99,6 @@ async def _shutdown(
     if ingestion_task and not ingestion_task.done():
         ingestion_task.cancel()
 
-    for task in cognee_tasks:
-        if not task.done():
-            task.cancel()
-
     await engine.dispose()
 
 
@@ -132,12 +113,10 @@ async def lifespan(app: FastAPI):
     if applied:
         logger.info("config.json 覆盖", keys=list(applied.keys()))
 
-    cognee_tasks = _init_cognee()
-
     ingestion_task: asyncio.Task | None = asyncio.create_task(
         _bootstrap_ingestion(), name="external-ingestion-bootstrap"
     )
 
     yield
 
-    await _shutdown(get_engine(), cognee_tasks, ingestion_task)
+    await _shutdown(get_engine(), ingestion_task)

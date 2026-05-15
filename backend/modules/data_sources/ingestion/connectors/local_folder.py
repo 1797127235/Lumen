@@ -107,12 +107,18 @@ class FilesystemConnector(DataSourceConnector):
                     stat = file_path.stat()
                 except OSError:
                     continue
-                doc = self._read_file(file_path, stat)
+                try:
+                    relative = file_path.relative_to(directory)
+                except ValueError:
+                    relative = file_path
+                doc = self._read_file(file_path, stat, relative_path=relative)
                 if doc:
                     yield doc
                 await asyncio.sleep(0)  # 让出事件循环，避免阻塞
 
-    def _read_file(self, path: Path, stat: os.stat_result | None = None) -> RawBytes | None:
+    def _read_file(
+        self, path: Path, stat: os.stat_result | None = None, *, relative_path: Path | None = None
+    ) -> RawBytes | None:
         try:
             # 大小检查
             file_size = stat.st_size if stat else path.stat().st_size
@@ -132,10 +138,12 @@ class FilesystemConnector(DataSourceConnector):
             mime_type = _guess_mime_type(path)
             mtime = stat.st_mtime if stat else path.stat().st_mtime
             resolved = path.resolve()
+            # 使用 data_source_id:relative_path 作为 external_id，跨机器可迁移
+            external_id = f"{self._data_source_id}:{relative_path.as_posix()}" if relative_path else str(resolved)
 
             return RawBytes(
                 data_source_id=self._data_source_id,
-                external_id=str(resolved),
+                external_id=external_id,
                 uri=resolved.as_uri(),
                 content_bytes=data,
                 mime_type=mime_type,
@@ -212,7 +220,7 @@ class FilesystemConnector(DataSourceConnector):
                 if (
                     not event.is_directory
                     and self._is_supported(event.src_path)
-                    and not self._is_hidden(Path(event.src_path))
+                    and not connector._is_hidden(Path(event.src_path))
                 ):
                     path = self._decode_path(event.src_path)
                     doc_id = str(Path(path).resolve())
@@ -221,11 +229,11 @@ class FilesystemConnector(DataSourceConnector):
             def on_moved(self, event):  # type: ignore[override]
                 # 重命名 = 旧路径删除 + 新路径新增
                 if not event.is_directory:
-                    if self._is_supported(event.src_path) and not self._is_hidden(Path(event.src_path)):
+                    if self._is_supported(event.src_path) and not connector._is_hidden(Path(event.src_path)):
                         path = self._decode_path(event.src_path)
                         doc_id = str(Path(path).resolve())
                         asyncio.run_coroutine_threadsafe(on_delete(connector._data_source_id, doc_id), self._loop)
-                    if self._is_supported(event.dest_path) and not self._is_hidden(Path(event.dest_path)):
+                    if self._is_supported(event.dest_path) and not connector._is_hidden(Path(event.dest_path)):
                         self._schedule_change(event.dest_path)
 
         self._observer = Observer()

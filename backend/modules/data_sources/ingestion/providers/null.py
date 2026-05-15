@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider
+from backend.modules.data_sources.ingestion.document_index_provider import DocumentIndexProvider, ProviderHit
 
 
 class NullProvider(DocumentIndexProvider):
@@ -21,8 +21,8 @@ class NullProvider(DocumentIndexProvider):
     def initialize(self) -> None:
         pass
 
-    async def prefetch(self, query: str) -> str:
-        return ""
+    async def prefetch(self, query: str) -> list[ProviderHit]:
+        return []
 
     async def sync_document(
         self,

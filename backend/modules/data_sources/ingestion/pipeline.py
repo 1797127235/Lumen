@@ -21,6 +21,8 @@ from backend.modules.data_sources.ingestion.store import IngestionStore
 logger = get_logger(__name__)
 
 MAX_RETRY = 3
+MAX_MEMORY_RETRY = 3  # _memory_worker 重试次数，超过后记录错误放弃
+MAX_CONTENT_CHARS = 150_000  # 与 local_folder.MAX_FILE_SIZE_BYTES (500KB) 对齐：CJK ~450KB, ASCII ~150KB
 
 
 class IngestionPipeline:
@@ -92,7 +94,7 @@ class IngestionPipeline:
                 doc: StructuredDocument = self._memory_queue.get_nowait()
                 with contextlib.suppress(Exception):
                     await self._memory.sync_document(
-                        content=doc.content[:50000],
+                        content=doc.content[:MAX_CONTENT_CHARS],
                         doc_id=doc.external_id,
                         metadata=doc.metadata,
                     )
@@ -163,7 +165,7 @@ class IngestionPipeline:
                 )
                 if attempt < MAX_RETRY:
                     await jittered_sleep(attempt)
-        await self._store.mark_failed(store_key, last_error)
+        await self._store.mark_failed(store_key, last_error, content_hash=raw.content_hash)
         return False
 
     async def _write_to_db(self, doc: StructuredDocument) -> None:
@@ -178,77 +180,95 @@ class IngestionPipeline:
             return
 
         batch = self._batch[:]
-        async with get_async_session_maker()() as db:
-            for doc in batch:
-                item_id = f"{doc.data_source_id}:{uuid.uuid5(uuid.NAMESPACE_URL, doc.external_id)}"
-                metadata_json = json.dumps(doc.metadata, ensure_ascii=False)
-
-                await db.execute(
-                    text("""
-                    INSERT INTO external_items (
-                        id, user_id, data_source_id, connector_type, source_id, doc_id, external_id,
-                        uri, title, content, content_hash, metadata_json, indexed_at, updated_at
-                    )
-                    VALUES (
-                        :id, :user_id, :ds_id, :ctype, :source_id, :doc_id, :ext_id,
-                        :uri, :title, :content, :hash, :meta, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT(data_source_id, external_id) DO UPDATE SET
-                        user_id = excluded.user_id,
-                        data_source_id = excluded.data_source_id,
-                        connector_type = excluded.connector_type,
-                        external_id = excluded.external_id,
-                        uri = excluded.uri,
-                        title = excluded.title,
-                        content = excluded.content,
-                        content_hash = excluded.content_hash,
-                        metadata_json = excluded.metadata_json,
-                        indexed_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP,
-                        deleted_at = NULL
-                """),
-                    {
-                        "id": item_id,
-                        "user_id": doc.user_id,
-                        "ds_id": doc.data_source_id,
-                        "ctype": doc.connector_type,
-                        "source_id": doc.data_source_id,
-                        "doc_id": doc.external_id,
-                        "ext_id": doc.external_id,
-                        "uri": doc.uri,
-                        "title": doc.title,
-                        "content": doc.content[:50000],
-                        "hash": doc.content_hash,
-                        "meta": metadata_json,
-                    },
-                )
-            await db.commit()
-
-        # DB flush 成功后，才 mark_indexed + 语义索引入队（Fix 2：防止 DB 未 commit 就索引）
-        for doc in batch:
-            store_key = f"{doc.data_source_id}:{doc.external_id}"
-            await self._store.mark_indexed(store_key, doc.content_hash, doc.data_source_id)
-            await self._memory_queue.put(doc)
-
         self._batch.clear()
-        logger.info("ingestion.batch_flushed", count=len(batch))
+        try:
+            async with get_async_session_maker()() as db:
+                for doc in batch:
+                    item_id = f"{doc.data_source_id}:{uuid.uuid5(uuid.NAMESPACE_URL, doc.external_id)}"
+                    metadata_json = json.dumps(doc.metadata, ensure_ascii=False)
+
+                    await db.execute(
+                        text("""
+                        INSERT INTO external_items (
+                            id, user_id, data_source_id, connector_type, source_id, doc_id, external_id,
+                            uri, title, content, content_hash, metadata_json, indexed_at, updated_at
+                        )
+                        VALUES (
+                            :id, :user_id, :ds_id, :ctype, :source_id, :doc_id, :ext_id,
+                            :uri, :title, :content, :hash, :meta, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT(data_source_id, external_id) DO UPDATE SET
+                            user_id = excluded.user_id,
+                            data_source_id = excluded.data_source_id,
+                            connector_type = excluded.connector_type,
+                            external_id = excluded.external_id,
+                            uri = excluded.uri,
+                            title = excluded.title,
+                            content = excluded.content,
+                            content_hash = excluded.content_hash,
+                            metadata_json = excluded.metadata_json,
+                            indexed_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP,
+                            deleted_at = NULL
+                    """),
+                        {
+                            "id": item_id,
+                            "user_id": doc.user_id,
+                            "ds_id": doc.data_source_id,
+                            "ctype": doc.connector_type,
+                            "source_id": doc.data_source_id,
+                            "doc_id": doc.external_id,
+                            "ext_id": doc.external_id,
+                            "uri": doc.uri,
+                            "title": doc.title,
+                            "content": doc.content[:50000],
+                            "hash": doc.content_hash,
+                            "meta": metadata_json,
+                        },
+                    )
+                await db.commit()
+
+            # DB flush 成功后，才 mark_indexed + 语义索引入队
+            for doc in batch:
+                store_key = f"{doc.data_source_id}:{doc.external_id}"
+                await self._store.mark_indexed(store_key, doc.content_hash, doc.data_source_id)
+                await self._memory_queue.put(doc)
+
+            logger.info("ingestion.batch_flushed", count=len(batch))
+        except Exception:
+            logger.exception("ingestion.batch_flush_failed", count=len(batch))
 
     async def _memory_worker(self) -> None:
-        """后台消费记忆队列，写入 DocumentIndexProvider。"""
+        """后台消费记忆队列，写入 DocumentIndexProvider。重试 MAX_MEMORY_RETRY 次。"""
         while self._running:
             try:
                 doc: StructuredDocument = await self._memory_queue.get()
-                try:
-                    await self._memory.sync_document(
-                        content=doc.content[:50000],
+                last_error = ""
+                for attempt in range(1, MAX_MEMORY_RETRY + 1):
+                    try:
+                        await self._memory.sync_document(
+                            content=doc.content[:MAX_CONTENT_CHARS],
+                            doc_id=doc.external_id,
+                            metadata=doc.metadata,
+                        )
+                        break
+                    except Exception as exc:
+                        last_error = str(exc)
+                        logger.warning(
+                            "ingestion.memory_sync_failed",
+                            doc_id=doc.external_id,
+                            attempt=attempt,
+                            error=last_error,
+                        )
+                        if attempt < MAX_MEMORY_RETRY:
+                            await jittered_sleep(attempt)
+                else:
+                    # 重试耗尽，该文档永久丢失语义索引
+                    logger.error(
+                        "ingestion.memory_sync_permanent_failure",
                         doc_id=doc.external_id,
-                        metadata=doc.metadata,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "ingestion.memory_sync_failed",
-                        doc_id=doc.external_id,
-                        error=str(exc),
+                        retries=MAX_MEMORY_RETRY,
+                        error=last_error,
                     )
             except asyncio.CancelledError:
                 break

@@ -3,7 +3,29 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass
+class ProviderHit:
+    """Provider 召回的单条结果。
+
+    所有 Provider 实现的 prefetch() 必须返回 list[ProviderHit]，
+    不再依赖字符串格式约定和正则解析。
+    """
+
+    doc_id: str
+    """文档唯一标识，与 sync_document 的 doc_id 对应。"""
+
+    content: str
+    """召回的文本片段（已截断到合理长度）。"""
+
+    score: float = 0.0
+    """相似度分数（0.0 ~ 1.0），不支持时填 0.0。"""
+
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """原始元数据，供调用方按需使用。"""
 
 
 class DocumentIndexProvider(ABC):
@@ -34,12 +56,11 @@ class DocumentIndexProvider(ABC):
         """初始化后端（建表、建索引等）。"""
 
     @abstractmethod
-    async def prefetch(self, query: str) -> str:
-        """召回相关内容，拼装成字符串返回给 LLM。
+    async def prefetch(self, query: str) -> list[ProviderHit]:
+        """召回相关内容，返回结构化结果列表。
 
-        返回格式统一为（方便 Agent 解析引用）：
-            [来源: {doc_id}]\n{content}\n\n[来源: {doc_id}]\n{content}
-        无相关结果时返回空字符串。
+        无相关结果时返回空列表。
+        调用方（search.py）负责将结果转换为 MemoryItem，不再依赖字符串格式。
         """
 
     @abstractmethod
