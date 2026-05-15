@@ -175,21 +175,16 @@ class MemorySearcher:
         *,
         search_mode: str = "keyword",
         time_filter: str | None = None,
-        source_scope: str = "narrative",  # "narrative" | "external" | "all"
-        include_provider: bool = True,
     ) -> list[MemoryItem]:
         """搜索记忆：FTS5 关键词 + Provider 语义（统一）。
 
         search_mode:
-          - "keyword" (默认): FTS5 关键词匹配
+          - "keyword" (默认): FTS5 关键词匹配 + Provider 语义搜索
           - "grep": 时间范围过滤（不依赖搜索），配合 time_filter 使用
 
         time_filter: 仅 grep 模式生效
           - "today" | "yesterday" | "recent_3d" | "recent_7d" | "recent_30d"
           - "YYYY-MM-DD~YYYY-MM-DD" 绝对范围
-
-        source_scope: 控制搜索范围 — narrative（默认）/ external / all
-        include_provider: 启用 Provider 语义搜索（Cognee/LanceDB/HRR）
         """
         if search_mode == "grep":
             time_start, time_end = _parse_time_filter(time_filter)
@@ -199,8 +194,6 @@ class MemorySearcher:
             user_id,
             query,
             limit=limit,
-            source_scope=source_scope,
-            include_provider=include_provider,
         )
 
     async def build_context(
@@ -229,7 +222,6 @@ class MemorySearcher:
                     user_id,
                     user_input,
                     limit=8,
-                    source_scope="all",
                 )
                 if items:
                     lines = ["【相关记忆】"]

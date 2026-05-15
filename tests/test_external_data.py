@@ -323,8 +323,8 @@ async def test_pipeline_handle_delete(migrated_db) -> None:
         assert not await pipeline._store.is_indexed(store_key, "hdel")
 
 
-async def test_search_all_source_scope(migrated_db) -> None:
-    """search_all 的 source_scope 参数应正确过滤数据源。"""
+async def test_search_all_unified(migrated_db) -> None:
+    """search_all 应统一搜索 narrative 事件 + 外部文档，不再区分 source_scope。"""
     from backend.modules.memory.search import search_all
 
     # 写入一条外部数据
@@ -347,18 +347,10 @@ async def test_search_all_source_scope(migrated_db) -> None:
         )
         await db.commit()
 
-    # external scope 应返回结果
-    ext = await search_all("demo_user", "scope test", limit=5, source_scope="external")
-    assert len(ext) == 1
-    assert "scope" in ext[0].content
-
-    # narrative scope 不应返回外部数据
-    nar = await search_all("demo_user", "scope test", limit=5, source_scope="narrative")
-    assert not any("ext:" in r.id for r in nar)
-
-    # all scope 应包含外部数据
-    all_results = await search_all("demo_user", "scope test", limit=5, source_scope="all")
-    assert any("ext:" in r.id for r in all_results)
+    # search_all 统一搜索全部数据
+    results = await search_all("demo_user", "scope test", limit=5)
+    assert len(results) >= 1
+    assert any("scope" in r.content for r in results)
 
 
 @pytest.mark.asyncio
@@ -366,13 +358,10 @@ async def test_search_with_provider(mock_provider) -> None:
     """search_all 应通过 Provider 召回语义搜索结果。"""
     from backend.modules.memory.search import search_all
 
-    # 使用 all scope 启用 Provider 搜索
     results = await search_all(
         "demo_user",
         "machine learning",
         limit=5,
-        source_scope="all",
-        include_provider=True,
     )
 
     # 应有 Provider 结果（mock_provider 已索引）

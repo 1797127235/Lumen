@@ -10,7 +10,7 @@ from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
 from backend.modules.agent.tools.core.context import ToolRuntimeContext
 from backend.modules.data_sources.models import DataSource
-from backend.modules.memory.search import _search_external_fts5
+from backend.modules.memory.search import search_all
 
 logger = get_logger(__name__)
 
@@ -23,7 +23,7 @@ async def handle_data_source_search(args: dict[str, Any], ctx: ToolRuntimeContex
     if not query:
         return "[工具错误] 请提供搜索关键词。"
 
-    results = await _search_external_fts5(query, limit, set(), ctx.user_id)
+    results = await search_all(ctx.user_id, query, limit=limit)
     if not results:
         return "未找到相关外部文档。"
 

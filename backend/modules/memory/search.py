@@ -1,9 +1,9 @@
 """统一搜索层 — 从多个存储源召回记忆。
 
-    主路径：FTS5 全文搜索（Narrative 事件 + 外部文档）
-    语义路径：DocumentIndexProvider（Cognee/LanceDB/HRR）
-      - Narrative GrowthEvent：通过 projected_cognee_at 增量同步
-      - 外部文档：通过 IngestionPipeline._memory_worker 同步
+三条搜索管线并行运行，结果合并去重：
+  - Provider 语义搜索（Cognee/LanceDB/HRR）— 覆盖 narrative 事件 + 外部文档
+  - FTS5 关键词搜索（growth_events_fts）— Narrative 事件全文检索
+  - FTS5 关键词搜索（external_items_fts）— 外部文档全文检索
 
 Profile 事件不走搜索索引 — L0 固定注入已覆盖。"""
 
@@ -37,28 +37,35 @@ async def search_all(
     user_id: str,
     query: str,
     limit: int = 10,
-    *,
-    include_provider: bool = True,
-    source_scope: str = "narrative",  # "narrative" | "external" | "all"
 ) -> list[MemoryItem]:
-    """搜索记忆：FTS5（关键词）+ Provider（语义，统一）。
+    """统一搜索：Provider（语义）+ FTS5（关键词），三路并行合并去重。
 
-    include_provider: 默认 True — 通过 DocumentIndexProvider 做语义搜索。
-    source_scope: 控制搜索范围 — narrative（默认，仅事件）/ external（仅外部文档）/ all（两者）
+    不再区分数据来源 — 搜索全部数据，靠 categories 字段标识来源。
+    Provider 不可用时自动降级（NullProvider 返回空列表）。
     """
     seen: set[str] = set()
     results: list[MemoryItem] = []
 
-    # Provider 语义搜索：source_scope 为 "narrative" 或 "all" 时启用
-    # （narrative 事件同样存储在 Provider 中，不限于 FTS5）
-    if include_provider and source_scope in ("narrative", "all"):
-        results.extend(await _search_provider(query, limit, seen))
+    # Provider 语义搜索 — 覆盖 narrative 事件 + 外部文档
+    provider_results = await _search_provider(query, limit)
+    for item in provider_results:
+        if item.id not in seen:
+            seen.add(item.id)
+            results.append(item)
 
-    if source_scope in ("narrative", "all"):
-        results.extend(await _search_fts5(user_id, query, limit, seen))
+    # FTS5 关键词 — narrative 事件
+    fts5_results = await _search_fts5(user_id, query, limit, seen)
+    for item in fts5_results:
+        if item.id not in seen:
+            seen.add(item.id)
+            results.append(item)
 
-    if source_scope in ("external", "all"):
-        results.extend(await _search_external_fts5(query, limit, seen, user_id))
+    # FTS5 关键词 — 外部文档
+    ext_results = await _search_external_fts5(query, limit, seen, user_id)
+    for item in ext_results:
+        if item.id not in seen:
+            seen.add(item.id)
+            results.append(item)
 
     return results[:limit]
 
@@ -273,10 +280,12 @@ async def _search_external_like(query: str, limit: int, seen: set[str], user_id:
     return results
 
 
-async def _search_provider(query: str, limit: int, seen: set[str]) -> list[MemoryItem]:
+async def _search_provider(query: str, limit: int) -> list[MemoryItem]:
     """DocumentIndexProvider 语义搜索（LanceDB/HRR/Cognee）。
 
-    直接消费 list[ProviderHit]，不再依赖字符串正则解析。
+    返回的 item.id 格式：
+      - narrative 事件: 裸 event UUID（与 _search_fts5 一致，自然去重）
+      - 外部文档: f"provider:{doc_id}"（不与外部 FTS5 的 ext: 格式碰撞）
     """
     results: list[MemoryItem] = []
     try:
@@ -291,21 +300,21 @@ async def _search_provider(query: str, limit: int, seen: set[str]) -> list[Memor
         for hit in hits:
             if len(results) >= limit:
                 break
-            item_id = f"provider:{hit.doc_id}"
-            if item_id in seen:
-                continue
-            seen.add(item_id)
 
-            # 当 doc_id 为 "narrative:{event_id}" 时，同时把裸 event_id 加入 seen，
-            # 防止 _search_fts5 重复返回同一条 narrative 事件（修复 #1 重复召回）。
+            # narrative 事件: doc_id = "narrative:{event_uuid}" → 裸 UUID
             if hit.doc_id.startswith("narrative:"):
-                seen.add(hit.doc_id[10:])
+                item_id = hit.doc_id[10:]
+                categories = [f"provider:{provider.name}"]
+            else:
+                # 外部文档: 保持 provider: 前缀，与 ext: 格式区分
+                item_id = f"provider:{hit.doc_id}"
+                categories = [f"provider:{provider.name}"]
 
             results.append(
                 MemoryItem(
                     id=item_id,
                     content=hit.content,
-                    categories=[f"provider:{provider.name}"],
+                    categories=categories,
                 )
             )
     except Exception:

@@ -16,7 +16,6 @@ async def handle_memory_search(args: dict[str, Any], ctx: ToolRuntimeContext) ->
     """搜索用户记忆。"""
     typed: MemorySearchArgs = args  # type: ignore[assignment]
     query = typed["query"]
-    scope = typed.get("scope")
     search_mode = typed.get("search_mode", "keyword")
     time_filter = typed.get("time_filter")
 
@@ -29,7 +28,6 @@ async def handle_memory_search(args: dict[str, Any], ctx: ToolRuntimeContext) ->
         query,
         search_mode=search_mode,
         time_filter=time_filter,
-        source_scope="external" if scope == "knowledge" else "narrative",
     )
     if items:
         data = "\n".join(f"- [{item.categories[0] if item.categories else '?'}] {item.content[:300]}" for item in items)
