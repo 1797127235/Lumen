@@ -92,7 +92,7 @@ career-os/
 │       │   ├── router.py         # 记忆管理 API 路由（16 个端点）
 │       │   └── review_service.py # 后台记忆审查（Agent fork 审查对话）
 │       ├── profile/            # 画像模块
-│       │   ├── models.py       # User + UserProfile（含 profile_data JSON）
+│       │   ├── models.py       # User + UserProfile（通用伴侣画像，profile_data JSON 为核心）
 │       │   ├── schemas.py      # ProfileResponse, ProfileUpdate, SkillPayload 等
 │       │   ├── service.py      # 画像结构化读写业务
 │       │   └── resume_service.py  # 简历解析
