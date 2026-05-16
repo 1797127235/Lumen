@@ -65,6 +65,31 @@ async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides.clear()
 
 
+class _MockProvider:
+    """内存中的 DocumentIndexProvider 模拟，用于测试 Provider 搜索集成。"""
+
+    name = "mock"
+
+    def __init__(self):
+        self._docs: dict[str, str] = {}
+
+    async def initialize(self) -> None:
+        pass
+
+    async def prefetch(self, query: str) -> list:
+        from backend.modules.data_sources.ingestion.document_index_provider import ProviderHit
+
+        q = query.lower()
+        hits = []
+        for doc_id, content in self._docs.items():
+            if any(word in content.lower() for word in q.split()):
+                hits.append(ProviderHit(doc_id=doc_id, content=content))
+        return hits
+
+    async def sync_document(self, content: str, doc_id: str, metadata=None) -> None:
+        self._docs[doc_id] = content
+
+
 @pytest.fixture
 async def mock_provider():
     """创建一个 mock DocumentIndexProvider 并注入到全局 Pipeline。"""
@@ -72,11 +97,10 @@ async def mock_provider():
     from pathlib import Path
 
     from backend.modules.data_sources.ingestion.pipeline import init_pipeline
-    from backend.modules.data_sources.ingestion.providers.hrr import HRRProvider
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        provider = HRRProvider(dim=512, db_path=Path(tmpdir) / "test_hrr.json")
-        provider.initialize()
+        provider = _MockProvider()
+        await provider.initialize()
         # 索引一些测试文档
         await provider.sync_document(
             "Machine learning is a subset of artificial intelligence. "
@@ -84,7 +108,7 @@ async def mock_provider():
             "doc1",
         )
         await provider.sync_document(
-            "Python is a popular programming language for data science. " "It has libraries like pandas and numpy.",
+            "Python is a popular programming language for data science. It has libraries like pandas and numpy.",
             "doc2",
         )
 

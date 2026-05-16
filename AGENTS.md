@@ -211,6 +211,14 @@ career-os/
 - `EXTERNAL_DATA_ENABLED` — `true` 开启外部数据接入（Phase 2a）
 - `EXTERNAL_DATA_DIRS` — 逗号分隔的本地目录路径，如 `C:\Obsidian,C:\Notes`
 
+## 已移除端点（Workstream C 重构）
+
+以下端点已在架构重构中移除，前端不再调用：
+
+- ~~`GET /api/memory/profile-structured`~~ → 由 `/api/memory/understanding` 替代
+- ~~`POST /api/memory/profile-update`~~ → 由 `/api/memory/understanding/correct` 替代
+- ~~`POST /api/memory/upload-resume`~~ → 简历解析服务已移除
+
 ## Code Style
 
 - Python 3.11+，类型提示（`from __future__ import annotations`）

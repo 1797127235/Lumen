@@ -71,6 +71,8 @@ export async function chatStream(
   const reader = res.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  // thinking 状态：0=未开始, 1=进行中(已发<think>), 2=已结束(已发</think>)
+  let thinkingState: 0 | 1 | 2 = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -94,9 +96,27 @@ export async function chatStream(
       }
 
       switch (ev.type) {
-        case "token":
-          h.onToken(String(ev.content ?? ""), String(ev.conversation_id ?? ""));
+        case "thinking": {
+          const content = String(ev.content ?? "");
+          if (!content) break;
+          // 第一次收到 thinking，先发送 <think> 标签
+          if (thinkingState === 0) {
+            h.onToken("<think>\n", String(ev.conversation_id ?? ""));
+            thinkingState = 1;
+          }
+          h.onToken(content, String(ev.conversation_id ?? ""));
           break;
+        }
+        case "token": {
+          const content = String(ev.content ?? "");
+          // 如果之前有 thinking 内容未关闭，先关闭 </think>
+          if (thinkingState === 1) {
+            h.onToken("\n</think>\n", String(ev.conversation_id ?? ""));
+            thinkingState = 2;
+          }
+          h.onToken(content, String(ev.conversation_id ?? ""));
+          break;
+        }
         case "trace":
           h.onTrace(
             String(ev.kind ?? "call") as "call" | "result",
@@ -104,15 +124,27 @@ export async function chatStream(
             String(ev.content ?? ""),
           );
           break;
-        case "done":
+        case "done": {
+          // 如果 thinking 未关闭，先关闭它
+          if (thinkingState === 1) {
+            h.onToken("\n</think>", String(ev.conversation_id ?? ""));
+            thinkingState = 2;
+          }
           h.onDone(
             String(ev.conversation_id ?? ""),
             ev.usage as { input: number; output: number } | undefined,
           );
           break;
-        case "error":
+        }
+        case "error": {
+          // 如果 thinking 未关闭，先关闭它
+          if (thinkingState === 1) {
+            h.onToken("\n</think>", String(ev.conversation_id ?? ""));
+            thinkingState = 2;
+          }
           h.onError(String(ev.message ?? "未知错误"));
           break;
+        }
       }
     }
   }

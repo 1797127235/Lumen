@@ -205,7 +205,6 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "embedding_model",
         "embedding_api_key",
         "embedding_base_url",
-        "document_index_provider",
     )
 
     for key in _CONFIG_KEYS:

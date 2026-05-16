@@ -93,7 +93,7 @@ function AssistantBubble({
 
   return (
     <div className="ink-fade-in">
-      <div className="mb-2xs text-xs text-text-subtle">学长</div>
+      <div className="mb-2xs text-xs text-text-subtle">Lumen</div>
       <div className="mb-sm h-px w-12 bg-border" />
 
       {traces && traces.length > 0 ? (
@@ -294,9 +294,12 @@ function ThinkingCard({ content, closed }: { content: string; closed: boolean })
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
-        <span>思考过程</span>
+        <span>{closed ? '思考完成' : '思考中...'}</span>
         {!closed && (
           <span className="ml-xs animate-pulse text-text-subtle">·</span>
+        )}
+        {closed && content && (
+          <span className="ml-auto text-text-subtle/40">{content.length} 字</span>
         )}
       </summary>
       <div className="border-t border-border-soft px-sm py-xs">

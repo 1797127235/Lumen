@@ -52,6 +52,19 @@ class EventHandlers:
         return [{"type": "trace", "kind": "result", "tool": tool_name, "content": content_display}]
 
     @staticmethod
+    def part_start(event, state, deps: dict[str, Any]) -> list[dict]:
+        """处理 PartStartEvent — 新 part 的首段内容在这里发出。"""
+        from pydantic_ai.messages import TextPart, ThinkingPart
+
+        part = event.part
+        if isinstance(part, TextPart) and part.content:
+            state.full_content += part.content
+            return [{"type": "token", "content": part.content, "conversation_id": deps["conversation_id"]}]
+        elif isinstance(part, ThinkingPart) and part.content:
+            return [{"type": "thinking", "content": part.content, "conversation_id": deps["conversation_id"]}]
+        return []
+
+    @staticmethod
     def part_delta(event, state, deps: dict[str, Any]) -> list[dict]:
         from pydantic_ai.messages import TextPartDelta, ThinkingPartDelta
 
@@ -107,6 +120,7 @@ def _truncate(text: str, max_len: int) -> str:
 EVENT_HANDLERS: dict[str, Any] = {
     "function_tool_call": EventHandlers.function_tool_call,
     "function_tool_result": EventHandlers.function_tool_result,
+    "part_start": EventHandlers.part_start,
     "part_delta": EventHandlers.part_delta,
     "agent_run_result": EventHandlers.agent_run_result,
 }

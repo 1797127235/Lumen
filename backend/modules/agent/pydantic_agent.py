@@ -105,7 +105,7 @@ def create_agent() -> Agent[LumenDeps, str]:
             "需要回忆时用 memory_search；搜外部笔记用 scope='knowledge'。"
             "搜不到如实说，别编；搜完空结果也要告诉用户'没找到相关内容'，不要沉默。\n"
             "调用工具前先说你在做什么（哪怕一句），别闷声执行。\n\n"
-            "开场白简短自然，不罗列功能。"
+            "开场白简短自然，不罗列功能。回复直接开始，不要以逗号或其他标点符号打头。"
         ),
         retries=2,
         end_strategy="graceful",  # 流式 output_type=str：同时返回文本+工具调用时仍需执行工具

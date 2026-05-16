@@ -95,24 +95,29 @@ async def invalidate_cache(user_id: str) -> None:
 _MIN_ABOUT_YOU_CHARS = 30  # 低于此视为画像不可用，而非硬编码 50
 
 
-def _build_fixed_block(user_id: str) -> str:
+def _build_fixed_block(user_id: str, nickname: str | None = None) -> str:
     """L0 固定块：优先 AI 综合画像（about_you.md），缺失时降级到 memory.md。
 
     剥离元数据注释行后判断内容是否可用。排除仅含模板占位符的默认文件。
+    若 nickname 存在，注入到固定块开头供模型称呼用户。
     """
     from backend.modules.memory.markdown import _strip_meta, read_about_you, read_memory
+
+    parts: list[str] = []
+    if nickname:
+        parts.append(f"【用户称呼】你可以称呼用户为「{nickname}」，但不必每次都叫。")
 
     about_you = read_about_you(user_id)
     about_you = _strip_meta(about_you)
     if about_you and _has_substantive_content(about_you):
-        return f"## AI 对你的理解\n{about_you.strip()}"
+        parts.append(f"## AI 对你的理解\n{about_you.strip()}")
+    else:
+        # 降级：about_you 不可用时，直接读取结构化画像 memory.md
+        memory_content = read_memory(user_id)
+        if memory_content and _has_substantive_content(memory_content):
+            parts.append(f"## 用户画像\n{memory_content.strip()}")
 
-    # 降级：about_you 不可用时，直接读取结构化画像 memory.md
-    memory_content = read_memory(user_id)
-    if memory_content and _has_substantive_content(memory_content):
-        return f"## 用户画像\n{memory_content.strip()}"
-
-    return ""
+    return "\n\n".join(parts) if parts else ""
 
 
 def _has_substantive_content(text: str) -> bool:
@@ -166,12 +171,13 @@ def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[
         if ctx.summary:
             line = f"- **{title}**：{ctx.summary[:80]}"
         else:
-            # 取最近几条消息的内容片段
+            # 取最近几条消息的内容片段（带角色前缀，避免模型混淆格式）
             msg_parts: list[str] = []
             for msg in msgs[:_CONTEXT_MAX_MESSAGES_PER_CONV]:
                 content = msg.get("content")
                 if content:
-                    msg_parts.append(content[:60])
+                    role_label = "用户" if msg.get("role") == "user" else "AI"
+                    msg_parts.append(f"{role_label}：{content[:50]}")
             content_hint = "；".join(msg_parts)
             line = f"- **{title}**：{content_hint[:80]}" if content_hint else f"- **{title}**"
 
@@ -270,10 +276,21 @@ async def build_snapshot(user_id: str) -> str:
             cached.last_accessed = datetime.now(UTC)
             return cached.content
 
-    fixed_block = _build_fixed_block(user_id)
+    # 查询用户 nickname（同步查询，避免开两个 session）
+    nickname: str | None = None
+    try:
+        from backend.modules.profile.models import User
 
-    async with get_async_session_maker()() as db:
-        contexts = await _fetch_recent_conversations(user_id, db)
+        async with get_async_session_maker()() as db:
+            user_result = await db.execute(select(User).where(User.user_id == user_id))
+            user_obj = user_result.scalar_one_or_none()
+            if user_obj:
+                nickname = user_obj.nickname
+            contexts = await _fetch_recent_conversations(user_id, db)
+    except Exception:
+        contexts = []
+
+    fixed_block = _build_fixed_block(user_id, nickname)
 
     if not fixed_block and not contexts:
         content = "【用户画像为空】"
