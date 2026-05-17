@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.core.logging import get_logger
+from backend.modules.memory.observations import ObservationsResult, synthesize_observations
 
 logger = get_logger(__name__)
 
@@ -48,6 +49,7 @@ class MemoryItemOut(BaseModel):
     memory: str
     created_at: str | None = None
     categories: list[str] = Field(default_factory=list)
+    confirmation_status: str = "confirmed"
 
 
 class AboutYouResponse(BaseModel):
@@ -121,6 +123,21 @@ async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
     except Exception as exc:
         logger.error("Memory rebuild failed: %s", exc)
         raise HTTPException(status_code=500, detail="重建失败，请查看日志")
+
+
+@router.get("/observations", response_model=ObservationsResult)
+async def get_observations(
+    days: int = Query(7),
+    user_id: str = Query("demo_user"),
+) -> ObservationsResult:
+    """返回 Lumen 关于当前用户的最新 3 条观察。
+
+    events < 10 条时返回 observations=[]，前端不渲染。
+    """
+    if not (1 <= days <= 90):
+        raise HTTPException(status_code=400, detail="days 必须在 1-90 之间")
+    _validate_user_id(user_id)
+    return await synthesize_observations(user_id=user_id, days=days)
 
 
 @router.get("/search")
@@ -210,6 +227,65 @@ async def correct_ai_understanding(
 
     await _update_profile_data(user_id, corrected_text)
     return {"message": "已更新", "chars": len(corrected_text)}
+
+
+@router.patch("/{event_id}")
+async def update_memory(
+    event_id: str,
+    body: dict[str, Any],
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """更新记忆内容。"""
+    _validate_user_id(user_id)
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="content 不能为空")
+
+    try:
+        memory = _get_memory()
+        success, error = await memory.update_event(
+            user_id=user_id,
+            event_id=event_id,
+            payload={"key": content[:32], "value": content, "source": "用户编辑"},
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail=error or "更新失败")
+        return {"updated": event_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Memory update failed: %s", exc)
+        raise HTTPException(status_code=500, detail="更新失败")
+
+
+class ReviewBody(BaseModel):
+    status: str
+
+
+@router.post("/{event_id}/review")
+async def review_memory(
+    event_id: str,
+    body: ReviewBody,
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """审核记忆：confirmed 或 rejected。"""
+    _validate_user_id(user_id)
+    try:
+        memory = _get_memory()
+        success, error = await memory.review_event(
+            user_id=user_id,
+            event_id=event_id,
+            status=body.status,
+        )
+        if not success:
+            status_code = 400 if error and "必须是" in error else 404
+            raise HTTPException(status_code=status_code, detail=error or "审核失败")
+        return {"reviewed": event_id, "status": body.status}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Memory review failed: %s", exc)
+        raise HTTPException(status_code=500, detail="审核失败")
 
 
 @router.post("/tell")

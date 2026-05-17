@@ -20,6 +20,7 @@ from sqlalchemy import text
 from backend.core.db import get_async_session_maker
 from backend.core.logging import get_logger
 from backend.modules.memory.classifier import NARRATIVE_EVENT_TYPES
+from backend.modules.memory.models import GrowthEvent
 
 logger = get_logger(__name__)
 
@@ -33,6 +34,25 @@ class MemoryItem(BaseModel):
     content: str
     created_at: str | None = None
     categories: list[str] = Field(default_factory=list)
+
+
+async def _filter_rejected_narrative(user_id: str, items: list[MemoryItem]) -> list[MemoryItem]:
+    """过滤掉 confirmation_status='rejected' 的 narrative 事件。"""
+    narrative_ids = [item.id for item in items if not item.id.startswith(("ext:", "provider:"))]
+    if not narrative_ids:
+        return items
+    async with get_async_session_maker()() as db:
+        from sqlalchemy import select
+
+        result = await db.execute(
+            select(GrowthEvent.id).where(
+                GrowthEvent.user_id == user_id,
+                GrowthEvent.id.in_(narrative_ids),
+                GrowthEvent.confirmation_status == "rejected",
+            )
+        )
+        rejected_ids = {row[0] for row in result.all()}
+    return [item for item in items if item.id not in rejected_ids]
 
 
 async def search_all(
@@ -74,6 +94,8 @@ async def search_all(
             seen.add(item.id)
             results.append(item)
 
+    # 过滤 rejected 的 narrative 事件
+    results = await _filter_rejected_narrative(user_id, results)
     return results[:limit]
 
 
@@ -160,6 +182,7 @@ def _fts_query(table_name: str, time_start: datetime | None = None, time_end: da
         JOIN {table_name} fts ON fts.rowid = ge.rowid
         WHERE ge.user_id = :uid
           AND ge.event_type IN :etypes
+          AND ge.confirmation_status != 'rejected'
           AND {table_name} MATCH :q
           {time_where}
         ORDER BY ge.created_at DESC

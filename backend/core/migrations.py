@@ -219,6 +219,10 @@ async def migrate_sqlite(conn) -> None:
         "ALTER TABLE growth_events ADD COLUMN original_dedupe_key VARCHAR(128)",
         "CREATE INDEX IF NOT EXISTS ix_growth_events_status ON growth_events (user_id, status)",
         "CREATE INDEX IF NOT EXISTS ix_growth_events_original_dedupe ON growth_events (original_dedupe_key)",
+        # ── 记忆审核机制 ──
+        "ALTER TABLE growth_events ADD COLUMN confirmation_status VARCHAR(16) NOT NULL DEFAULT 'confirmed'",
+        "ALTER TABLE growth_events ADD COLUMN reviewed_at DATETIME",
+        "CREATE INDEX IF NOT EXISTS ix_growth_events_confirmation ON growth_events (user_id, confirmation_status)",
     ]:
         try:
             await conn.execute(text(sql))

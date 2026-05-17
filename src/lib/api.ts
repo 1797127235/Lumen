@@ -43,7 +43,9 @@ export {
   getMemoryStats,
   refreshAIUnderstanding,
   resetMemory,
+  reviewMemory,
   tellAI,
+  updateMemory,
 } from "./api/memory";
 export type {
   AboutYouResponse,

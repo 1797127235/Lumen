@@ -110,6 +110,7 @@ class MemorySearcher:
                     "memory": event.payload_json or f"{event.event_type}: {event.entity_type or 'unknown'}",
                     "created_at": event.created_at.isoformat() if event.created_at else None,
                     "categories": [event.event_type] if event.event_type else [],
+                    "confirmation_status": event.confirmation_status,
                 }
             )
         return items
@@ -141,6 +142,7 @@ class MemorySearcher:
                 .where(
                     GrowthEvent.user_id == user_id,
                     GrowthEvent.event_type.in_(NARRATIVE_EVENT_TYPES),
+                    GrowthEvent.confirmation_status != "rejected",
                 )
                 .order_by(GrowthEvent.created_at.desc())
             )

@@ -9,7 +9,6 @@ import './index.css'
 import App from './App.tsx'
 import Chat from './pages/Chat.tsx'
 import Profile from './pages/Profile.tsx'
-import Memories from './pages/Memories.tsx'
 
 import MyWorld from './pages/MyWorld.tsx'
 
@@ -20,7 +19,6 @@ createRoot(document.getElementById('root')!).render(
         <Route element={<App />}>
           <Route index element={<Chat />} />
           <Route path="profile" element={<Profile />} />
-          <Route path="memories" element={<Memories />} />
 
           <Route path="my-world" element={<MyWorld />} />
         </Route>

@@ -207,11 +207,13 @@ class ProjectionManager:
         return {"md_success": md_success}
 
     async def delete_event(self, user_id: str, event_id: str) -> tuple[bool, str | None]:
-        """删除单条事件，FTS5 触发器自动增量更新索引。
+        """删除单条事件。
 
-        不再全量重建 FTS — AFTER DELETE 触发器已处理增量删除。
-        仅当 FTS 损坏时才需要 rebuild_fts_index()。
+        先禁用 FTS 触发器再删除，避免触发器因数据不一致报错，
+        然后重建 FTS 索引确保同步。
         """
+        from backend.modules.memory.relational_store import GrowthEventRepository
+
         async with get_async_session_maker()() as db:
             event = await db.get(GrowthEvent, event_id)
 
@@ -221,8 +223,11 @@ class ProjectionManager:
                 return False, "无权删除该记忆"
 
             try:
+                store = GrowthEventRepository(db)
+                await store.drop_fts_triggers()
                 await db.delete(event)
                 await db.commit()
+                await store.rebuild_fts_index()
             except Exception:
                 await db.rollback()
                 return False, "数据库操作失败"

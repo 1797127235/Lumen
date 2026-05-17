@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from typing import Generic, TypeVar
 
 from sqlalchemy import select, text
@@ -121,6 +122,43 @@ class GrowthEventRepository(BaseRepository[GrowthEvent]):
             stmt = stmt.where(GrowthEvent.user_id == user_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def update_event(
+        self,
+        event_id: str,
+        user_id: str,
+        payload: dict | None = None,
+    ) -> GrowthEvent | None:
+        """更新事件 payload，重新计算 dedupe_key 和 payload_hash。"""
+        event = await self.db.get(GrowthEvent, event_id)
+        if event is None or event.user_id != user_id:
+            return None
+
+        if payload is not None:
+            event.payload_json = json.dumps(payload, ensure_ascii=False)
+            event.payload_hash = _make_payload_hash(payload)
+            event.dedupe_key = _make_dedupe_key(
+                user_id, event.event_type, event.entity_type, event.entity_id, event.payload_hash
+            )
+        event.updated_at = datetime.now(UTC)
+        await self.db.flush()
+        return event
+
+    async def review_event(
+        self,
+        event_id: str,
+        user_id: str,
+        confirmation_status: str,
+    ) -> GrowthEvent | None:
+        """审核事件：confirmed / rejected。"""
+        event = await self.db.get(GrowthEvent, event_id)
+        if event is None or event.user_id != user_id:
+            return None
+
+        event.confirmation_status = confirmation_status
+        event.reviewed_at = datetime.now(UTC)
+        await self.db.flush()
+        return event
 
     async def get_needing_projection(
         self, user_id: str, projection_field: str = "projected_provider_at", limit: int = 50

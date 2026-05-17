@@ -10,6 +10,7 @@ export type MemoryItem = {
   memory: string;
   created_at: string | null;
   categories: string[];
+  confirmation_status: string;
 };
 
 export function getMemoryContent(): Promise<{ content: string }> {
@@ -100,6 +101,34 @@ export function correctAIUnderstanding(text: string): Promise<{ message: string;
 
 export type TellType = "interest" | "value" | "relationship" | "moment" | "reflection";
 
+export function updateMemory(
+  id: string,
+  content: string,
+): Promise<{ updated: string }> {
+  return http<{ updated: string }>(
+    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(cachedUserId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    },
+  );
+}
+
+export function reviewMemory(
+  id: string,
+  status: "confirmed" | "rejected",
+): Promise<{ reviewed: string; status: string }> {
+  return http<{ reviewed: string; status: string }>(
+    `/api/memory/${encodeURIComponent(id)}/review?user_id=${encodeURIComponent(cachedUserId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    },
+  );
+}
+
 export function tellAI(
   eventType: TellType,
   content: string,
@@ -111,5 +140,26 @@ export function tellAI(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ event_type: eventType, content }),
     },
+  );
+}
+
+// ── Observations（顶部观察条）──
+
+export type Observation = {
+  text: string;
+  source_event_ids: string[];
+  source_event_types: string[];
+};
+
+export type ObservationsResult = {
+  observations: Observation[];
+  generated_at: string | null;
+  events_analyzed: number;
+  period_days: number;
+};
+
+export function getObservations(days: number = 7): Promise<ObservationsResult> {
+  return http<ObservationsResult>(
+    `/api/memory/observations?days=${days}&user_id=${encodeURIComponent(cachedUserId)}`,
   );
 }

@@ -43,6 +43,11 @@ class GrowthEvent(Base):
     original_dedupe_key: Mapped[str | None] = mapped_column(
         String(128), nullable=True
     )  # 第一次合并前保存的原始 dedupe_key
+    # ── 记忆审核机制 ─────────────────────────────────────────────────────────
+    confirmation_status: Mapped[str] = mapped_column(
+        String(16), default="confirmed", nullable=False, server_default="confirmed"
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<GrowthEvent {self.event_type} user={self.user_id} at {self.created_at}>"

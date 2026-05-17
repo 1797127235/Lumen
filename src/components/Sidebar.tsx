@@ -102,6 +102,23 @@ export default function Sidebar() {
         新对话
       </button>
 
+      {/* 我的世界 */}
+      <NavLink
+        to="/my-world"
+        className={({ isActive }) =>
+          `flex items-center gap-xs px-sm py-xs rounded-md text-sm transition-colors ${
+            isActive
+              ? "bg-surface-elevated text-ink"
+              : "text-text-muted hover:bg-surface-elevated hover:text-text"
+          }`
+        }
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+        </svg>
+        我的世界
+      </NavLink>
+
       {/* 对话历史 */}
       <div className="scroll-auto-hide flex min-h-0 flex-1 flex-col gap-xs mt-xs overflow-y-auto">
         {groups.map(group => (
@@ -147,7 +164,7 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* 底部设置 */}
+      {/* 设置 */}
       <div className="border-t border-border-soft pt-xs mt-xs">
         <button
           onClick={() => window.dispatchEvent(new Event('lumen-open-settings'))}

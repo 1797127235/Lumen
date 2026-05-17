@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +113,50 @@ class LumenMemory(MemoryWriter, MemorySearcher, ProjectionManager):
                 )
                 await session.commit()
             return created
+
+    async def update_event(
+        self,
+        user_id: str,
+        event_id: str,
+        payload: dict | None = None,
+    ) -> tuple[bool, str | None]:
+        """更新记忆事件内容，更新后触发投影重建。"""
+        from backend.modules.memory.relational_store import GrowthEventRepository
+
+        async with get_async_session_maker()() as session:
+            repo = GrowthEventRepository(session)
+            event = await repo.update_event(event_id, user_id, payload=payload)
+            if event is None:
+                return False, "记忆不存在或无权修改"
+            # 标记为已编辑
+            event.confirmation_status = "modified"
+            event.reviewed_at = datetime.now(UTC)
+            await session.commit()
+
+        await self.force_md_rebuild(user_id)
+        return True, None
+
+    async def review_event(
+        self,
+        user_id: str,
+        event_id: str,
+        status: str,
+    ) -> tuple[bool, str | None]:
+        """审核记忆事件：confirmed / rejected。"""
+        if status not in ("confirmed", "rejected"):
+            return False, "status 必须是 confirmed 或 rejected"
+
+        from backend.modules.memory.relational_store import GrowthEventRepository
+
+        async with get_async_session_maker()() as session:
+            repo = GrowthEventRepository(session)
+            event = await repo.review_event(event_id, user_id, confirmation_status=status)
+            if event is None:
+                return False, "记忆不存在或无权修改"
+            await session.commit()
+
+        await self.force_md_rebuild(user_id)
+        return True, None
 
 
 _memory: LumenMemory | None = None

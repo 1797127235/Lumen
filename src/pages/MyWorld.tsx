@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
+  createDataSource,
   deleteDataSource,
   listDataSources,
   syncDataSource,
@@ -56,6 +58,7 @@ export default function MyWorld() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [actingId, setActingId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     load();
@@ -120,14 +123,48 @@ export default function MyWorld() {
     }
   }
 
+  async function handleAddFolder() {
+    setError("");
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path || typeof path !== "string") return;
+      setAdding(true);
+      const name = path.split(/[\\/]/).pop() || "未命名";
+      const created = await createDataSource({
+        name,
+        type: "local_folder",
+        config: { paths: [path] },
+      });
+      await syncDataSource(created.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "添加失败");
+    } finally {
+      setAdding(false);
+    }
+  }
+
   return (
     <div className="w-full max-w-[42rem] mx-auto px-md py-xl ink-fade-in">
       {/* 标题 */}
-      <div className="mb-lg">
-        <h1 className="text-xl font-han text-ink mb-2xs">我的世界</h1>
-        <p className="text-sm text-text-muted">
-          Lumen 已阅读的资料，在对话中会自动引用
-        </p>
+      <div className="mb-lg flex items-end justify-between">
+        <div>
+          <h1 className="text-xl font-han text-ink mb-2xs">我的世界</h1>
+          <p className="text-sm text-text-muted">
+            Lumen 已阅读的资料，在对话中会自动引用
+          </p>
+        </div>
+        <button
+          onClick={handleAddFolder}
+          disabled={adding}
+          className="inline-flex items-center gap-xs px-sm py-2 rounded-lg border border-border text-xs text-text-muted hover:text-text hover:border-border-soft transition-colors disabled:opacity-40"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          {adding ? "添加中…" : "添加本地文件夹"}
+        </button>
       </div>
 
       {/* 搜索 */}
@@ -198,7 +235,7 @@ export default function MyWorld() {
           <p className="text-sm text-text-muted max-w-[22rem] mb-md leading-relaxed">
             {search.trim()
               ? "试试其他关键词"
-              : "前往「设置 → 我的世界」添加本地文件夹，Lumen 会自动阅读其中的内容"}
+              : "点击右上角「添加本地文件夹」选择路径，Lumen 会自动阅读其中的内容"}
           </p>
         </div>
       )}
