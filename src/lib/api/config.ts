@@ -34,7 +34,7 @@ export async function getConfig(): Promise<Config> {
   return http<Config>("/api/config");
 }
 
-export async function updateConfig(data: Partial<Config>): Promise<Config> {
+export async function updateConfig(data: Partial<Config> & { providers?: Record<string, any> }): Promise<Config> {
   return http<Config>("/api/config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

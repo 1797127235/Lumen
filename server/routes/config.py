@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -44,6 +46,7 @@ class ConfigUpdate(BaseModel):
     embedding_base_url: str | None = None
     dashscope_api_key: str | None = None
     document_index_provider: str | None = None
+    providers: dict[str, Any] | None = None
 
 
 class ConfigTestRequest(BaseModel):

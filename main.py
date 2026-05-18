@@ -15,6 +15,7 @@ from server.routes.health import router as health_router
 from server.routes.mcp import router as mcp_router
 from server.routes.memory import router as memory_router
 from server.routes.notes import router as notes_router
+from server.routes.providers import router as providers_router
 
 logger = get_logger(__name__)
 
@@ -44,6 +45,7 @@ app.include_router(memory_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
+app.include_router(providers_router, prefix="/api")
 app.include_router(mcp_router)
 
 # ── 静态文件托管：dist/ 存在时始终挂载 ──

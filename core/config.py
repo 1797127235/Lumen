@@ -129,10 +129,30 @@ def save_user_config(data: dict[str, Any]) -> dict[str, Any]:
     _ensure_user_data_dir()
     config_path = USER_DATA_DIR / "config.json"
     existing = load_user_config()
-    # 过滤空值，不保存空字符串覆盖（含纯空格）
-    data = {k: v for k, v in data.items() if v not in (None, "") and not (isinstance(v, str) and not v.strip())}
-    existing.update(data)
-    config_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 顶层标量字段浅合并（过滤空值，不动 providers）
+    flat = {
+        k: v
+        for k, v in data.items()
+        if k != "providers" and v not in (None, "") and not (isinstance(v, str) and not v.strip())
+    }
+    existing.update(flat)
+
+    # providers 深合并（照抄 _saveAddedModels 的合并语义）
+    # value 为 None → 删除该供应商（照抄 remove()）
+    # value 为 dict → 字段级合并（照抄 saveProvider() 的 partial update）
+    if "providers" in data and isinstance(data["providers"], dict):
+        ep = existing.get("providers") or {}
+        for pid, pval in data["providers"].items():
+            if pval is None:
+                ep.pop(pid, None)
+            elif isinstance(pval, dict):
+                ep[pid] = {**(ep.get(pid) or {}), **{k: v for k, v in pval.items() if v is not None}}
+        existing["providers"] = ep
+
+    tmp = config_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(config_path)  # 原子写入
     return existing
 
 
@@ -187,15 +207,24 @@ def build_llm_call_params(
 
     统一 model_id 构建规则（provider != openai 时加前缀）和认证参数获取逻辑，
     避免 summary.py、test_config 等处重复实现。
+    优先从 providers 配置中读取 key 和 base_url（供应商页面管理），
+    其次回退到顶层字段（兼容旧配置）。
     """
     settings = get_settings()
     provider = provider or settings.llm_provider
     model = model or settings.llm_model
     model_id = model if provider == "openai" else f"{provider}/{model}"
+
+    # 优先从供应商页面配置读取
+    user_cfg = load_user_config()
+    provider_cfg = (user_cfg.get("providers") or {}).get(provider, {})
+    provider_key = provider_cfg.get("api_key", "")
+    provider_base_url = provider_cfg.get("base_url", "")
+
     return {
         "model": model_id,
-        "api_key": api_key or settings.llm_api_key or settings.dashscope_api_key or "",
-        "base_url": base_url or settings.llm_base_url,
+        "api_key": api_key or settings.llm_api_key or provider_key or settings.dashscope_api_key or "",
+        "base_url": base_url or settings.llm_base_url or provider_base_url,
     }
 
 
