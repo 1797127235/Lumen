@@ -35,8 +35,8 @@ async def persist_turn(
         cache_read = state.usage_data.get("cache_read") or 0
         cache_write = state.usage_data.get("cache_write") or 0
         tokens_used = inp + out
-        total_input = inp + cache_read
-        hit_rate = round(cache_read / total_input * 100, 1) if total_input else 0
+        # inp = total prompt tokens (hit + miss)，cache_read = hit tokens
+        hit_rate = round(cache_read / inp * 100, 1) if inp else 0
         logger.info(
             "token usage",
             input=inp,
