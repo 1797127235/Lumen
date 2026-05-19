@@ -7,6 +7,7 @@ from lib.tools._middleware import wrap_with_budget, wrap_with_logging
 from lib.tools.memory import create_memory_tools
 from lib.tools.notes import create_notes_tools
 from lib.tools.profile import create_profile_tools
+from lib.tools.web_search import create_web_search_tools
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,6 +19,7 @@ def assemble_tools() -> list[ToolDef]:
         *create_memory_tools(),
         *create_profile_tools(),
         *create_notes_tools(),
+        *create_web_search_tools(),
         *_discover_mcp_tools(),
     ]
     tools = wrap_with_logging(tools)
@@ -27,7 +29,7 @@ def assemble_tools() -> list[ToolDef]:
 
 def build_pydantic_toolset(tools: list[ToolDef]):
     """将 list[ToolDef] 转换为 PydanticAI FunctionToolset。"""
-    from pydantic_ai.tools import FunctionToolset  # pyright: ignore[reportMissingImports]
+    from pydantic_ai import FunctionToolset  # pyright: ignore[reportMissingImports]
 
     pydantic_tools = [_to_pydantic_tool(t) for t in tools]
     return FunctionToolset(pydantic_tools)

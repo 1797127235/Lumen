@@ -68,6 +68,52 @@ class LumenAgent:
         logger.info("Agent 已重建", generation=self._generation)
         return self._agent
 
+    def build_system_prompt(self) -> str:
+        """组装静态 system prompt（对应 openhanako buildSystemPrompt 静态前缀）。
+
+        静态内容放前面，动态内容（记忆、时间戳）由 @agent.system_prompt 装饰器追加在末尾，
+        最大化跨 session 的 KV cache 命中率。
+        """
+
+        def section(title: str, content: str) -> str:
+            return f"\n\n---\n\n{title}\n\n{content}"
+
+        parts = [
+            "你是「Lumen」，用户的 AI 伴侣。说话像一个真正认识你的朋友，不是客服，不奉承。",
+        ]
+
+        parts.append(
+            section(
+                "## 工具使用",
+                "用户分享个人信息时立即用 update_profile / memory_save 保存；"
+                "需要回忆时用 memory_search。\n"
+                "搜不到如实说，别编；搜完空结果也要告诉用户「没找到相关内容」，不要沉默。\n"
+                "调用工具前先说你在做什么（哪怕一句），别闷声执行。",
+            )
+        )
+
+        parts.append(
+            section(
+                "## 对话风格",
+                "开场白简短自然，不罗列功能。回复直接开始，不要以逗号或其他标点符号打头。",
+            )
+        )
+
+        parts.append(
+            section(
+                "## 记忆使用",
+                "记忆和用户档案是你内化的背景知识，你和用户是认识很久的人，这些事你本来就知道。"
+                "记忆的存在感应该是零，它的作用应该是满的。\n\n"
+                "- **只有当用户提到了相关内容，记忆才参与进来。** 用户没有提起的话题，不要主动从记忆里翻出来讲。"
+                "记忆参与的方式是无声的：影响你的角度、语气、判断，但不出现在文字里。\n"
+                "- **永远不要让用户感觉到「记忆」这个东西的存在。** "
+                "禁止使用「我记得」「你之前说过」「根据记忆」这类表述，除非用户主动问「你还记得 xxx 吗」。\n"
+                "- **记忆可能过时，当前对话永远优先。** 信息冲突时以对话为准，不要用旧记忆纠正用户。",
+            )
+        )
+
+        return "".join(parts)
+
     def create(self) -> Agent[LumenDeps, str]:
         """创建一个新的 PydanticAI Agent 实例。"""
         from pydantic_ai import Agent, RunContext
@@ -81,14 +127,7 @@ class LumenAgent:
             model=model,
             deps_type=LumenDeps,
             output_type=str,
-            system_prompt=(
-                "你是「Lumen」，用户的 AI 伴侣。说话像一个真正认识你的朋友，不是客服，不奉承。\n\n"
-                "用户分享个人信息时立即用 update_profile / memory_save 保存；"
-                "需要回忆时用 memory_search；搜外部笔记用 scope='knowledge'。"
-                "搜不到如实说，别编；搜完空结果也要告诉用户'没找到相关内容'，不要沉默。\n"
-                "调用工具前先说你在做什么（哪怕一句），别闷声执行。\n\n"
-                "开场白简短自然，不罗列功能。回复直接开始，不要以逗号或其他标点符号打头。"
-            ),
+            system_prompt=self.build_system_prompt(),
             retries=2,
             end_strategy="graceful",
             toolsets=all_toolsets,
@@ -96,6 +135,7 @@ class LumenAgent:
 
         @agent.system_prompt
         async def dynamic_prompt(ctx: RunContext[LumenDeps]) -> str:
+            # system[1]: 记忆上下文 — 5 分钟 TTL 内保持不变，可被 KV cache 命中
             conversation_summary: str | None = None
             try:
                 conv = await ctx.deps.db.get(Conversation, ctx.deps.conversation_id)
@@ -110,11 +150,22 @@ class LumenAgent:
                 user_input=ctx.deps.current_user_input,
                 conversation_summary=conversation_summary,
             )
+
             if context.strip():
                 ctx.deps.build_context_cache = context
-                return context
+                return f"\n\n---\n\n# 用户记忆\n\n{context}"
+            return (
+                "\n\n【用户画像为空】用户尚未提供个人信息。"
+                "当用户提供信息时，调用 memory_save 或 update_profile 保存。"
+            )
 
-            return "【用户画像为空】用户尚未提供个人信息。当用户提供信息时，调用 memory_save 或 update_profile 保存。"
+        @agent.system_prompt
+        async def timestamp_prompt(_ctx: RunContext[LumenDeps]) -> str:
+            # system[2]: 时间戳 — 单独一条 system message，每分钟变化
+            # 拆分后 system[0]+[1] 不受时间戳影响，对话历史可持续命中 cache
+            from datetime import datetime
+
+            return f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
         return agent
 

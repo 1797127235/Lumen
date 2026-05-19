@@ -10,10 +10,10 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from core.agent import LumenDeps, get_agent, get_agent_generation
-from lib.agent.event_handlers import EVENT_HANDLERS
+from lib.chat.event_handlers import EVENT_HANDLERS
 from lib.chat.persistence import _log_task_error, persist_turn, save_user_message
 from lib.chat.session import ensure_conversation, load_pydantic_history
-from shared.logging import get_logger
+from shared.logging import bind_chat_context, get_logger, unbind_chat_context
 
 logger = get_logger(__name__)
 
@@ -53,6 +53,7 @@ async def stream_chat(
         return
 
     state = _TurnState()
+    bind_chat_context(conversation_id=conv.conversation_id, user_id=user_id)
     try:
         async with ConversationLock(conv.conversation_id):
             await db.refresh(conv)
@@ -103,14 +104,16 @@ async def stream_chat(
         return
     except Exception as exc:
         if isinstance(exc, UnexpectedModelBehavior):
-            logger.warning("模型返回异常", conversation_id=conv.conversation_id, error=str(exc))
+            logger.warning("模型返回异常", error=str(exc))
             msg = "模型未返回内容，可能触发了内容过滤，请换一种说法重试"
         else:
-            logger.exception("生成 AI 回复失败", conversation_id=conv.conversation_id)
+            logger.exception("生成 AI 回复失败")
             msg = "生成回复失败，请稍后重试"
         await db.rollback()
         yield {"type": "error", "message": msg}
         return
+    finally:
+        unbind_chat_context()
 
     if state.cancelled:
         yield {"type": "cancelled", "conversation_id": conv.conversation_id}

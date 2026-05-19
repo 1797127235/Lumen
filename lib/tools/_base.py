@@ -1,25 +1,18 @@
-"""工具基础类型 — ToolDef 定义 + 结果构造器。"""
-
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from core.agent import LumenDeps
+from typing import Any
 
 
 @dataclass
 class ToolDef:
-    """单个工具的完整描述。"""
-
     name: str
     description: str
     input_schema: dict[str, Any]
-    execute: Callable[[dict[str, Any], LumenDeps], Awaitable[str]]
     read_only: bool = True
-    category: str = "builtin"  # builtin / mcp / plugin
+    execute: Callable[..., Any] | None = None
+    label: str = ""
 
 
 def tool_ok(text: str) -> str:
@@ -28,5 +21,5 @@ def tool_ok(text: str) -> str:
 
 def tool_error(message: str, code: str = "") -> str:
     if code:
-        return f"[错误/{code}] {message}"
-    return f"[错误] {message}"
+        return f"[工具错误/{code}] {message}"
+    return f"[工具错误] {message}"

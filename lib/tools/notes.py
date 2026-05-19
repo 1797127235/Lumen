@@ -21,11 +21,9 @@ async def _data_source_search(args: dict[str, Any], deps) -> str:
     limit = min(int(args.get("limit", 5)), 10)
     if not query:
         return tool_error("请提供搜索关键词")
-
     results = await search_all(deps.user_id, query, limit=limit)
     if not results:
         return "未找到相关内容。"
-
     lines = [f"找到 {len(results)} 条相关内容："]
     for i, item in enumerate(results, 1):
         lines.append(f"\n{i}. {item.content}")

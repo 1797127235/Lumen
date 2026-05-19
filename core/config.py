@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # 示例：AGENT_WORKSPACE_DIR=E:\\MyHub\\career-os
     agent_workspace_dir: str = ""
 
+    # ── 网络搜索 ──
+    search_provider: str = ""  # tavily / serper / brave
+    search_api_key: str = ""
+
     # ── 外部数据接入 ──
     external_data_enabled: bool = False
     external_data_dirs: str = ""

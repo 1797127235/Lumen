@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from lib.agent.models import AgentTrace
+from lib.chat.agent_trace import AgentTrace
 from lib.chat.models import Conversation, Message
 from lib.data_sources.models import DataSource, IngestionState
 from lib.memory.models import GrowthEvent

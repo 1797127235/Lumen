@@ -23,6 +23,7 @@ class EventHandlers:
         args = getattr(event, "args", None) or getattr(getattr(event, "part", None), "args", None)
         args_str = _safe_json(args, 300)
         tool_name = getattr(event, "tool_name", None) or getattr(getattr(event, "part", None), "tool_name", None) or ""
+        logger.info("tool_call", tool=tool_name, step=state.step, args=args_str)
         state.trace_records.append(
             {
                 "step_number": state.step,
@@ -40,6 +41,7 @@ class EventHandlers:
         content = _normalize_content(getattr(event, "content", None))
         content_display = _truncate(content, 500)
         tool_name = getattr(event, "tool_name", None) or getattr(getattr(event, "part", None), "tool_name", None) or ""
+        logger.info("tool_result", tool=tool_name, step=state.step, content_len=len(content))
         state.trace_records.append(
             {
                 "step_number": state.step,
@@ -83,8 +85,9 @@ class EventHandlers:
         state.new_msgs = event.result.new_messages()
         if not state.cancelled:
             try:
-                u = event.result.usage()
-                state.usage_data = {"input": u.request_tokens or 0, "output": u.response_tokens or 0}
+                from shared.llm_usage import extract_usage
+
+                state.usage_data = extract_usage(event.result.usage())
             except Exception:
                 pass
         return []

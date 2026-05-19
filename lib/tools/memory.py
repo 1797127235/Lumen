@@ -34,7 +34,6 @@ async def _search(args: dict[str, Any], deps) -> str:
     items = await memory.recall(
         deps.user_id,
         query,
-        scope=args.get("scope"),
         search_mode=args.get("search_mode", "keyword"),
         time_filter=args.get("time_filter"),
     )
@@ -89,13 +88,11 @@ def create_memory_tools() -> list[ToolDef]:
                 "搜索记忆。"
                 "search_mode: keyword（默认，关键词搜索）或 grep（时间范围浏览，需配合 time_filter）。"
                 "time_filter: today / yesterday / recent_3d / recent_7d / recent_30d / YYYY-MM-DD~YYYY-MM-DD。"
-                "scope（仅 keyword 模式）: profile / emotions / reference / chat / knowledge。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词或时间描述"},
-                    "scope": {"type": "string", "description": "搜索范围（profile/emotions/reference/chat/knowledge）"},
                     "search_mode": {"type": "string", "description": "keyword（默认）或 grep", "default": "keyword"},
                     "time_filter": {"type": "string", "description": "时间过滤（today/yesterday/recent_7d 等）"},
                 },

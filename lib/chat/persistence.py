@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from core.agent import LumenDeps
-from lib.agent.models import AgentTrace
+from lib.chat.agent_trace import AgentTrace
 from lib.chat.models import Message
 from lib.chat.session import save_pydantic_history
 from shared.logging import get_logger
@@ -29,7 +29,22 @@ async def persist_turn(
     # 写入 token 用量（PydanticAI 在 agent_run_result 事件中已捕获）
     tokens_used: int | None = None
     if state.usage_data:
-        tokens_used = (state.usage_data.get("input") or 0) + (state.usage_data.get("output") or 0)
+        inp = state.usage_data.get("input") or 0
+        out = state.usage_data.get("output") or 0
+        cache_read = state.usage_data.get("cache_read") or 0
+        cache_write = state.usage_data.get("cache_write") or 0
+        tokens_used = inp + out
+        total_input = inp + cache_read
+        hit_rate = round(cache_read / total_input * 100, 1) if total_input else 0
+        logger.info(
+            "token usage",
+            input=inp,
+            output=out,
+            cache_read=cache_read,
+            cache_write=cache_write,
+            cache_hit_rate=f"{hit_rate}%",
+            conversation_id=conv.conversation_id,
+        )
 
     db.add(
         Message(
