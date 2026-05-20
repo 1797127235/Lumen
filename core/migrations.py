@@ -41,24 +41,22 @@ _GROWTH_EVENTS_FTS_DDL: list[str] = [
         VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
     END""",
     # AFTER DELETE 触发器
+    # 注意：FTS5 的 'delete' 特殊插入语法在触发器中会报 SQL logic error，
+    # 改用直接 DELETE FROM（SQLite 3.45+ 的 FTS5 已支持）。
     """CREATE TRIGGER IF NOT EXISTS trg_growth_events_ad AFTER DELETE ON growth_events BEGIN
-        INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
-        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        DELETE FROM growth_events_fts WHERE rowid = old.rowid;
     END""",
     """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_ad AFTER DELETE ON growth_events BEGIN
-        INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
-        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        DELETE FROM growth_events_fts_trigram WHERE rowid = old.rowid;
     END""",
     # AFTER UPDATE 触发器
     """CREATE TRIGGER IF NOT EXISTS trg_growth_events_au AFTER UPDATE ON growth_events BEGIN
-        INSERT INTO growth_events_fts(growth_events_fts, rowid, event_type, entity_type, entity_id, payload_json)
-        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        DELETE FROM growth_events_fts WHERE rowid = old.rowid;
         INSERT INTO growth_events_fts(rowid, event_type, entity_type, entity_id, payload_json)
         VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
     END""",
     """CREATE TRIGGER IF NOT EXISTS trg_growth_events_tri_au AFTER UPDATE ON growth_events BEGIN
-        INSERT INTO growth_events_fts_trigram(growth_events_fts_trigram, rowid, event_type, entity_type, entity_id, payload_json)
-        VALUES ('delete', old.rowid, old.event_type, old.entity_type, old.entity_id, old.payload_json);
+        DELETE FROM growth_events_fts_trigram WHERE rowid = old.rowid;
         INSERT INTO growth_events_fts_trigram(rowid, event_type, entity_type, entity_id, payload_json)
         VALUES (new.rowid, new.event_type, new.entity_type, new.entity_id, new.payload_json);
     END""",

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from core.db import get_async_session_maker
-from lib.memory.classifier import NARRATIVE_EVENT_TYPES
+from lib.memory.classifier import NARRATIVE_EVENT_TYPES, PROFILE_EVENT_TYPES
 from lib.memory.models import GrowthEvent
 from shared.logging import get_logger
 
@@ -122,7 +122,11 @@ async def _search_fts5(
     time_start: datetime | None = None,
     time_end: datetime | None = None,
 ) -> list[MemoryItem]:
-    """SQLite FTS5 全文搜索 — 仅搜索 Narrative 事件。"""
+    """SQLite FTS5 全文搜索 — 覆盖所有事件类型（含 Profile）。
+
+    CJK 查询如果 MATCH 返回空，自动 fallback 到 jieba 分词 + LIKE，
+    解决 trigram tokenizer 对短词（<3 字）和长句的盲区。
+    """
     results: list[MemoryItem] = []
     safe_query = _escape_fts5(query)
     if not safe_query:
@@ -132,7 +136,7 @@ async def _search_fts5(
         async with get_async_session_maker()() as db:
             params = {
                 "uid": user_id,
-                "etypes": tuple(NARRATIVE_EVENT_TYPES),
+                "etypes": tuple(NARRATIVE_EVENT_TYPES | PROFILE_EVENT_TYPES),
                 "q": safe_query,
                 "lim": limit,
             }
@@ -150,17 +154,116 @@ async def _search_fts5(
 
             for row in rows:
                 eid = str(row[0])
+                created_at = row[4]
+                if created_at is not None:
+                    if isinstance(created_at, datetime):
+                        created_at = created_at.isoformat()
+                    elif isinstance(created_at, str):
+                        pass  # 已经是 ISO 格式字符串
+                    else:
+                        created_at = str(created_at)
                 results.append(
                     MemoryItem(
                         id=eid,
                         content=row[1] or f"{row[2]}: {row[3] or ''}",
-                        created_at=row[4].isoformat() if row[4] else None,
+                        created_at=created_at,
                         categories=[row[2]] if row[2] else [],
                     )
                 )
     except Exception:
         logger.exception("FTS5 search failed", user_id=user_id, query=query)
+
+    # CJK fallback: MATCH 为空时用 jieba 分词 + LIKE 兜底
+    if not results and _CJK_RE.search(query):
+        try:
+            results = await _search_cjk_like(user_id, query, limit, time_start, time_end)
+        except Exception:
+            logger.exception("CJK LIKE fallback failed", user_id=user_id, query=query)
+
     return results
+
+
+async def _search_cjk_like(
+    user_id: str,
+    query: str,
+    limit: int,
+    time_start: datetime | None = None,
+    time_end: datetime | None = None,
+) -> list[MemoryItem]:
+    """CJK 搜索 fallback：jieba 分词提取关键词，用 LIKE 匹配 payload_json。
+
+    解决 trigram tokenizer 对 <3 字词和长句的盲区。
+    数据量小时（<1000 条）LIKE 扫描性能完全可接受。
+    """
+    import jieba
+    from sqlalchemy import select
+
+    # jieba 分词，取长度 >= 2 且包含 CJK 的关键词
+    keywords: list[str] = []
+    seen_kw: set[str] = set()
+    for w in jieba.lcut(query):
+        w = w.strip()
+        if len(w) >= 2 and _CJK_RE.search(w) and w not in seen_kw:
+            seen_kw.add(w)
+            keywords.append(w)
+
+    # 没提取到有效关键词时，用原始 query 整体 LIKE
+    if not keywords:
+        raw = query.strip()
+        if len(raw) >= 2:
+            keywords = [raw]
+        else:
+            return []
+
+    async with get_async_session_maker()() as db:
+        seen_ids: set[str] = set()
+        all_results: list[MemoryItem] = []
+
+        for kw in keywords:
+            if len(all_results) >= limit:
+                break
+
+            pattern = f"%{kw}%"
+            stmt = select(
+                GrowthEvent.id,
+                GrowthEvent.payload_json,
+                GrowthEvent.event_type,
+                GrowthEvent.entity_type,
+                GrowthEvent.created_at,
+            ).where(
+                GrowthEvent.user_id == user_id,
+                GrowthEvent.confirmation_status != "rejected",
+                GrowthEvent.payload_json.like(pattern),
+            )
+            if time_start:
+                stmt = stmt.where(GrowthEvent.created_at >= time_start)
+            if time_end:
+                stmt = stmt.where(GrowthEvent.created_at < time_end)
+            stmt = stmt.order_by(GrowthEvent.created_at.desc()).limit(limit)
+
+            result = await db.execute(stmt)
+            for row in result.all():
+                eid = str(row[0])
+                if eid not in seen_ids:
+                    seen_ids.add(eid)
+                    created_at = row[4]
+                    if created_at is not None:
+                        if isinstance(created_at, datetime):
+                            created_at = created_at.isoformat()
+                        elif isinstance(created_at, str):
+                            pass
+                        else:
+                            created_at = str(created_at)
+                    all_results.append(
+                        MemoryItem(
+                            id=eid,
+                            content=row[1] or f"{row[2]}: {row[3] or ''}",
+                            created_at=created_at,
+                            categories=[row[2]] if row[2] else [],
+                        )
+                    )
+
+        return all_results[:limit]
 
 
 def _fts_query(table_name: str, time_start: datetime | None = None, time_end: datetime | None = None):

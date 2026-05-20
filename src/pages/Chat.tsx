@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { open } from '@tauri-apps/plugin-dialog'
+import { stat } from '@tauri-apps/plugin-fs'
 import ObservationStrip from '../components/ObservationStrip'
-import { useChatSession } from '../lib/chatSession'
+import { useChatSession, type AttachmentMeta } from '../lib/chatSession'
 import { parseThinkSegments } from '../lib/thinkSegments'
 
 export default function Chat() {
@@ -12,6 +14,9 @@ export default function Chat() {
     error,
     sendMessage,
     cancelStreaming,
+    attachments,
+    addAttachment,
+    removeAttachment,
   } = useChatSession()
   const endRef = useRef<HTMLDivElement | null>(null)
 
@@ -72,6 +77,9 @@ export default function Chat() {
           onSend={send}
           streaming={streaming}
           onCancel={cancelStreaming}
+          attachments={attachments}
+          onAddAttachment={addAttachment}
+          onRemoveAttachment={removeAttachment}
         />
       </div>
     </div>
@@ -159,12 +167,18 @@ function InputBox({
   onSend,
   streaming,
   onCancel,
+  attachments,
+  onAddAttachment,
+  onRemoveAttachment,
 }: {
   draft: string
   onChange: (value: string) => void
   onSend: () => void
   streaming: boolean
   onCancel: () => void
+  attachments: AttachmentMeta[]
+  onAddAttachment: (meta: AttachmentMeta) => void
+  onRemoveAttachment: (path: string) => void
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const [phIndex, setPhIndex] = useState(0)
@@ -185,7 +199,7 @@ function InputBox({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [draft])
 
-  const canSend = draft.trim().length > 0 && !streaming
+  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !streaming
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -201,6 +215,30 @@ function InputBox({
         ${focused ? 'border-ink/40 bg-surface shadow-sm' : 'border-border bg-surface/50'}
       `}
     >
+      {/* 附件预览区 */}
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-xs px-4 pt-3 pb-0">
+          {attachments.map((att) => (
+            <div
+              key={att.path}
+              className="flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs"
+            >
+              <span className="text-text-subtle">
+                {/\.(png|jpe?g|gif|webp|bmp)$/i.test(att.name) ? "🖼" : "📄"}
+              </span>
+              <span className="max-w-[120px] truncate text-text">{att.name}</span>
+              <button
+                onClick={() => onRemoveAttachment(att.path)}
+                className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-text-subtle hover:bg-danger hover:text-bg"
+                aria-label="移除附件"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
         ref={ref}
         value={draft}
@@ -216,6 +254,42 @@ function InputBox({
 
       <div className="flex items-center justify-between px-3 pt-0 pb-2">
         <div className="flex items-center gap-xs">
+          {/* 附件按钮 */}
+          <button
+            onClick={async () => {
+              try {
+                const paths = await open({
+                  multiple: true,
+                  filters: [{
+                    name: '文档与图片',
+                    extensions: ['txt','md','json','csv','pdf','docx','pptx','xlsx','png','jpg','jpeg','gif','webp']
+                  }]
+                });
+                if (!paths) return;
+                const MAX_SIZE = 20 * 1024 * 1024;
+                for (const p of paths) {
+                  try {
+                    const info = await stat(p);
+                    if (info.size > MAX_SIZE) {
+                      alert(`文件过大：${p} (${(info.size / 1024 / 1024).toFixed(1)}MB，最大 20MB)`);
+                      continue;
+                    }
+                  } catch { /* 获取不到大小就放行，后端会二次校验 */ }
+                  const name = p.replace(/\\/g, '/').split('/').pop() || 'file';
+                  onAddAttachment({ path: p, name });
+                }
+              } catch (err) {
+                alert(`选择文件失败: ${(err as Error).message}`);
+              }
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-text-subtle transition-colors hover:bg-ink-soft/10"
+            aria-label="添加附件"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
           <span className="select-none text-[11px] text-text-subtle/60">
             {draft.length > 0 ? `${draft.length} 字` : 'Shift + Enter 换行'}
           </span>

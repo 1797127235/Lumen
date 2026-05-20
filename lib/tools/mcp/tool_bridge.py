@@ -11,11 +11,14 @@ from shared.logging import get_logger
 logger = get_logger(__name__)
 
 
-def discover_mcp_tools() -> list[ToolDef]:
-    """从所有已连接 MCP Server 发现工具。连不上时返回空列表并 warn。"""
+def discover_mcp_tools() -> list[tuple[str, ToolDef]]:
+    """从所有已连接 MCP Server 发现工具。连不上时返回空列表并 warn。
+
+    返回 [(server_name, ToolDef), ...]，避免调用方依赖命名约定解析 server 名。
+    """
     manager = get_mcp_manager()
     discovered = manager.discover_tools()
-    tools: list[ToolDef] = []
+    result: list[tuple[str, ToolDef]] = []
 
     for server_name, server_tools in discovered:
         config = manager.get_server_config(server_name)
@@ -27,20 +30,22 @@ def discover_mcp_tools() -> list[ToolDef]:
             description = tool.get("description", f"MCP tool '{tool_name}' from '{server_name}'")
             input_schema = tool.get("inputSchema", {"type": "object", "properties": {}})
 
-            tools.append(
-                ToolDef(
-                    name=lumen_name,
-                    description=f"[{server_name}] {description}",
-                    input_schema=input_schema,
-                    execute=_make_handler(server_name, tool_name),
-                    read_only=read_only,
-                    category="mcp",
+            result.append(
+                (
+                    server_name,
+                    ToolDef(
+                        name=lumen_name,
+                        description=f"[{server_name}] {description}",
+                        input_schema=input_schema,
+                        execute=_make_handler(server_name, tool_name),
+                        read_only=read_only,
+                    ),
                 )
             )
 
-    if tools:
-        logger.info("MCP tools discovered", count=len(tools))
-    return tools
+    if result:
+        logger.info("MCP tools discovered", count=len(result))
+    return result
 
 
 def _make_handler(server_name: str, tool_name: str):

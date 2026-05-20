@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
@@ -60,6 +60,10 @@ class LumenAgent:
         fp = self._config_fingerprint()
         if self._agent is not None and self._config_hash == fp:
             return self._agent
+        # Agent 重建前同步重建工具注册表，确保 MCP 工具增删反映到 Registry
+        from lib.tools.factory import register_all_tools
+
+        register_all_tools()
         self._agent = self.create()
         self._config_hash = fp
         self._generation += 1
@@ -86,7 +90,13 @@ class LumenAgent:
                 "用户分享个人信息时立即用 update_profile / memory_save 保存；"
                 "需要回忆时用 memory_search。\n"
                 "搜不到如实说，别编；搜完空结果也要告诉用户「没找到相关内容」，不要沉默。\n"
-                "调用工具前先说你在做什么（哪怕一句），别闷声执行。",
+                "调用工具前先说你在做什么（哪怕一句），别闷声执行。\n\n"
+                "当用户消息中包含 `[attached_file: {path}]` 标记时，如果你需要了解该文件内容，"
+                "请调用 `file_read` 工具，传入 `file_path` 参数。\n"
+                "如需执行系统命令（如安装依赖、运行测试、查看进程等），使用 `shell` 工具；"
+                "长时间运行的命令可设 run_in_background=true，之后用 task_output 查看结果。\n"
+                "如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载。"
+                "加载后的工具从下一轮对话开始可直接调用。",
             )
         )
 
@@ -113,27 +123,44 @@ class LumenAgent:
         return "".join(parts)
 
     def create(self) -> Agent[LumenDeps, str]:
-        """创建一个新的 PydanticAI Agent 实例。"""
-        from lib.tools.factory import assemble_tools, build_pydantic_toolset
+        """创建一个新的 PydanticAI Agent 实例。
 
+        工具不在 Agent 构造时传入，而是由调用方在 run_stream_events 时通过
+        toolsets 参数按 conversation 动态提供，支持动态工具发现架构。
+        """
         model = self._create_model()
-        all_toolsets = [build_pydantic_toolset(assemble_tools())]
 
         from pydantic_ai.capabilities.reinject_system_prompt import ReinjectSystemPrompt
 
-        # system prompt 完全静态 — 动态内容（记忆、时间戳）由 service 层注入为 user message。
+        # system prompt 完全静态 — 动态内容（记忆、时间戳、deferred 工具目录）
+        # 由 service 层注入为 user message。
         # ReinjectSystemPrompt：message_history 非空时 PydanticAI 默认跳过 system 注入，
         # 这个 capability 确保每次请求都带上 system prompt。
-        return Agent(
+        agent = Agent(
             model=model,
             deps_type=LumenDeps,
             output_type=str,
             system_prompt=self.build_system_prompt(),
             retries=2,
             end_strategy="graceful",
-            toolsets=all_toolsets,
+            # toolsets 由运行时按 conversation 动态传入
             capabilities=[ReinjectSystemPrompt()],
         )
+
+        # 动态 system prompt 尾部：技能目录 + 激活技能内容
+        # 稳定前缀（build_system_prompt）始终命中 KV cache；
+        # 此函数追加在末尾，仅在有技能时才产生额外 token。
+        @agent.system_prompt
+        async def _skills_prompt(ctx: RunContext[LumenDeps]) -> str:
+            from lib.skills import get_skills_loader
+
+            loader = get_skills_loader()
+            summary = loader.build_skills_summary()
+            if summary:
+                return f"## 可用技能目录\n\n{summary}"
+            return ""
+
+        return agent
 
     @property
     def generation(self) -> int:

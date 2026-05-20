@@ -51,6 +51,7 @@ export async function chatStream(
   message: string,
   conversation_id: string | null,
   h: SSEChatHandlers,
+  attachments?: string[],
 ): Promise<void> {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -60,6 +61,7 @@ export async function chatStream(
       message,
       conversation_id: conversation_id ?? undefined,
       user_id: cachedUserId,
+      attachments: attachments ?? [],
     }),
   });
 

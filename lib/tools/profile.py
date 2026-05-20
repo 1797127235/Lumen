@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from lib.memory import get_memory
-from lib.tools._base import ToolDef, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +74,7 @@ def create_profile_tools() -> list[ToolDef]:
             input_schema={"type": "object", "properties": {}},
             execute=_get_profile,
             read_only=True,
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="获取画像、用户资料"),
         ),
         ToolDef(
             name="update_profile",
@@ -87,5 +88,6 @@ def create_profile_tools() -> list[ToolDef]:
             },
             execute=_update_profile,
             read_only=False,
+            meta=ToolMeta(always_on=False, risk="write", search_hint="更新画像、修改资料"),
         ),
     ]

@@ -26,10 +26,19 @@ export type ChatMessage = {
   tokens_used?: number
 }
 
+export type AttachmentMeta = {
+  path: string;
+  name: string;
+};
+
 type ChatSessionValue = {
   messages: ChatMessage[]; streaming: boolean; conversationId: string | null; error: string | null
   sendMessage: (text: string) => Promise<void>; cancelStreaming: () => void
   loadConversation: (id: string) => Promise<void>; startNew: () => void
+  attachments: AttachmentMeta[]
+  addAttachment: (meta: AttachmentMeta) => void
+  removeAttachment: (path: string) => void
+  clearAttachments: () => void
 }
 
 const CHAT_CONV_STORAGE_KEY = 'lumen:chat-conversation-id'
@@ -49,6 +58,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
   const [streaming, setStreaming] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(() => stored(CHAT_CONV_STORAGE_KEY))
   const [error, setError] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<AttachmentMeta[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const bgRef = useRef<Background | null>(null)
 
@@ -92,6 +102,22 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       return next
     }, [])
 
+  const addAttachment = useCallback((meta: AttachmentMeta) => {
+    setAttachments(prev => {
+      if (prev.length >= 5) return prev;
+      if (prev.some(a => a.path === meta.path)) return prev;
+      return [...prev, meta];
+    });
+  }, []);
+
+  const removeAttachment = useCallback((path: string) => {
+    setAttachments(prev => prev.filter(a => a.path !== path));
+  }, []);
+
+  const clearAttachments = useCallback(() => {
+    setAttachments([]);
+  }, []);
+
   const sendMessage = useCallback(async function sendMessage(text: string) {
     const content = text.trim()
     if (!content || abortRef.current) return
@@ -99,6 +125,10 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     const ctrl = new AbortController()
     abortRef.current = ctrl
     const targetCid = conversationId
+
+    // 附件随请求发出后立即清空 UI，不等 onDone
+    const currentAttachments = attachments
+    clearAttachments()
 
     setMessages(prev => [...prev, { id: genId(), role: 'user', content }, { id: genId(), role: 'assistant', content: '' }])
     setStreaming(true)
@@ -140,7 +170,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
             setMessages(prev => { const last = prev[prev.length - 1]; return last?.role === 'assistant' && !last.content ? prev.slice(0, -1) : prev })
           }
         },
-      })
+      }, attachments.map(a => a.path))
     } catch (e) {
       if ((e as Error).name !== 'AbortError' && !bgRef.current) {
         setStreaming(false)
@@ -149,7 +179,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     } finally {
       if (abortRef.current === ctrl) abortRef.current = null
     }
-  }, [conversationId, appendToken, appendTrace, appendUsage])
+  }, [conversationId, appendToken, appendTrace, appendUsage, attachments, clearAttachments])
 
   const cancelStreaming = useCallback(() => {
     abortRef.current?.abort()
@@ -167,11 +197,13 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       setStreaming(bgRef.current.streaming)
       setConversationId(bgRef.current.conversationId)
       setError(null)
+      setAttachments([])
       return
     }
 
     setStreaming(false)
     setError(null)
+    setAttachments([])
     try {
       const items = await getConversation(id)
       setMessages(items.filter(i => i.role === 'user' || i.role === 'assistant').map(i => ({ id: genId(), role: i.role as 'user' | 'assistant', content: i.content ?? '', tokens_used: i.tokens_used ?? undefined })))
@@ -195,10 +227,11 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     setConversationId(null)
     setStreaming(false)
     setError(null)
+    setAttachments([])
   }
 
   return (
-    <ChatSessionContext.Provider value={{ messages, streaming, conversationId, error, sendMessage, cancelStreaming, loadConversation, startNew }}>
+    <ChatSessionContext.Provider value={{ messages, streaming, conversationId, error, sendMessage, cancelStreaming, loadConversation, startNew, attachments, addAttachment, removeAttachment, clearAttachments }}>
       {children}
     </ChatSessionContext.Provider>
   )

@@ -48,6 +48,7 @@ app.include_router(notes_router, prefix="/api")
 app.include_router(providers_router, prefix="/api")
 app.include_router(mcp_router)
 
+
 # ── 静态文件托管：dist/ 存在时始终挂载 ──
 static_dir = Path(__file__).parent.parent / "dist"
 if static_dir.exists():

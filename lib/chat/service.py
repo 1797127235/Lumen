@@ -33,6 +33,7 @@ async def stream_chat(
     user_id: str,
     user_input: str,
     conversation_id: str | None = None,
+    attachments: list | None = None,
     cancel_event: asyncio.Event | None = None,
 ):
     """流式对话编排 — Agent Loop，生成 SSE 事件流。"""
@@ -48,9 +49,32 @@ async def stream_chat(
 
     yield {"type": "token", "content": "", "conversation_id": conv.conversation_id}
 
-    if not await save_user_message(db, conv, user_input):
+    user_msg = await save_user_message(db, conv, user_input)
+    if not user_msg:
         yield {"type": "error", "message": "消息保存失败，请稍后重试"}
         return
+
+    # ── 附件处理：复制到 session-files，注入标记 ──
+    from pydantic_ai.messages import BinaryContent
+
+    from lib.chat.session_files import _copy_attachments, is_image
+
+    original_input = user_input  # 保存原始输入，用于记忆搜索（避免 [attached_file] 标记进入 FTS5）
+    copy_paths = await _copy_attachments(str(conv.conversation_id), attachments or [])
+
+    image_paths = [p for p in copy_paths if is_image(p)]
+    text_paths = [p for p in copy_paths if not is_image(p)]
+
+    if text_paths:
+        markers = "\n".join(f"[attached_file: {p}]" for p in text_paths)
+        user_input = f"{user_input}\n\n{markers}"
+
+    image_parts = []
+    for img_path in image_paths:
+        try:
+            image_parts.append(BinaryContent.from_path(img_path))
+        except Exception:
+            logger.warning("图片读取失败", path=img_path)
 
     state = _TurnState()
     bind_chat_context(conversation_id=conv.conversation_id, user_id=user_id)
@@ -73,11 +97,22 @@ async def stream_chat(
             )
 
             history = load_pydantic_history(conv)
-            history_with_frame = await _inject_context_frame(history, conv, user_id, user_input)
+            history_with_frame = await _inject_context_frame(history, conv, user_id, original_input)
             context_frame_msg = history_with_frame[-1] if history_with_frame else None
 
+            # 确保工具已注册（首次调用或 Agent 重建后）
+            from lib.tools._registry import get_tool_registry
+            from lib.tools.factory import register_all_tools
+
+            registry = get_tool_registry()
+            if not registry.get_registered_names():
+                register_all_tools()
+
+            from lib.tools.factory import build_pydantic_toolset_for_conversation
+
+            user_prompt = [user_input, *image_parts] if image_parts else user_input
             async for event in agent.run_stream_events(
-                user_input,
+                user_prompt,
                 message_history=history_with_frame,
                 deps=deps,
                 model_settings=ModelSettings(max_tokens=4096),
@@ -85,6 +120,7 @@ async def stream_chat(
                     request_limit=8,  # 最多 8 轮模型请求（含工具调用）
                     tool_calls_limit=6,  # 最多 6 次成功工具调用
                 ),
+                toolsets=[build_pydantic_toolset_for_conversation(conv.conversation_id)],
             ):
                 if cancel_event.is_set():
                     state.cancelled = True
@@ -95,9 +131,30 @@ async def stream_chat(
                     for item in handler(event, state, {"conversation_id": conv.conversation_id}):
                         yield item
 
+            # 收集本轮调用的工具，更新预加载缓存（LRU）
+            tool_names_used = {
+                r["tool_name"] for r in state.trace_records if r.get("step_type") == "tool_call" and r.get("tool_name")
+            }
+            if tool_names_used:
+                from lib.tools._discovery import get_tool_discovery_state
+
+                discovery = get_tool_discovery_state()
+                discovery.update(
+                    conv.conversation_id,
+                    list(tool_names_used),
+                    registry.get_always_on_names(),
+                )
+
             if state.full_content:
                 await persist_turn(
-                    db, conv, state, user_id, user_input, agent_generation, deps, context_frame_msg=context_frame_msg
+                    db,
+                    conv,
+                    state,
+                    user_id,
+                    original_input,
+                    agent_generation,
+                    deps,
+                    context_frame_msg=context_frame_msg,
                 )
 
     except LockCapacityError:
@@ -132,12 +189,20 @@ async def stream_chat(
     yield {"type": "done", "conversation_id": conv.conversation_id, "usage": state.usage_data}
 
 
-async def _inject_context_frame(history: list, conv, user_id: str, user_input: str) -> list:
+async def _inject_context_frame(
+    history: list,
+    conv,
+    user_id: str,
+    user_input: str,
+) -> list:
     """构建 context frame 并注入为 history 末尾的 user message。
 
     这样 system prompt 保持完全静态，KV cache prefix 不因记忆或时间戳变化而失效。
     历史消息（system → ... → last_assistant）可持续命中 cache；
     只有 context_frame + 当前 user_input 是每次请求的新内容。
+
+    注意：frame_msg 仅作为临时 message_history 传入当前轮对话，
+    不进入持久化数据库，因此不会在历史记录中累积。
     """
     from datetime import datetime
 
@@ -162,6 +227,13 @@ async def _inject_context_frame(history: list, conv, user_id: str, user_input: s
         parts.append(f"# 用户记忆\n\n{context}")
     else:
         parts.append("【用户画像为空】当用户提供信息时，调用 memory_save 或 update_profile 保存。")
+
+    # 注入 deferred 工具目录（动态工具发现）
+    from lib.tools.factory import build_deferred_tools_hint
+
+    deferred_hint = build_deferred_tools_hint(conv.conversation_id)
+    if deferred_hint:
+        parts.append(deferred_hint)
 
     frame_content = "\n\n".join(parts)
     frame_msg = ModelRequest(parts=[UserPromptPart(content=frame_content)])  # type: ignore[call-arg]

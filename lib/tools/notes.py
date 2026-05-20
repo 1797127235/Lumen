@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from lib.memory.models import GrowthEvent
 from lib.memory.search import search_all
-from lib.tools._base import ToolDef, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -77,6 +77,7 @@ def create_notes_tools() -> list[ToolDef]:
             },
             execute=_data_source_search,
             read_only=True,
+            meta=ToolMeta(always_on=False, risk="read-only", search_hint="搜索数据源、查找笔记"),
         ),
         ToolDef(
             name="notes_list",
@@ -89,5 +90,6 @@ def create_notes_tools() -> list[ToolDef]:
             },
             execute=_notes_list,
             read_only=True,
+            meta=ToolMeta(always_on=False, risk="read-only", search_hint="列出笔记、查看随记"),
         ),
     ]

@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from lib.tools._base import ToolDef, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -144,5 +144,6 @@ def create_web_search_tools() -> list[ToolDef]:
             },
             execute=_web_search,
             read_only=True,
+            meta=ToolMeta(always_on=False, risk="read-only", search_hint="搜索网页、查资料、google、百度"),
         )
     ]

@@ -66,14 +66,14 @@ curl http://localhost:8000/api/health
 
 ### 添加一个新的 Agent 工具
 
-1. **定义输入类型**：在 `backend/modules/agent/tools/builtin/schemas.py` 新增 `TypedDict`
-2. **实现 Handler**：在 `backend/modules/agent/tools/builtin/` 下新建文件或添加到现有文件
-3. **注册工具**：在 `backend/modules/agent/tools/core/factory.py` 的 `create_tool_runtime()` 中注册
+1. **定义输入类型**：在 `lib/tools/` 下的对应模块中使用 `TypedDict` 定义参数 schema
+2. **实现 Handler**：在 `lib/tools/` 下的模块中定义 `async def handle_xxx(args: dict, ctx: Any) -> str` 函数
+3. **注册工具**：在 `lib/tools/factory.py` 的 `create_tool_runtime()` 中通过 `ToolDef` 注册
 4. **测试**：重启后端，在对话中触发工具调用
 
 关键约束：
-- Handler 签名：`async def handle_xxx(args: dict[str, Any], ctx: ToolRuntimeContext) -> str`
-- `ctx.db` 是 AsyncSession，Handler 内部可自由读写数据库
+- Handler 签名：`async def handle_xxx(args: dict[str, Any], ctx: Any) -> str`
+- `ctx` 包含 `db`（AsyncSession）等上下文，Handler 内部可自由读写数据库
 - 工具返回必须是字符串（会被 Agent 读取作为工具执行结果）
 
 ### 添加一个新的记忆事件类型
@@ -122,91 +122,95 @@ pytest tests/test_memory_dedup.py -v   # 单文件详细输出
 
 ```
 career-os/
-├── backend/                    # FastAPI 后端
-│   ├── main.py                 # FastAPI 入口，lifespan 中自动建表 + 初始化
+├── main.py                     # FastAPI 入口，lifespan 中自动建表 + 初始化
+├── core/                       # 基础设施
+│   ├── config.py               # pydantic-settings，从根目录 .env + ~/.lumen/config.json 加载
+│   ├── db.py                   # SQLAlchemy AsyncEngine + Base + get_async_session_maker
+│   ├── migrations.py           # SQLite 兼容迁移、FTS5 表、触发器
+│   ├── startup.py              # 启动初始化（建表、IngestionPipeline、DocumentIndexProvider）
+│   ├── agent.py                # PydanticAI Agent 定义 + 动态系统提示词
+│   └── vector_store.py         # 向量存储（LanceDB 封装）
+├── shared/                     # 跨模块通用工具
+│   ├── errors.py               # 统一错误体系（LumenError + severity/category/retryable）
+│   ├── logging.py              # structlog 日志：控制台彩色 + 文件纯文本，上下文绑定
+│   ├── llm_usage.py            # LLM 调用用量追踪
+│   └── path_utils.py           # 路径工具（find_project_root）
+├── lib/                        # 业务模块（按领域拆分）
 │   ├── model_registry.py       # SQLAlchemy 模型注册
-│   ├── core/                   # 基础设施
-│   │   ├── config.py           # pydantic-settings，从根目录 .env 加载
-│   │   ├── db.py               # SQLAlchemy AsyncEngine + Base + get_async_session_maker
-│   │   ├── logging.py          # 结构化日志配置
-│   │   ├── migrations.py       # SQLite 兼容迁移、FTS5 表、触发器
-│   │   └── startup.py          # 启动初始化（建表、IngestionPipeline、DocumentIndexProvider）
-│   ├── shared/                 # 跨模块通用工具
-│   │   └── path_utils.py       # 路径工具（find_project_root）
-│   └── modules/                # 业务模块（按领域拆分）
-│       ├── agent/              # Agent 系统
-│       │   ├── pydantic_agent.py   # PydanticAI Agent 定义 + 动态系统提示词
-│       │   ├── event_handlers.py   # Agent 事件处理（流式输出、工具调用跟踪）
-│       │   ├── deps.py             # Agent 依赖注入（LumenDeps）
-│       │   ├── models.py           # AgentTrace 可观测性
-│       │   └── tools/
-│       │       ├── builtin/             # 内置工具 Handler
-│       │       │   ├── memory.py        # memory_search, memory_save
-│       │       │   ├── profile.py       # get_profile, update_profile
-│       │       │   ├── files.py         # 文件读写工具
-│       │       │   ├── external.py      # search_external_docs
-│       │       │   └── schemas.py       # 工具输入/输出 Pydantic schema
-│       │       ├── core/                # 工具运行时核心
-│       │       │   ├── registry.py      # ToolRegistry
-│       │       │   ├── dispatcher.py    # ToolDispatcher
-│       │       │   ├── definitions.py   # ToolDefinition
-│       │       │   ├── factory.py       # ToolRuntime 工厂
-│       │       │   ├── context.py       # ToolRuntimeContext
-│       │       │   ├── policies.py      # 安全策略
-│       │       │   └── toolsets.py      # Toolset 定义
-│       │       ├── adapters/
-│       │       │   └── pydanticai.py    # PydanticAI 工具适配器
-│       │       └── mcp/                 # MCP 预留
-│       ├── chat/               # 对话模块
-│       │   ├── router.py       # POST /api/chat (SSE), GET /api/chat/history
-│       │   ├── service.py      # 对话业务：Agent Loop 集成 + SSE 流式输出
-│       │   ├── session.py      # 会话状态管理
-│       │   ├── persistence.py  # 消息持久化
-│       │   ├── lock.py         # 对话并发锁
-│       │   ├── summary.py      # 对话摘要后台任务
-│       │   └── models.py       # Conversation + Message
-│       ├── memory/             # 记忆层（双管线：Profile + Narrative）
-│       │   ├── facade.py       # LumenMemory 统一门面（多继承组合）
-│       │   ├── models.py       # GrowthEvent ORM 模型
-│       │   ├── classifier.py   # 事件分类（Profile / Narrative / L0 路由）
-│       │   ├── writer.py       # 事件写入（单条/批量，含 L1/L2 去重）
-│       │   ├── searcher.py     # 搜索/召回 + 上下文构建（L0/L1/L2 分层注入）
-│       │   ├── search.py       # 全文搜索（FTS5 + Provider 语义）+ 外部文档搜索
-│       │   ├── relational_store.py  # Repository + FTS5 触发器管理
-│       │   ├── projection.py   # .md 投影同步、全量重建、删除、重置
-│       │   ├── markdown.py     # .md 原子读写 + growth_events → memory.md
-│       │   ├── snapshot.py     # Agent 系统提示词分层快照（L0/L1/L2）
-│       │   ├── events_merger.py  # 事件合并与 memory.md 生成（纯函数层）
-│       │   ├── understanding.py  # AI 综合画像生成（about_you.md + patterns + intents）
-│       │   ├── router.py         # 记忆管理 API 路由
-│       │   └── review_service.py # 后台记忆审查（Agent fork 审查对话）
-│       ├── profile/            # 画像模块
-│       │   ├── models.py       # User + UserProfile（通用伴侣画像）
-│       │   └── schemas.py      # ProfilePayload, KeyValuePayload, DecisionPayload
-│       ├── config/             # 配置模块
-│       │   ├── router.py       # GET/POST /api/config, /api/config/providers, /api/config/test
-│       │   └── service.py      # 配置业务逻辑
-│       ├── health/             # 健康检查
-│       │   └── router.py       # GET /api/health
-│       └── data_sources/       # 外部数据接入
-│           ├── models.py       # DataSource + ExternalItem ORM
-│           ├── schemas.py      # 数据源 Pydantic schema
-│           ├── registry.py     # DataSource 注册表
-│           ├── router.py       # 数据源管理 API
-│           ├── service.py      # 数据源业务逻辑
-│           └── ingestion/      # 接入管道
-│               ├── connector.py
-│               ├── pipeline.py
-│               ├── store.py
-│               ├── parser.py
-│               ├── retry.py
-│               ├── document_index_provider.py
-│               ├── provider_factory.py
-│               ├── connectors/
-│               │   └── local_folder.py
-│               └── providers/
-│                   ├── lancedb.py
-│                   └── null.py
+│   ├── chat/                   # 对话模块
+│   │   ├── service.py          # 对话业务：Agent Loop 集成 + SSE 流式输出
+│   │   ├── session.py          # 会话状态管理
+│   │   ├── persistence.py      # 消息持久化
+│   │   ├── lock.py             # 对话并发锁
+│   │   ├── summary.py          # 对话摘要后台任务
+│   │   ├── agent_trace.py      # AgentTrace 可观测性
+│   │   └── event_handlers.py   # Agent 事件处理（流式输出、工具调用跟踪）
+│   ├── memory/                 # 记忆层（双管线：Profile + Narrative）
+│   │   ├── facade.py           # LumenMemory 统一门面（多继承组合）
+│   │   ├── models.py           # GrowthEvent ORM 模型
+│   │   ├── observations.py     # 观察事件处理
+│   │   ├── classifier.py       # 事件分类（Profile / Narrative / L0 路由）
+│   │   ├── writer.py           # 事件写入（单条/批量，含 L1/L2 去重）
+│   │   ├── searcher.py         # 搜索/召回 + 上下文构建（L0/L1/L2 分层注入）
+│   │   ├── search.py           # 全文搜索（FTS5 + Provider 语义）+ 外部文档搜索
+│   │   ├── relational_store.py # Repository + FTS5 触发器管理
+│   │   ├── projection.py       # .md 投影同步、全量重建、删除、重置
+│   │   ├── markdown.py         # .md 原子读写 + growth_events → memory.md
+│   │   ├── snapshot.py         # Agent 系统提示词分层快照（L0/L1/L2）
+│   │   ├── events_merger.py    # 事件合并与 memory.md 生成（纯函数层）
+│   │   ├── understanding.py    # AI 综合画像生成（about_you.md + patterns + intents）
+│   │   └── review_service.py   # 后台记忆审查（Agent fork 审查对话）
+│   ├── profile/                # 画像模块
+│   │   ├── models.py           # User + UserProfile（通用伴侣画像）
+│   │   └── schemas.py          # ProfilePayload, KeyValuePayload, DecisionPayload
+│   ├── config/                 # 配置模块
+│   │   └── service.py          # 配置业务逻辑
+│   ├── data_sources/           # 外部数据接入
+│   │   ├── models.py           # DataSource + ExternalItem ORM
+│   │   ├── schemas.py          # 数据源 Pydantic schema
+│   │   ├── registry.py         # DataSource 注册表
+│   │   ├── service.py          # 数据源业务逻辑
+│   │   └── ingestion/          # 接入管道
+│   │       ├── connector.py
+│   │       ├── pipeline.py
+│   │       ├── store.py
+│   │       ├── parser.py
+│   │       ├── retry.py
+│   │       ├── document_index_provider.py
+│   │       ├── provider_factory.py
+│   │       ├── connectors/
+│   │       │   └── local_folder.py
+│   │       └── providers/
+│   │           ├── lancedb.py
+│   │           └── null.py
+│   ├── providers/              # LLM Provider 目录
+│   │   ├── __init__.py         # PROVIDER_CATALOG + ProviderRegistry
+│   │   ├── _client.py          # probe_provider / build_auth_headers
+│   │   └── _validation.py      # filter_discovered_models
+│   └── tools/                  # Agent 工具系统
+│       ├── __init__.py
+│       ├── _base.py            # ToolDef dataclass + tool_ok / tool_error
+│       ├── _middleware.py      # 工具中间件
+│       ├── factory.py          # 工具工厂（create_tool_runtime）
+│       ├── memory.py           # memory_search, memory_save
+│       ├── notes.py            # 随记工具
+│       ├── profile.py          # get_profile, update_profile
+│       ├── web_search.py       # 网络搜索（需配置 SEARCH_PROVIDER）
+│       └── mcp/                # MCP 工具桥接
+│           ├── client_manager.py
+│           ├── config_store.py
+│           ├── models.py
+│           ├── tool_bridge.py
+│           └── transport.py
+├── server/                     # API 路由层
+│   └── routes/
+│       ├── chat.py             # POST /api/chat (SSE), GET /api/chat/history
+│       ├── memory.py           # 记忆管理 API
+│       ├── config.py           # 配置 API
+│       ├── health.py           # GET /api/health
+│       ├── providers.py        # Provider 管理 API
+│       ├── notes.py            # 随记 API
+│       └── mcp.py              # MCP 服务器管理 API
 ├── src/                        # React 前端（Vite）
 │   ├── App.tsx
 │   ├── main.tsx                # 路由配置
@@ -274,6 +278,26 @@ career-os/
 | `POST` | `/api/config` | 更新用户配置 |
 | `GET` | `/api/config/providers` | Provider 目录 |
 | `POST` | `/api/config/test` | 测试 LLM 配置连通性 |
+| `GET` | `/api/providers/summary` | Provider 汇总信息 |
+| `POST` | `/api/providers/fetch-models` | 抓取 Provider 模型列表 |
+| `GET` | `/api/providers/{name}/discovered-models` | 获取已发现模型 |
+| `POST` | `/api/providers/test` | 测试 Provider 连通性 |
+| `PUT` | `/api/providers/{name}/models/{model_id}` | 更新 Provider 模型配置 |
+| `GET` | `/api/notes` | 随记列表 |
+| `POST` | `/api/notes` | 创建随记 |
+| `PATCH` | `/api/notes/{note_id}` | 更新随记 |
+| `DELETE` | `/api/notes/{note_id}` | 删除随记 |
+| `GET` | `/api/mcp/servers` | MCP 服务器列表 |
+| `POST` | `/api/mcp/servers` | 添加 MCP 服务器 |
+| `GET` | `/api/mcp/servers/{name}` | 获取 MCP 服务器详情 |
+| `PUT` | `/api/mcp/servers/{name}` | 更新 MCP 服务器 |
+| `DELETE` | `/api/mcp/servers/{name}` | 删除 MCP 服务器 |
+| `POST` | `/api/mcp/servers/{name}/test` | 测试 MCP 服务器连通性 |
+| `POST` | `/api/mcp/servers/{name}/refresh` | 刷新 MCP 工具列表 |
+| `GET` | `/api/mcp/tools` | 列出所有 MCP 工具 |
+| `GET` | `/api/memory/observations` | 观察事件列表 |
+| `PATCH` | `/api/memory/{event_id}` | 更新指定记忆事件 |
+| `POST` | `/api/memory/{event_id}/review` | 审查指定记忆事件 |
 | `GET` | `/api/data_sources` | 列出数据源 |
 | `POST` | `/api/data_sources` | 创建数据源 |
 | `GET` | `/api/data_sources/{id}` | 获取数据源详情 |
@@ -294,6 +318,8 @@ career-os/
 | `LLM_MODEL` | 模型名称 |
 | `DATABASE_URL` | 默认 `~/.lumen/lumen.db` |
 | `DEBUG` | `true`（开发）/ `false`（生产） |
+| `SEARCH_PROVIDER` | 搜索 Provider（tavily / serper / brave）|
+| `SEARCH_API_KEY` | 搜索 API 密钥 |
 | `EXTERNAL_DATA_ENABLED` | `true` 开启外部数据接入 |
 | `EXTERNAL_DATA_DIRS` | 逗号分隔的本地目录路径 |
 
@@ -302,9 +328,45 @@ career-os/
 - Python 3.11+，类型提示（`from __future__ import annotations`）
 - SQLAlchemy 2.0 async（`Mapped[...]`, `mapped_column()`）
 - Pydantic v2（`BaseSettings`, `BaseModel`）
+- structlog + stdlib 混合日志，`shared/logging.py` 统一配置
 - 前端 React 19 + TypeScript + Tailwind CSS 4
 - ruff 做 lint + format
-- pytest + pytest-asyncio（104 条测试）
+- pytest + pytest-asyncio
+
+### 错误处理体系
+
+`shared/errors.py` 定义统一错误体系，对标生产级错误处理：
+
+- **`LumenError`** 基类：含 `code`, `severity`, `category`, `retryable`, `http_status`, `trace_id`
+- **`wrap()`**：包装第三方异常，保留原始堆栈
+- **快捷函数**：`not_found()`, `bad_request()`, `forbidden()`, `config_missing_key()`
+- **HTTP 转换**：`to_http_exception()` 自动映射状态码
+- **全局 FastAPI handler**：`handle_lumen_error`, `handle_fallback_error`
+
+所有业务层异常应继承 `LumenError`，避免直接抛裸 `Exception`。
+
+### Provider 目录
+
+`lib/providers/` 管理 LLM Provider 的发现、验证和配置：
+
+- **`PROVIDER_CATALOG`**：6 个内置 provider（openai / dashscope / anthropic / google / ollama / siliconflow），含 chat_models / embedding_models / base_url / auth_type
+- **`ProviderRegistry`**：管理 `~/.lumen/providers.json` 中的用户自定义 provider 和凭证
+- **`probe_provider()`**：连通性探测，验证 API key 和 base_url
+- **`filter_discovered_models()`**：过滤和校验模型列表
+
+关键约束：`lib/providers/__init__.py` 不导入 `core.config`，`USER_DATA_DIR` 直接内联，避免循环导入。
+
+### 日志系统
+
+`shared/logging.py` 使用 structlog + stdlib 混合架构：
+
+- **控制台输出**：彩色结构化日志，`ConsoleRenderer(colors=True)`
+- **文件输出**：`logs/lumen.log` 纯文本（无 ANSI），`plain_traceback`，10MB 轮转
+- **上下文绑定**：`bind_chat_context(conversation_id, user_id)` / `unbind_chat_context()` — Agent Loop 内自动附加上下文到所有子日志
+- **请求中间件**：`RequestLoggingMiddleware` 自动绑定 `request_id`/`path`/`method`
+- **噪音过滤**：SQLAlchemy / aiosqlite 日志级别设为 WARNING，彻底消除调试噪音
+
+查看实时日志：`Get-Content logs/lumen.log -Wait -Tail 20`
 
 ---
 
@@ -370,17 +432,18 @@ career-os/
 
 ### 工具系统分层
 
-工具不是简单的函数注册，而是四层架构：
+工具系统已从四层架构简化为扁平化设计：
 
-1. **ToolDefinition**（元数据）— 名称、描述、输入 schema、权限标签
-2. **ToolRegistry**（注册表）— 运行时查找，支持按 toolset 分组
-3. **ToolDispatcher**（分发器）— 参数解析、路径解析、安全策略检查
-4. **Toolset**（组合）— `default-chat` 等组合，Agent 一次加载一组
+1. **ToolDef**（元数据）— `lib/tools/_base.py` 中定义，含名称、描述、输入 schema、执行函数
+2. **工厂层** — `lib/tools/factory.py` 负责组装所有工具实例
+3. **中间件层** — `lib/tools/_middleware.py` 提供通用横切能力
+4. **具体工具** — `lib/tools/memory.py`, `notes.py`, `profile.py`, `web_search.py` 等
+5. **MCP 桥接** — `lib/tools/mcp/` 将外部 MCP 服务器暴露为 Agent 工具
 
-为什么分层？
-- 定义层和运行层分离：可以静态分析工具清单而不初始化运行时
-- 安全策略在分发层统一执行：路径逃逸、循环守卫、预算限制都在这里
-- Toolset 支持场景化加载：未来可以针对不同场景加载不同工具组合
+为什么这样设计？
+- 扁平化降低心智负担：新增工具只需在 `lib/tools/` 下新增模块并在 `factory.py` 注册
+- MCP 桥接让外部工具生态零成本接入：任何兼容 MCP 的服务器都可被 Agent 调用
+- 中间件层统一处理横切关注点（日志、重试、超时），业务工具只关注核心逻辑
 
 ### 为什么用 SQLite + FTS5
 
@@ -395,12 +458,15 @@ career-os/
 
 ## Gotchas
 
-- `chat/service.py` 流式对话使用 `db.commit()` 而非 `flush()`，确保用户消息立即落库，流中断不丢失
+- `lib/chat/service.py` 流式对话使用 `db.commit()` 而非 `flush()`，确保用户消息立即落库，流中断不丢失
 - `update_profile` 中 `null` 可以清空字段（通过 `model_fields_set` 区分"未传"和"传 null"）
 - `chatSession.tsx` 使用 `sessionStorage` 持久化 conversationId，刷新页面不丢失对话
-- `modules/agent/pydantic_agent.py` 的 `_tool_runtime` 是全局缓存，配置变更后需重启后端，否则工具列表不会刷新
+- `core/agent.py` 的 `_tool_runtime` 是全局缓存，配置变更后需重启后端，否则工具列表不会刷新
 - `understanding.py` 的 AI 画像生成有 5 分钟防抖（`_DEBOUNCE_SECONDS = 300`），频繁触发不会重复调用 LLM
 - `search.py` 三路搜索并行执行，但 Provider 故障会被静默吞掉并返回空列表 — 语义搜索降级为 FTS5，不会报错
+- `shared/logging.py` 使用 structlog + stdlib 混合模式，`bind_chat_context()` 在 Agent Loop 中自动绑定 `conversation_id`/`user_id` 到所有子日志
+- FTS5 触发器更新时必须用 `DELETE FROM growth_events_fts WHERE rowid = old.rowid`，不能对虚拟表使用 `INSERT INTO ... VALUES(..., 'delete', ...)` 特殊语法
+- `lib/providers/` 与 `core.config` 解耦避免循环导入：`USER_DATA_DIR` 直接内联为 `Path.home() / ".lumen"`，不通过 `core.config` 获取
 
 ---
 
@@ -410,7 +476,8 @@ career-os/
 - **单用户模式**：`demo_user` 硬编码，多用户需改造用户管理
 - **Journey 与"此刻"数据重叠**：`emotional_pattern`/`value_surfaced` 同时出现在 Journey 时间线和"此刻"状态，需要分离
 - **snapshot.py 耦合 chat 模块**：`build_snapshot` 直接 import `chat.models`，无法独立测试 memory 模块
-- **AGENTS.md 仍需人工维护**：文档与代码同步靠人工检查，没有自动化校验
+- **数据层耦合**：`lib/providers/__init__.py` 直接操作文件系统（`~/.lumen/providers.json`），缺乏抽象层
+- **搜索 Provider 未配置时 web_search 工具静默失败**：缺少运行时的用户友好提示
 
 ---
 

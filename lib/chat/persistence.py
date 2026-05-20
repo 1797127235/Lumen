@@ -164,25 +164,25 @@ async def persist_traces(
         logger.warning("Agent Trace 持久化失败", conversation_id=conversation_id)
 
 
-async def save_user_message(db: AsyncSession, conv, user_input: str) -> bool:
+async def save_user_message(db: AsyncSession, conv, user_input: str) -> Message | None:
     """保存用户消息"""
-    db.add(
-        Message(
-            conversation_id=conv.conversation_id,
-            role="user",
-            content=user_input,
-            intent="consultation",
-        )
+    msg = Message(
+        conversation_id=conv.conversation_id,
+        role="user",
+        content=user_input,
+        intent="consultation",
     )
+    db.add(msg)
     conv.message_count = (conv.message_count or 0) + 1
     conv.last_message_at = datetime.now(UTC)
     try:
         await db.commit()
-        return True
+        await db.refresh(msg)
+        return msg
     except Exception:
         logger.exception("保存用户消息失败", conversation_id=conv.conversation_id)
         await db.rollback()
-        return False
+        return None
 
 
 def _log_task_error(task: asyncio.Task) -> None:

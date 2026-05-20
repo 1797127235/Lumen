@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from lib.memory import get_memory
-from lib.tools._base import ToolDef, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -100,6 +100,7 @@ def create_memory_tools() -> list[ToolDef]:
             },
             execute=_search,
             read_only=True,
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="搜索记忆、回忆、查找历史"),
         ),
         ToolDef(
             name="memory_save",
@@ -115,5 +116,6 @@ def create_memory_tools() -> list[ToolDef]:
             },
             execute=_save,
             read_only=False,
+            meta=ToolMeta(always_on=True, risk="write", search_hint="保存记忆、记录、记住"),
         ),
     ]

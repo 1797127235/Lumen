@@ -30,6 +30,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
     user_id: str = "demo_user"
+    attachments: list[str] = []  # 本地绝对路径列表
 
 
 class ConversationSummary(BaseModel):
@@ -64,6 +65,7 @@ async def send_message(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                 user_id=req.user_id,
                 user_input=req.message,
                 conversation_id=req.conversation_id,
+                attachments=req.attachments,  # 新增
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
@@ -159,4 +161,10 @@ async def delete_conversation(
     await db.execute(Message.__table__.delete().where(Message.conversation_id == conversation_id))
     await db.delete(conv)
     await db.commit()
+
+    # 清理该会话的附件副本
+    from lib.chat.session_files import cleanup_session_files
+
+    await cleanup_session_files(conversation_id)
+
     return {"deleted": True}
