@@ -10,7 +10,7 @@
 ## 目标
 
 让 Lumen 有一个持续运行的后台思考循环：
-- 基于电量模型（三时间尺度指数衰减）决定下次思考间隔（7-80 分钟）
+- 基于电量模型（三时间尺度指数衰减 + ±30% 随机抖动）决定下次思考间隔（7-80 分钟）
 - 读取最近记忆事件，用 LLM 生成一条内心想法
 - 经过两段式 Judge 过滤（Stage 1 确定性否决 + Stage 2 LLM 多维评分）
 - MessageDeduper 检查是否与近期已发想法重复
@@ -51,6 +51,7 @@
 from __future__ import annotations
 
 import math
+import random as _random
 from datetime import UTC, datetime
 
 
@@ -69,6 +70,25 @@ def compute_energy(minutes_since_last_user: float) -> float:
     )
 
 
+def d_energy(energy: float) -> float:
+    """互动饥渴度：energy 越低（越久没互动）→ 越高。"""
+    return 1.0 - max(0.0, min(1.0, energy))
+
+
+def d_content(new_event_count: int, halfsat: float = 3.0) -> float:
+    """内容新鲜度：新记忆事件越多 → 越高。指数饱和曲线。"""
+    if new_event_count <= 0:
+        return 0.0
+    return 1.0 - math.exp(-new_event_count / halfsat)
+
+
+def d_recent(msg_count: int, scale: float = 10.0) -> float:
+    """语境丰富度：近期消息越多 → 越高。对数归一化，上限 1.0。"""
+    if msg_count <= 0:
+        return 0.0
+    return min(1.0, math.log1p(msg_count) / math.log1p(scale))
+
+
 def composite_score(
     energy: float,
     new_event_count: int,
@@ -77,25 +97,49 @@ def composite_score(
     """综合驱动分 ∈ [0, 1]，越高越应该快点 tick。
 
     组成：
-    - 0.40 × (1 - E)              互动饥渴度：越久没聊越高
-    - 0.40 × (1 - exp(-n/3))      内容新鲜度：新记忆事件越多越高
-    - 0.20 × log(1+k) / log(11)   语境丰富度：近期消息越多越高（上限 10 条）
+    - 0.40 × D_energy   互动饥渴度：越久没聊越高
+    - 0.40 × D_content  内容新鲜度：新记忆事件越多越高
+    - 0.20 × D_recent   语境丰富度：近期消息越多越高
     """
-    hunger = 0.40 * (1.0 - energy)
-    freshness = 0.40 * (1.0 - math.exp(-new_event_count / 3.0))
-    richness = 0.20 * math.log1p(min(recent_msg_count, 10)) / math.log(11)
-    return min(1.0, hunger + freshness + richness)
+    return min(1.0,
+        0.40 * d_energy(energy)
+        + 0.40 * d_content(new_event_count)
+        + 0.20 * d_recent(recent_msg_count)
+    )
 
 
-def next_tick_minutes(score: float) -> int:
-    """根据综合驱动分返回下次 tick 等待分钟数。"""
+def random_weight() -> float:
+    """随机扰动系数，防止行为过于规律可预测。
+
+    从 Beta(2, 2) 采样（偏中间，极端少），线性映射到 [0.5, 1.5]。
+    均值 ≈ 1.0，标准差适中。
+    """
+    sample = _random.betavariate(2, 2)  # [0, 1]，均值 0.5
+    return 0.5 + sample  # [0.5, 1.5]
+
+
+def next_tick_seconds(score: float, jitter: float = 0.3) -> int:
+    """根据综合驱动分返回下次 tick 等待秒数（含随机抖动 ±jitter）。
+
+    注意：返回秒数（而非分钟），供 asyncio.sleep() 直接使用。
+    base_score > 0.70 → ~420s (7min)
+    base_score > 0.40 → ~1080s (18min)
+    base_score > 0.20 → ~2400s (40min)
+    base_score ≤ 0.20 → ~4800s (80min)
+    """
     if score > 0.70:
-        return 7
-    if score > 0.40:
-        return 18
-    if score > 0.20:
-        return 40
-    return 80
+        base = 420
+    elif score > 0.40:
+        base = 1080
+    elif score > 0.20:
+        base = 2400
+    else:
+        base = 4800
+
+    if jitter <= 0:
+        return base
+    r = _random.uniform(1.0 - jitter, 1.0 + jitter)
+    return max(60, int(base * r))
 
 
 async def get_energy_inputs(user_id: str) -> dict:
@@ -212,21 +256,23 @@ def judge_stage1(
     """确定性否决检查（无 LLM）。
 
     urgency:  内容时效性（Week 2 简化：固定 0.7，因为基于近 7 天记忆）
-    balance:  配额占比（已发/日上限），快耗尽时否决
-    dynamics: 用户是否刚在聊天（最近 15 分钟内降低打扰意愿）
+    balance:  配额占比（已发/日上限），快耗尽时硬否决
+    dynamics: 用户最近活跃度 ∈ [0.6, 1.0]，连续维度，不做硬否决
+              — 对齐 akashic：dynamics 进入最终加权得分，让分数自然降低，
+                而不是强行封锁 tick（避免用户刚聊完就完全禁止 Lumen 思考）
     """
     now = datetime.now(UTC)
 
     # urgency：固定值，Week 3 可接入内容时效衰减
     urgency = 0.7
 
-    # balance：配额检查
+    # balance：配额检查（唯一硬否决条件）
     used_ratio = proactive_sent_24h / max(1, daily_max)
     balance = 1.0 - used_ratio
     if balance < 0.1:
         return Stage1Result(False, f"daily_limit:{proactive_sent_24h}/{daily_max}", urgency, balance, 0.0)
 
-    # dynamics：用户最近活跃度
+    # dynamics：用户最近活跃度（连续维度，不做硬否决）
     if last_user_at:
         if isinstance(last_user_at, str):
             last_user_at = datetime.fromisoformat(last_user_at.replace("Z", "+00:00"))
@@ -236,15 +282,11 @@ def judge_stage1(
     else:
         minutes_since = 9999
 
-    # 30 分钟内线性从 0→1；超过 30 分钟后固定 1.0
+    # 30 分钟内 interrupt_factor 从 0 线性增到 1；超过 30 分钟后固定 1.0
     interrupt_factor = min(1.0, minutes_since / 30.0)
-    dynamics = 0.6 + 0.4 * interrupt_factor
+    dynamics = 0.6 + 0.4 * interrupt_factor  # ∈ [0.6, 1.0]
 
-    # 用户 15 分钟内刚聊过 → 不打扰
-    if dynamics < 0.80:
-        return Stage1Result(False, f"user_active:dynamics={dynamics:.2f}", urgency, balance, dynamics)
-
-    # 情绪状态调节系数（影响 dynamics 权重）
+    # 情绪状态调节 balance（不调 dynamics，保持其语义纯粹）
     mood_factor = {
         "calm": 1.0,
         "energized": 1.3,
@@ -253,7 +295,7 @@ def judge_stage1(
         "curious": 1.1,
     }.get(mood, 1.0)
 
-    return Stage1Result(True, "", urgency, balance * mood_factor, dynamics)
+    return Stage1Result(True, "", urgency, min(1.0, balance * mood_factor), dynamics)
 
 
 class _JudgeScores(BaseModel):
@@ -635,7 +677,8 @@ async def _run_tick(user_id: str) -> int:
         compute_energy,
         composite_score,
         get_energy_inputs,
-        next_tick_minutes,
+        next_tick_seconds,
+        random_weight,
     )
     from lib.companion.judge import judge_stage1, judge_stage2
     from core.db import get_async_session_maker
@@ -648,14 +691,19 @@ async def _run_tick(user_id: str) -> int:
         energy_inputs["new_event_count"],
         energy_inputs["recent_msg_count"],
     )
-    tick_min = next_tick_minutes(score)
+    tick_secs = next_tick_seconds(score)  # 含 ±30% 随机抖动
+
+    # draw_score：base_score × Beta(2,2) 扰动 [0.5, 1.5]
+    # 低分偶尔也能赢（探索），高分偶尔也会输（不固化），防止行为可预测
+    draw_score = score * random_weight()
 
     logger.info(
         "thought_tick",
         user_id=user_id,
         energy=round(energy, 3),
-        score=round(score, 3),
-        next_tick_min=tick_min,
+        base_score=round(score, 3),
+        draw_score=round(draw_score, 3),
+        next_tick_secs=tick_secs,
     )
 
     # 2. Judge Stage 1（确定性否决，快速）
@@ -670,7 +718,7 @@ async def _run_tick(user_id: str) -> int:
     )
     if not s1.passed:
         logger.info("stage1_veto", reason=s1.veto, user_id=user_id)
-        return tick_min  # 被否决，直接返回，等下次 tick
+        return tick_secs  # 被否决，直接返回，等下次 tick
 
     # 3. 生成想法（需要 LLM，受 Semaphore 保护）
     async with _LLM_SEMAPHORE:
@@ -680,7 +728,7 @@ async def _run_tick(user_id: str) -> int:
 
     if not thought_content:
         logger.info("thought_generation_empty", user_id=user_id)
-        return tick_min
+        return tick_secs
 
     # 4. Judge Stage 2（LLM 评分，受 Semaphore 保护）
     async with _LLM_SEMAPHORE:
@@ -696,7 +744,7 @@ async def _run_tick(user_id: str) -> int:
         veto = veto_reason or f"low_score:{final_score:.2f}"
         logger.info("stage2_veto", reason=veto, score=final_score, user_id=user_id)
         await _save_thought(user_id, thought_content, final_score, veto, False, mood)
-        return tick_min
+        return tick_secs
 
     # 5. MessageDeduper（受 Semaphore 保护）
     is_dup = False
@@ -709,7 +757,7 @@ async def _run_tick(user_id: str) -> int:
     if is_dup:
         logger.info("deduper_duplicate", reason=dup_reason, user_id=user_id)
         await _save_thought(user_id, thought_content, final_score, f"duplicate:{dup_reason}", True, mood)
-        return tick_min
+        return tick_secs
 
     # 6. 通过所有检查 → 存库（Week 2：sent_at=NULL，Week 3 接入推送后由推送模块更新）
     await _save_thought(user_id, thought_content, final_score, None, False, mood)
@@ -717,10 +765,11 @@ async def _run_tick(user_id: str) -> int:
         "thought_saved",
         user_id=user_id,
         score=round(final_score, 3),
+        draw_score=round(draw_score, 3),
         preview=thought_content[:40],
     )
 
-    return tick_min
+    return tick_secs
 
 
 async def run_thought_loop(user_id: str = "demo_user") -> None:
@@ -734,16 +783,16 @@ async def run_thought_loop(user_id: str = "demo_user") -> None:
 
     while True:
         try:
-            next_min = await _run_tick(user_id)
+            next_secs = await _run_tick(user_id)
         except asyncio.CancelledError:
             logger.info("thought_loop_cancelled", user_id=user_id)
             raise
         except Exception as e:
             logger.warning("thought_loop_error", error=str(e))
-            next_min = 40  # 异常后等 40 分钟再试
+            next_secs = 2400  # 异常后等 40 分钟再试
 
-        logger.info("thought_loop_sleeping", minutes=next_min, user_id=user_id)
-        await asyncio.sleep(next_min * 60)
+        logger.info("thought_loop_sleeping", seconds=next_secs, user_id=user_id)
+        await asyncio.sleep(next_secs)
 ```
 
 ---
