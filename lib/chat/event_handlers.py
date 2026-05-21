@@ -63,6 +63,7 @@ class EventHandlers:
             state.full_content += part.content
             return [{"type": "token", "content": part.content, "conversation_id": deps["conversation_id"]}]
         elif isinstance(part, ThinkingPart) and part.content:
+            state.thinking_content += part.content
             return [{"type": "thinking", "content": part.content, "conversation_id": deps["conversation_id"]}]
         return []
 
@@ -77,6 +78,7 @@ class EventHandlers:
             return [{"type": "token", "content": text, "conversation_id": deps["conversation_id"]}]
         elif isinstance(delta, ThinkingPartDelta):
             text = delta.content_delta or ""
+            state.thinking_content += text
             return [{"type": "thinking", "content": text, "conversation_id": deps["conversation_id"]}]
         return []
 

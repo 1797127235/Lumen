@@ -1,0 +1,202 @@
+[
+  {
+    "question_id": "zh-001",
+    "question_type": "single-session-user",
+    "question": "我是做什么工作的？",
+    "answer": "前端工程师",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "我是一名前端工程师，平时主要写 React 和 TypeScript。"},
+        {"role": "assistant", "content": "前端工程师，React + TypeScript 的组合很主流，你主要做产品还是基础设施方向？"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-002",
+    "question_type": "single-session-preference",
+    "question": "我喜欢什么类型的音乐？",
+    "answer": "后摇",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "最近在听后摇，感觉写代码的时候特别适合，节奏不会打扰思路。"},
+        {"role": "assistant", "content": "后摇确实很适合专注状态，没有歌词不会分心，那种层层叠叠的氛围感也挺好的。"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-003",
+    "question_type": "single-session-user",
+    "question": "我住在哪个城市？",
+    "answer": "上海",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "上海今天又下雨了，已经连续一周了，出门都懒得出。"},
+        {"role": "assistant", "content": "梅雨季的上海真的很难熬，一出门就是湿乎乎的感觉。"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-004",
+    "question_type": "single-session-preference",
+    "question": "我不喜欢什么样的开会方式？",
+    "answer": "没有议程的会议",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "最烦没有议程的会议，叫来一堆人，大家不知道要讨论什么，最后两小时就这么没了。"},
+        {"role": "assistant", "content": "这种会真的是在消耗所有人的时间，你们有没有建立提前发议程的规范？"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-005",
+    "question_type": "knowledge-update",
+    "question": "我现在用什么框架写后端？",
+    "answer": "FastAPI",
+    "question_date": "",
+    "haystack_session_ids": ["s1", "s2"],
+    "haystack_dates": ["", ""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "我后端一直在用 Django，用了三年了，比较熟悉。"},
+        {"role": "assistant", "content": "Django 的生态确实很完整，适合做功能复杂的应用。"}
+      ],
+      [
+        {"role": "user", "content": "最近把后端换成 FastAPI 了，异步支持好很多，新项目都在用这个。"},
+        {"role": "assistant", "content": "FastAPI 的类型提示和自动文档很方便，从 Django 迁过来学习曲线不会太陡。"}
+      ]
+    ],
+    "answer_session_ids": ["s2"]
+  },
+  {
+    "question_id": "zh-006",
+    "question_type": "single-session-user",
+    "question": "我的作息有什么特点？",
+    "answer": "夜猫子，习惯深夜工作",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "已经凌晨两点了，感觉这个点才是我效率最高的时候，白天总是各种打扰。"},
+        {"role": "assistant", "content": "典型的夜猫子状态，深夜确实安静，但长期熬夜还是会有代价的。"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-007",
+    "question_type": "single-session-user",
+    "question": "我有什么副业或者业余项目？",
+    "answer": "在做一个独立开发的桌面 AI 伴侣应用",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "我在业余时间做一个桌面应用，想做一个真正认识用户的 AI 伴侣，本地运行，数据不上传云端。"},
+        {"role": "assistant", "content": "隐私优先的 AI 伴侣，这个方向挺有意思的，本地化部署对用户信任感很重要。"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-008",
+    "question_type": "single-session-preference",
+    "question": "我平时用什么工具做笔记？",
+    "answer": "Obsidian",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "我在 Obsidian 里记了好几百篇笔记了，双向链接的功能特别适合我这种发散思维的人。"},
+        {"role": "assistant", "content": "Obsidian 的图谱视图看起来很爽，几百篇互相链接起来应该很有意思。"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-009",
+    "question_type": "single-session-user",
+    "question": "我做了什么重要决定？",
+    "answer": "决定辞职去专注做独立开发",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "我决定了，下个月辞职，把存款当做六个月的跑道，专心做独立开发，不想再拖了。"},
+        {"role": "assistant", "content": "这是个大决定，六个月跑道的压力会很真实，你现在手头有具体要做的产品方向了吗？"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-010",
+    "question_type": "single-session-user",
+    "question": "我遇到了什么技术问题？",
+    "answer": "Rust 编译报错，找不到生命周期问题",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "在学 Rust，今天被生命周期搞了三个小时，报错信息看不懂，感觉整个人要裂开了。"},
+        {"role": "assistant", "content": "Rust 的生命周期是出了名的陡峭，三小时被它卡住很正常，把报错贴出来看看？"}
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "zh-011",
+    "question_type": "knowledge-update",
+    "question": "我现在的情绪状态怎么样？",
+    "answer": "状态恢复了，比较平静",
+    "question_date": "",
+    "haystack_session_ids": ["s1", "s2"],
+    "haystack_dates": ["", ""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "今天状态很差，焦虑感特别强，什么都做不下去，就刷了一天短视频。"},
+        {"role": "assistant", "content": "焦虑的时候强迫自己做事往往更难，刷刷视频让大脑缓一缓也没什么问题。"}
+      ],
+      [
+        {"role": "user", "content": "昨天的状态调整过来了，今天睡了个好觉，感觉平静多了，可以重新开始工作了。"},
+        {"role": "assistant", "content": "睡一觉确实能重置很多东西，好状态回来了，今天准备从哪里开始？"}
+      ]
+    ],
+    "answer_session_ids": ["s2"]
+  },
+  {
+    "question_id": "zh-012",
+    "question_type": "single-session-preference",
+    "question": "我对 AI 工具有什么看法？",
+    "answer": "看好 AI 辅助开发，但不喜欢过度依赖",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "AI 辅助编程这个方向我是看好的，但我不太喜欢那种完全依赖 AI 生成代码自己不思考的用法，感觉会让人退化。"},
+        {"role": "assistant", "content": "这个分寸感很重要，用 AI 加速思路验证和减少重复劳动是好事，但核心的设计和判断还是要自己做。"}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

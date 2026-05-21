@@ -124,10 +124,23 @@ class SkillsLoader:
     # ── 内部工具 ──────────────────────────────────────────────────────
 
     def _get_metadata(self, name: str) -> dict:
-        """从 frontmatter 中提取 metadata 字段（already a dict via yaml.safe_load）。"""
+        """从 frontmatter 中提取 metadata 字段。
+
+        兼容两种格式：
+        1. Lumen 原生：metadata: {always: ..., requires: ...}
+        2. agentskills.io 规范：always / requires 等直接放在顶层 frontmatter
+        """
         fm = self._extract_frontmatter(self.load_skill(name) or "")
+        # 优先读取 metadata 键（Lumen 原生格式）
         meta = fm.get("metadata", {})
-        return meta if isinstance(meta, dict) else {}
+        if isinstance(meta, dict) and meta:
+            return meta
+        # 回退：从顶层提取 metadata 相关字段（agentskills.io 规范）
+        result: dict = {}
+        for key in ("always", "requires", "tags", "version", "author", "risk"):
+            if key in fm:
+                result[key] = fm[key]
+        return result
 
     def _get_description(self, name: str) -> str:
         fm = self._extract_frontmatter(self.load_skill(name) or "")

@@ -341,28 +341,21 @@ function InputBox({
 }
 
 function ThinkingCard({ content, closed }: { content: string; closed: boolean }) {
-  const [userToggled, setUserToggled] = useState<boolean | null>(null)
-  const detailsRef = useRef<HTMLDetailsElement>(null)
-
-  const open = userToggled !== null ? userToggled : !closed
+  const [isOpen, setIsOpen] = useState(true)
 
   useEffect(() => {
-    const el = detailsRef.current
-    if (el && el.open !== open) el.open = open
-  }, [open])
+    if (closed) setIsOpen(false)
+  }, [closed])
 
   return (
-    <details
-      ref={detailsRef}
-      onToggle={(e) => {
-        const next = e.currentTarget.open
-        if (next !== open) setUserToggled(next)
-      }}
-      className="group/think my-sm overflow-hidden rounded-lg border border-border-soft bg-surface/50"
-    >
-      <summary className="flex cursor-pointer list-none items-center gap-xs px-sm py-xs text-xs text-text-subtle transition-colors hover:text-text-muted [&::-webkit-details-marker]:hidden">
+    <div className="my-sm overflow-hidden rounded-lg border border-border-soft bg-surface/50">
+      <button
+        type="button"
+        onClick={() => setIsOpen(o => !o)}
+        className="flex w-full cursor-pointer items-center gap-xs px-sm py-xs text-xs text-text-subtle transition-colors hover:text-text-muted"
+      >
         <svg
-          className="h-3 w-3 shrink-0 transition-transform group-open/think:rotate-180"
+          className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -377,13 +370,15 @@ function ThinkingCard({ content, closed }: { content: string; closed: boolean })
         {closed && content && (
           <span className="ml-auto text-text-subtle/40">{content.length} 字</span>
         )}
-      </summary>
-      <div className="border-t border-border-soft px-sm py-xs">
-        <pre className="whitespace-pre-wrap font-mono text-xs text-text-subtle leading-relaxed">
-          {content || '思考中…'}
-        </pre>
-      </div>
-    </details>
+      </button>
+      {isOpen && (
+        <div className="border-t border-border-soft px-sm py-xs">
+          <pre className="whitespace-pre-wrap font-mono text-xs text-text-subtle leading-relaxed">
+            {content || '思考中…'}
+          </pre>
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -114,6 +114,44 @@ pytest tests/test_memory_dedup.py -v   # 单文件详细输出
 3. `IngestionPipeline` 自动扫描 → 解析 → 写入 `external_items` → 同步 FTS5 + LanceDB
 4. Agent 对话中用 `scope='knowledge'` 搜索外部文档
 
+### 添加或管理 Skill
+
+Skill 是可插拔的 Agent 指令包，放在 `lib/skills/builtins/<skill-name>/SKILL.md`。
+
+**当前内置 Skills：**
+
+| Skill | 触发方式 | 说明 |
+|-------|---------|------|
+| `emotional-companion` | `always: true` | 情感支持与引导，常驻注入 |
+| `obsidian-markdown` | `$obsidian-markdown` 或 `skill_load` | Obsidian 风味 Markdown 语法 |
+| `obsidian-bases` | `$obsidian-bases` 或 `skill_load` | Obsidian Bases 数据库视图 |
+| `json-canvas` | `$json-canvas` 或 `skill_load` | JSON Canvas 白板文件 |
+| `obsidian-cli` | `$obsidian-cli` 或 `skill_load` | Obsidian CLI 命令交互 |
+| `defuddle` | `$defuddle` 或 `skill_load` | 网页内容提取（Defuddle） |
+
+**添加新 Skill：**
+
+1. 在 `lib/skills/builtins/` 下创建 `<skill-name>/SKILL.md`
+2. 顶部写 YAML frontmatter：
+   ```yaml
+   ---
+   name: skill-name
+   description: 一句话说明用途，Agent 用此判断何时加载
+   metadata:
+     always: false          # 是否常驻注入
+     requires:
+       env: ["ENV_KEY"]     # 可选：依赖的环境变量
+   ---
+   ```
+3. 正文用 Markdown 写指令内容
+4. 重启后端生效
+
+**Frontmatter 格式兼容**：支持 Lumen 原生 `metadata:` 包裹格式，也支持 agentskills.io 规范的顶层字段格式。
+
+**Agent 使用方式**：
+- 用户在消息中输入 `$skill-name`，系统自动检测并注入该 Skill 正文
+- Agent 也可主动调用 `skill_load(skill_name="...")` 加载
+
 ---
 
 ## Reference

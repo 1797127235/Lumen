@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 @dataclass
 class _TurnState:
     full_content: str = ""
+    thinking_content: str = ""
     usage_data: dict | None = None
     cancelled: bool = False
     new_msgs: list = field(default_factory=list)
@@ -108,8 +109,6 @@ async def stream_chat(
             if not registry.get_registered_names():
                 register_all_tools()
 
-            from lib.tools.factory import build_pydantic_toolset_for_conversation
-
             user_prompt = [user_input, *image_parts] if image_parts else user_input
             async for event in agent.run_stream_events(
                 user_prompt,
@@ -120,7 +119,6 @@ async def stream_chat(
                     request_limit=8,  # 最多 8 轮模型请求（含工具调用）
                     tool_calls_limit=6,  # 最多 6 次成功工具调用
                 ),
-                toolsets=[build_pydantic_toolset_for_conversation(conv.conversation_id)],
             ):
                 if cancel_event.is_set():
                     state.cancelled = True

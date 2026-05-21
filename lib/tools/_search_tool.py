@@ -52,8 +52,6 @@ async def _tool_search(args: dict[str, Any], deps) -> str:
         return json.dumps(
             {
                 "matched": [],
-                "unlocked": [],
-                "already_loaded": [],
                 "tip": "未找到匹配工具，请换个关键词重试",
             },
             ensure_ascii=False,
@@ -64,12 +62,7 @@ async def _tool_search(args: dict[str, Any], deps) -> str:
     logger.info("tool_search unlocked", conversation_id=conversation_id, unlocked=unlocked)
 
     return json.dumps(
-        {
-            "matched": results,
-            "unlocked": unlocked,
-            "already_loaded": [],
-            "next_action": ("unlocked 中的工具已加入预加载缓存，从下一轮对话开始可直接调用，" "不要再次 tool_search。"),
-        },
+        {"matched": results},
         ensure_ascii=False,
         indent=2,
     )
@@ -90,8 +83,6 @@ def _handle_select(
         return json.dumps(
             {
                 "matched": [],
-                "unlocked": [],
-                "already_loaded": [],
                 "tip": "select: 后面需要提供工具名",
             },
             ensure_ascii=False,
@@ -123,13 +114,8 @@ def _handle_select(
     matched = registry.get_schemas_as_doc_results(found)
     result: dict[str, Any] = {
         "matched": matched,
-        "unlocked": found,
         "already_loaded": already_loaded,
     }
-    if found:
-        result["next_action"] = (
-            "unlocked 中的工具已加入预加载缓存，从下一轮对话开始可直接调用，" "不要再次 tool_search。"
-        )
 
     tip_parts: list[str] = []
     if already_loaded:
@@ -148,7 +134,7 @@ def create_tool_search() -> ToolDef:
     return ToolDef(
         name="tool_search",
         description=(
-            "在工具目录中搜索可用工具。搜索结果中的工具将加入预加载缓存，从下一轮对话开始可直接调用。\n\n"
+            "在工具目录中搜索可用工具。找到的工具在当前 run 的下一步立即可用。\n\n"
             "调用时机：\n"
             "- 需要某类功能，但不知道工具名称 → 必须调用\n"
             "- 知道工具名且已可见 → 直接调用，不要先搜索\n"
@@ -158,7 +144,7 @@ def create_tool_search() -> ToolDef:
             "查询形式：\n"
             '- "select:工具名" → 精确加载已知工具，支持逗号分隔多个："select:A,B,C"\n'
             '- "关键词" → 模糊搜索，例如："定时提醒"、"RSS订阅管理"、"搜索网页"\n\n'
-            "正确流程：tool_search(query) → 从结果中选择工具 → 下一轮对话直接调用"
+            "正确流程：调用 tool_search → 查看结果 → 下一步直接调用找到的工具"
         ),
         input_schema={
             "type": "object",

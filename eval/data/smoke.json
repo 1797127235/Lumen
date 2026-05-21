@@ -1,0 +1,18 @@
+[
+  {
+    "question_id": "smoke-001",
+    "question_type": "single-session-user",
+    "question": "What is my favorite color?",
+    "answer": "Blue",
+    "question_date": "",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": [""],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I really love the color blue. It reminds me of the ocean and the sky."},
+        {"role": "assistant", "content": "Blue is such a calming and beautiful color! The ocean and sky associations are lovely."}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

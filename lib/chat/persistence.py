@@ -47,11 +47,15 @@ async def persist_turn(
             conversation_id=conv.conversation_id,
         )
 
+    stored_content = state.full_content
+    if state.thinking_content:
+        stored_content = f"<think>\n{state.thinking_content}\n</think>\n{state.full_content}"
+
     db.add(
         Message(
             conversation_id=conv.conversation_id,
             role="assistant",
-            content=state.full_content,
+            content=stored_content,
             intent="consultation",
             tokens_used=tokens_used,
         )

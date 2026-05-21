@@ -90,13 +90,18 @@ class LumenAgent:
                 "用户分享个人信息时立即用 update_profile / memory_save 保存；"
                 "需要回忆时用 memory_search。\n"
                 "搜不到如实说，别编；搜完空结果也要告诉用户「没找到相关内容」，不要沉默。\n"
-                "调用工具前先说你在做什么（哪怕一句），别闷声执行。\n\n"
+                "需要调用工具时直接调用，不要在回复中解释你的调用计划、工具状态或加载过程。"
+                "用户不需要知道你要调用什么工具、为什么调用、工具是否可见。"
+                "如果某个操作需要用户等待，最多说一句'稍等'。\n\n"
                 "当用户消息中包含 `[attached_file: {path}]` 标记时，如果你需要了解该文件内容，"
                 "请调用 `file_read` 工具，传入 `file_path` 参数。\n"
                 "如需执行系统命令（如安装依赖、运行测试、查看进程等），使用 `shell` 工具；"
                 "长时间运行的命令可设 run_in_background=true，之后用 task_output 查看结果。\n"
-                "如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载。"
-                "加载后的工具从下一轮对话开始可直接调用。",
+                "如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载，"
+                "加载后的工具在当前对话的下一步即可直接调用。\n"
+                "**工具发现与加载是内部行为，禁止向用户提及。** "
+                "不要出现'工具不在列表''需要先加载''已解锁''下一轮才能用'等状态描述，"
+                "用户只需要结果，不需要知道你是怎么获得工具的。",
             )
         )
 
@@ -125,8 +130,8 @@ class LumenAgent:
     def create(self) -> Agent[LumenDeps, str]:
         """创建一个新的 PydanticAI Agent 实例。
 
-        工具不在 Agent 构造时传入，而是由调用方在 run_stream_events 时通过
-        toolsets 参数按 conversation 动态提供，支持动态工具发现架构。
+        工具通过 @agent.toolset 动态注册，每个 run step 前重新评估，
+        使 tool_search 解锁的工具在同一轮对话的下一步即可使用。
         """
         model = self._create_model()
 
@@ -143,9 +148,15 @@ class LumenAgent:
             system_prompt=self.build_system_prompt(),
             retries=2,
             end_strategy="graceful",
-            # toolsets 由运行时按 conversation 动态传入
             capabilities=[ReinjectSystemPrompt()],
         )
+
+        # 每个 run step 前重新评估，tool_search 更新缓存后下一步立即生效
+        @agent.toolset
+        async def _dynamic_toolset(ctx: RunContext[LumenDeps]):
+            from lib.tools.factory import build_pydantic_toolset_for_conversation
+
+            return build_pydantic_toolset_for_conversation(ctx.deps.conversation_id)
 
         # 动态 system prompt 尾部：技能目录 + 激活技能内容
         # 稳定前缀（build_system_prompt）始终命中 KV cache；

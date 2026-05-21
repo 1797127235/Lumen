@@ -1,15 +1,23 @@
 # Lumen
 
 <p align="center">
-  <b>一个真正认识你的 AI 伴侣</b><br>
-  <i>本地运行 · 原生桌面 · 隐私优先</i>
+  <b>你的长期个人 AI 伙伴</b><br>
+  <i>记住你 · 理解你 · 接着上次继续聊</i>
 </p>
 
 ---
 
 ## 这是什么
 
-单用户 AI 伴侣桌面应用（Tauri v2）。所有数据存本地，不依赖云端，越用越懂你。
+Lumen 是一个长期个人 AI 伙伴。它不只是聊天工具，而是一个会记住你、理解你、持续和你互动的 AI。
+
+你可以把它理解为一个更长期的个人 AI：
+
+- **会记住你**：保留你的偏好、经历、关系线索和重要时刻
+- **会持续理解你**：不是每次都从零开始，而是能接着之前的话题继续
+- **会长期陪你**：从日常聊天到阶段性变化，逐步形成更稳定的互动关系
+
+当前项目同时支持 **本地 Web 开发模式** 和 **Tauri 桌面模式**。默认定位仍然是单用户、长期互动、隐私优先的个人 AI 产品。
 
 **技术栈**：Tauri v2 (Rust) + FastAPI (Python sidecar) + React 19 + Vite + Tailwind CSS 4 + SQLite + PydanticAI
 
@@ -71,12 +79,10 @@ cargo tauri dev
 ┌───────────┼──────────────────────────────┐
 │  Python FastAPI (127.0.0.1:8000)         │
 │  ├─ SSE 流式对话 (PydanticAI Agent)      │
-│  ├─ 记忆系统 (growth_events → .md → Cognee) │
+│  ├─ 记忆系统 (growth_events → .md / FTS / 向量检索) │
 │  └─ SQLite (单文件，~/.lumen/lumen.db)   │
 └──────────────────────────────────────────┘
 ```
-
----
 
 ---
 
@@ -90,14 +96,16 @@ cargo tauri dev
 | Agent | PydanticAI + ReAct Loop | 流式推理，4 个工具，可观测 |
 | 数据库 | SQLite (aiosqlite) | 单文件零运维，FTS5 全文搜索 |
 | 前端 | React 19 + Tailwind CSS 4 | 现代 UI，OKLCH 配色 |
-| 记忆 | growth_events → .md + Cognee | 事件溯源 + 语义索引 |
+| 记忆 | growth_events → .md + FTS5 + 向量检索 | 事件溯源、长期记忆与按需召回 |
 
 ---
 
 ## 项目结构
 
 ```
-backend/          FastAPI 后端（Agent、API、Application、Domain、Memory、Ingestion）
+core/             基础设施与运行时（配置、数据库、启动、Agent 装配）
+lib/              业务模块（Chat、Memory、Tools、Profile、Data Sources）
+server/           FastAPI 路由层
 src/              React 19 前端（Vite + Tailwind CSS 4）
 src-tauri/        Tauri v2 桌面壳（Rust）
 tests/            pytest 测试用例
@@ -110,7 +118,7 @@ docs/             设计文档与 Story 记录
 
 ```bash
 # 仅后端
-python -m uvicorn backend.main:app --reload
+python -m uvicorn main:app --reload
 
 # 仅前端
 npm run dev

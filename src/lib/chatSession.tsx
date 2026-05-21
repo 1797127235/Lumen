@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { chatStream, getConversation } from './api'
+import { chatStream, getChatHistory, getConversation } from './api'
 
 function genId(): string {
   return crypto.randomUUID()
@@ -61,8 +61,30 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const bgRef = useRef<Background | null>(null)
+  const didInitRef = useRef(false)
 
   useEffect(() => { store(CHAT_CONV_STORAGE_KEY, conversationId) }, [conversationId])
+
+  // 组件挂载时，自动恢复最近的历史会话
+  useEffect(() => {
+    if (didInitRef.current) return
+    didInitRef.current = true
+    const cid = stored(CHAT_CONV_STORAGE_KEY)
+    if (cid) {
+      loadConversation(cid)
+    } else {
+      // sessionStorage 被清空（如关闭窗口后重新打开），尝试加载最近的历史会话
+      getChatHistory(1)
+        .then((items) => {
+          if (items.length > 0 && items[0].conversation_id) {
+            loadConversation(items[0].conversation_id)
+          }
+        })
+        .catch((err) => {
+          console.error('[ChatSession] getChatHistory failed:', err)
+        })
+    }
+  }, [])
 
   // Route state updates to either React state (active) or background ref (detached stream)
   function apply(fn: (prev: ChatMessage[]) => ChatMessage[]) {

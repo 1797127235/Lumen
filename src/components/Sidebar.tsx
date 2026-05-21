@@ -55,9 +55,26 @@ export default function Sidebar() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    getChatHistory(30)
-      .then(setItems)
-      .catch(() => {})
+    let mounted = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    const load = async () => {
+      try {
+        const data = await getChatHistory(30)
+        if (mounted) setItems(data)
+      } catch (err) {
+        console.error('[Sidebar] getChatHistory failed:', err)
+        if (mounted) {
+          retryTimer = setTimeout(load, 3000)
+        }
+      }
+    }
+
+    load()
+    return () => {
+      mounted = false
+      if (retryTimer) clearTimeout(retryTimer)
+    }
   }, [conversationId])
 
   async function handleDelete(id: string, event: React.MouseEvent) {

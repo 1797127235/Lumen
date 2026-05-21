@@ -1,0 +1,187 @@
+{
+  "meta": {
+    "dataset": "eval\\data\\lumen_golden.json",
+    "workspace": "C:\\tmp\\lumen_bench3",
+    "total": 12,
+    "evaluated": 12,
+    "timestamp": "2026-05-21T01:01:08.840898"
+  },
+  "scores": {
+    "overall": {
+      "f1": 0.3546,
+      "em": 0.0,
+      "n": 12,
+      "errors": 0,
+      "judge_acc": 0.9167
+    },
+    "by_type": {
+      "knowledge-update": {
+        "f1": 0.1429,
+        "em": 0.0,
+        "n": 2,
+        "errors": 0,
+        "judge_acc": 1.0
+      },
+      "single-session-preference": {
+        "f1": 0.2778,
+        "em": 0.0,
+        "n": 4,
+        "errors": 0,
+        "judge_acc": 0.75
+      },
+      "single-session-user": {
+        "f1": 0.4764,
+        "em": 0.0,
+        "n": 6,
+        "errors": 0,
+        "judge_acc": 1.0
+      }
+    }
+  },
+  "results": [
+    {
+      "question_id": "zh-001",
+      "question_type": "single-session-user",
+      "question": "我是做什么工作的？",
+      "gold_answer": "前端工程师",
+      "predicted_answer": "前端工程师，React + TypeScript。",
+      "elapsed_s": 7.64,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.4444444444444445,
+      "em": false
+    },
+    {
+      "question_id": "zh-002",
+      "question_type": "single-session-preference",
+      "question": "我喜欢什么类型的音乐？",
+      "gold_answer": "后摇",
+      "predicted_answer": "后摇。写代码的时候特别适合，没有歌词不打扰思路。",
+      "elapsed_s": 5.81,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.2222222222222222,
+      "em": false
+    },
+    {
+      "question_id": "zh-003",
+      "question_type": "single-session-user",
+      "question": "我住在哪个城市？",
+      "gold_answer": "上海",
+      "predicted_answer": "上海。",
+      "elapsed_s": 6.22,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.6666666666666666,
+      "em": false
+    },
+    {
+      "question_id": "zh-004",
+      "question_type": "single-session-preference",
+      "question": "我不喜欢什么样的开会方式？",
+      "gold_answer": "没有议程的会议",
+      "predicted_answer": "没有议程的会议。",
+      "elapsed_s": 5.19,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.888888888888889,
+      "em": false
+    },
+    {
+      "question_id": "zh-005",
+      "question_type": "knowledge-update",
+      "question": "我现在用什么框架写后端？",
+      "gold_answer": "FastAPI",
+      "predicted_answer": "FastAPI。",
+      "elapsed_s": 4.72,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.0,
+      "em": false
+    },
+    {
+      "question_id": "zh-006",
+      "question_type": "single-session-user",
+      "question": "我的作息有什么特点？",
+      "gold_answer": "夜猫子，习惯深夜工作",
+      "predicted_answer": "夜猫子型，凌晨两点是你效率巅峰，白天容易被各种事打断。",
+      "elapsed_s": 6.81,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.1818181818181818,
+      "em": false
+    },
+    {
+      "question_id": "zh-007",
+      "question_type": "single-session-user",
+      "question": "我有什么副业或者业余项目？",
+      "gold_answer": "在做一个独立开发的桌面 AI 伴侣应用",
+      "predicted_answer": "你在业余时间做一个桌面应用——隐私优先的 AI 伴侣，本地运行、数据不上传云端。",
+      "elapsed_s": 7.36,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.5405405405405406,
+      "em": false
+    },
+    {
+      "question_id": "zh-008",
+      "question_type": "single-session-preference",
+      "question": "我平时用什么工具做笔记？",
+      "gold_answer": "Obsidian",
+      "predicted_answer": "Obsidian。",
+      "elapsed_s": 6.31,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.0,
+      "em": false
+    },
+    {
+      "question_id": "zh-009",
+      "question_type": "single-session-user",
+      "question": "我做了什么重要决定？",
+      "gold_answer": "决定辞职去专注做独立开发",
+      "predicted_answer": "辞职，用六个月存款做跑道，专心搞独立开发。",
+      "elapsed_s": 6.34,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.4,
+      "em": false
+    },
+    {
+      "question_id": "zh-010",
+      "question_type": "single-session-user",
+      "question": "我遇到了什么技术问题？",
+      "gold_answer": "Rust 编译报错，找不到生命周期问题",
+      "predicted_answer": "Rust 生命周期，报错看不懂。",
+      "elapsed_s": 8.64,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.6250000000000001,
+      "em": false
+    },
+    {
+      "question_id": "zh-011",
+      "question_type": "knowledge-update",
+      "question": "我现在的情绪状态怎么样？",
+      "gold_answer": "状态恢复了，比较平静",
+      "predicted_answer": "平静下来了，睡一觉调整过来了。",
+      "elapsed_s": 5.28,
+      "error": null,
+      "judge_correct": true,
+      "f1": 0.28571428571428575,
+      "em": false
+    },
+    {
+      "question_id": "zh-012",
+      "question_type": "single-session-preference",
+      "question": "我对 AI 工具有什么看法？",
+      "gold_answer": "看好 AI 辅助开发，但不喜欢过度依赖",
+      "predicted_answer": "没找到相关内容。",
+      "elapsed_s": 6.78,
+      "error": null,
+      "judge_correct": false,
+      "f1": 0.0,
+      "em": false
+    }
+  ]
+}

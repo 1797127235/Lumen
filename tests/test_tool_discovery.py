@@ -206,8 +206,7 @@ async def test_tool_search_select_exact() -> None:
     deps = FakeDeps(conversation_id="conv-select")
     result = await _tool_search({"query": "select:shell"}, deps)
     data = json.loads(result)
-    assert "shell" in data["unlocked"]
-    assert "已加入预加载缓存" in data["next_action"]
+    assert any(r["name"] == "shell" for r in data["matched"])
 
 
 @pytest.mark.asyncio
@@ -217,7 +216,7 @@ async def test_tool_search_keyword() -> None:
     result = await _tool_search({"query": "搜索网页"}, deps)
     data = json.loads(result)
     assert any(r["name"] == "web_search" for r in data["matched"])
-    assert "web_search" in data["unlocked"]
+    assert any(r["name"] == "web_search" for r in data["matched"])
 
 
 @pytest.mark.asyncio
@@ -230,7 +229,6 @@ async def test_tool_search_already_loaded() -> None:
     result = await _tool_search({"query": "select:shell"}, deps)
     data = json.loads(result)
     assert "shell" in data["already_loaded"]
-    assert data["unlocked"] == []
 
 
 @pytest.mark.asyncio
@@ -241,7 +239,7 @@ async def test_tool_search_risk_filter() -> None:
     result = await _tool_search({"query": "select:shell", "allowed_risk": ["read-only"]}, deps)
     data = json.loads(result)
     assert "shell" in data.get("tip", "")  # 风险等级不符提示
-    assert "shell" not in data["unlocked"]
+    assert not any(r["name"] == "shell" for r in data["matched"])
 
 
 @pytest.mark.asyncio
@@ -269,7 +267,7 @@ async def test_unlocked_tool_visible_next_turn() -> None:
     # 第一轮中调用 tool_search 解锁 shell
     result = await _tool_search({"query": "select:shell"}, deps)
     data = json.loads(result)
-    assert "shell" in data["unlocked"]
+    assert any(r["name"] == "shell" for r in data["matched"])
 
     # 第二轮：shell 已预加载，可见
     visible2 = assemble_visible_tools(conv_id)
