@@ -160,6 +160,44 @@ a:hover { opacity: 0.75; }
   }
 }
 
+/* Lumen MoodStrip 动画 */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes breathe {
+    0%, 100% { transform: scale(0.95); opacity: 0.8; }
+    50% { transform: scale(1.0); opacity: 1.0; }
+  }
+  @keyframes pulse-gentle {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1.0; }
+  }
+  @keyframes heartbeat {
+    0%, 100% { transform: scale(0.98); }
+    50% { transform: scale(1.02); }
+  }
+  @keyframes orbit {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes bounce-soft {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-2px); }
+  }
+
+  .animate-breathe { animation: breathe 4s ease-in-out infinite; }
+  .animate-pulse-gentle { animation: pulse-gentle 2s ease-in-out infinite; }
+  .animate-heartbeat { animation: heartbeat 3s ease infinite; }
+  .animate-orbit { animation: orbit 8s linear infinite; }
+  .animate-bounce-soft { animation: bounce-soft 1s cubic-bezier(0.34, 1.56, 0.64, 1) infinite; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-breathe,
+  .animate-pulse-gentle,
+  .animate-heartbeat,
+  .animate-orbit,
+  .animate-bounce-soft { animation: none; }
+}
+
 @keyframes ink-blink {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }

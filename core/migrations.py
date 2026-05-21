@@ -221,6 +221,45 @@ async def migrate_sqlite(conn) -> None:
         "ALTER TABLE growth_events ADD COLUMN confirmation_status VARCHAR(16) NOT NULL DEFAULT 'confirmed'",
         "ALTER TABLE growth_events ADD COLUMN reviewed_at DATETIME",
         "CREATE INDEX IF NOT EXISTS ix_growth_events_confirmation ON growth_events (user_id, confirmation_status)",
+        # ── Lumen 伴侣系统 ──
+        """CREATE TABLE IF NOT EXISTS lumen_thoughts (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            content TEXT NOT NULL,
+            source_event_ids TEXT,
+            judge_score REAL,
+            judge_veto TEXT,
+            duplicate INTEGER DEFAULT 0,
+            mood TEXT CHECK(mood IN ('calm','curious','tender','reflective','energized')),
+            sent_at DATETIME,
+            error_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_lumen_thoughts_user ON lumen_thoughts (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_lumen_thoughts_sent ON lumen_thoughts (user_id, sent_at)",
+        """CREATE TABLE IF NOT EXISTS lumen_state (
+            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            mood TEXT NOT NULL DEFAULT 'calm'
+                CHECK(mood IN ('calm','curious','tender','reflective','energized')),
+            mood_intensity REAL DEFAULT 0.5,
+            pending_mood TEXT
+                CHECK(pending_mood IS NULL OR pending_mood IN ('calm','curious','tender','reflective','energized')),
+            pending_count INTEGER DEFAULT 0,
+            derived_from TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id)
+        )""",
+        "INSERT OR IGNORE INTO lumen_state (user_id, mood) VALUES ('demo_user', 'calm')",
+        """CREATE TABLE IF NOT EXISTS lumen_presence (
+            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            last_user_at DATETIME,
+            last_proactive_at DATETIME,
+            proactive_sent_24h INTEGER DEFAULT 0,
+            followup_due_at DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id)
+        )""",
+        "INSERT OR IGNORE INTO lumen_presence (user_id) VALUES ('demo_user')",
     ]:
         try:
             await conn.execute(text(sql))

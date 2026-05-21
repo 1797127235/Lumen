@@ -116,8 +116,8 @@ async def stream_chat(
                 deps=deps,
                 model_settings=ModelSettings(max_tokens=4096),
                 usage_limits=UsageLimits(
-                    request_limit=8,  # 最多 8 轮模型请求（含工具调用）
-                    tool_calls_limit=6,  # 最多 6 次成功工具调用
+                    request_limit=12,  # 最多 12 轮模型请求（含工具调用）
+                    tool_calls_limit=10,  # 最多 10 次成功工具调用
                 ),
             ):
                 if cancel_event.is_set():
