@@ -49,9 +49,9 @@ sentence-transformers>=3.0.0
 # MCP
 mcp>=1.12.0
 
-# 依赖冲突修复：limits 4.4.1 限制 packaging<25，与 xai-sdk 冲突
-# limits 4.8.0+ 已移除该限制
-limits>=4.8.0
+# 依赖冲突修复：limits 4.4.1~4.8.x 限制 packaging<25，与 xai-sdk 冲突
+# limits 5.0.0+ 已解除上限
+limits>=5.0.0
 
 # Dev / CI
 ruff==0.15.8

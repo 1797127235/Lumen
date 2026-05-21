@@ -149,7 +149,6 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     const targetCid = conversationId
 
     // 附件随请求发出后立即清空 UI，不等 onDone
-    const currentAttachments = attachments
     clearAttachments()
 
     setMessages(prev => [...prev, { id: genId(), role: 'user', content }, { id: genId(), role: 'assistant', content: '' }])

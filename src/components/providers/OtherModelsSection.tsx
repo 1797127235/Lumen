@@ -34,13 +34,6 @@ export function OtherModelsSection() {
     setState({ heavyModel: value });
   };
 
-  // 即使没有模型也显示占位，但下拉框禁用
-  const noModelsHint = !hasModels ? (
-    <p className="mt-xs text-xs text-text-subtle leading-relaxed">
-      添加供应商并配置模型后即可选择
-    </p>
-  ) : null;
-
   return (
     <div className="space-y-md">
       <h3 className="text-sm font-medium text-ink">其他模型</h3>
