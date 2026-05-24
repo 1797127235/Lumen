@@ -31,6 +31,7 @@ class GrowthEvent(Base):
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="用户主动")
+    source_platform: Mapped[str] = mapped_column(String(16), nullable=False, default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     dedupe_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

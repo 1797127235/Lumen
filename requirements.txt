@@ -1,5 +1,5 @@
-fastapi>=0.111.0
-uvicorn>=0.30.0
+fastapi>=0.136.0
+uvicorn>=0.47.0
 pydantic>=2.7.0
 pydantic-settings>=2.0.0
 python-multipart>=0.0.9
@@ -48,6 +48,10 @@ sentence-transformers>=3.0.0
 
 # MCP
 mcp>=1.12.0
+
+# Telegram Bot
+python-telegram-bot>=22.0
+telegramify-markdown>=1.1.0
 
 # 依赖冲突修复：limits 4.4.1~4.8.x 限制 packaging<25，与 xai-sdk 冲突
 # limits 5.0.0+ 已解除上限

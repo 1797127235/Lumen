@@ -103,14 +103,14 @@
     "question_id": "zh-007",
     "question_type": "single-session-user",
     "question": "我有什么副业或者业余项目？",
-    "answer": "在做一个独立开发的桌面 AI 伴侣应用",
+    "answer": "在做一个独立开发的桌面 AI 伙伴应用",
     "question_date": "",
     "haystack_session_ids": ["s1"],
     "haystack_dates": [""],
     "haystack_sessions": [
       [
-        {"role": "user", "content": "我在业余时间做一个桌面应用，想做一个真正认识用户的 AI 伴侣，本地运行，数据不上传云端。"},
-        {"role": "assistant", "content": "隐私优先的 AI 伴侣，这个方向挺有意思的，本地化部署对用户信任感很重要。"}
+        {"role": "user", "content": "我在业余时间做一个桌面应用，想做一个真正认识用户的 AI 伙伴，本地运行，数据不上传云端。"},
+        {"role": "assistant", "content": "隐私优先的 AI 伙伴，这个方向挺有意思的，本地化部署对用户信任感很重要。"}
       ]
     ],
     "answer_session_ids": []

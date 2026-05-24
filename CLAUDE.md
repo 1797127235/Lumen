@@ -83,11 +83,11 @@
 当用户的请求匹配可用 skill 时，通过 Skill 工具调用它。有疑问时优先调用 skill。
 
 关键路由规则：
-- 产品想法/头脑风暴 → 调用 /gstack-office-hours
-- 策略/范围 → 调用 /gstack-plan-ceo-review
-- 架构规划 → 调用 /gstack-plan-eng-review
-- 设计系统/方案审查 → 调用 /gstack-plan-design-review
-- 完整审查流水线 → 调用 /gstack-plan-eng-review + /gstack-plan-ceo-review
-- Bug/错误 → 调用 /gstack-investigate
-- 代码审查/diff 检查 → 调用 /gstack-review
-- 发布/PR → 调用 /gstack-ship
+- 产品想法/头脑风暴 → 调用 `office-hours`
+- 策略/范围 → 调用 `plan-ceo-review`
+- 架构规划 → 调用 `plan-eng-review`
+- 设计系统/方案审查 → 调用 `plan-design-review`
+- 完整审查流水线 → 调用 `plan-eng-review` + `plan-ceo-review`
+- Bug/错误 → 调用 `investigate`
+- 代码审查/diff 检查 → 调用 `review`
+- 发布/PR → 调用 `ship`

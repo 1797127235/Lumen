@@ -160,7 +160,7 @@ async def test_semantic_dedup_excluded_type(db):
 @pytest.mark.asyncio
 async def test_semantic_dedup_lancedb_unavailable(db):
     """provider 为 None 时，_semantic_dedup_and_merge 返回 None，正常写入。"""
-    with patch("lib.data_sources.ingestion.get_document_index_provider", return_value=None):
+    with patch("core.vector_store.get_document_index_provider", return_value=None):
         spec = {"event_type": "significant_moment", "payload": {"content": "test event"}}
         result = await _semantic_dedup_and_merge(spec, "u1", db)
         assert result is None
@@ -175,7 +175,7 @@ async def test_semantic_dedup_no_similar_event(db):
     mock_provider = MagicMock()
     mock_provider.prefetch = AsyncMock(return_value=[])
 
-    with patch("lib.data_sources.ingestion.get_document_index_provider", return_value=mock_provider):
+    with patch("core.vector_store.get_document_index_provider", return_value=mock_provider):
         spec = {"event_type": "significant_moment", "payload": {"content": "unique event"}}
         result = await _semantic_dedup_and_merge(spec, "u1", db)
         assert result is None
@@ -200,7 +200,7 @@ async def test_semantic_dedup_merges_similar_event(db):
     original_dedupe_key = existing.dedupe_key
 
     # mock provider 命中该事件
-    from lib.data_sources.ingestion.document_index_provider import ProviderHit
+    from core.vector_store import ProviderHit
 
     mock_hit = ProviderHit(
         doc_id=f"narrative:{existing.id}",
@@ -211,7 +211,7 @@ async def test_semantic_dedup_merges_similar_event(db):
     mock_provider = MagicMock()
     mock_provider.prefetch = AsyncMock(return_value=[mock_hit])
 
-    with patch("lib.data_sources.ingestion.get_document_index_provider", return_value=mock_provider):
+    with patch("core.vector_store.get_document_index_provider", return_value=mock_provider):
         spec = {
             "event_type": "significant_moment",
             "payload": {"content": "Learning Python is going great", "tags": ["learning", "python"]},
@@ -252,7 +252,7 @@ async def test_semantic_dedup_below_threshold(db):
     existing = await _write_event(db, "significant_moment", {"content": "event A"})
     await db.flush()
 
-    from lib.data_sources.ingestion.document_index_provider import ProviderHit
+    from core.vector_store import ProviderHit
 
     mock_hit = ProviderHit(
         doc_id=f"narrative:{existing.id}",
@@ -263,7 +263,7 @@ async def test_semantic_dedup_below_threshold(db):
     mock_provider = MagicMock()
     mock_provider.prefetch = AsyncMock(return_value=[mock_hit])
 
-    with patch("lib.data_sources.ingestion.get_document_index_provider", return_value=mock_provider):
+    with patch("core.vector_store.get_document_index_provider", return_value=mock_provider):
         spec = {"event_type": "significant_moment", "payload": {"content": "event B"}}
         result = await _semantic_dedup_and_merge(spec, "u1", db)
 

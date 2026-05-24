@@ -89,7 +89,7 @@ class EventHandlers:
             try:
                 from shared.llm_usage import extract_usage
 
-                state.usage_data = extract_usage(event.result.usage())
+                state.usage_data = extract_usage(event.result.usage)
             except Exception:
                 pass
         return []

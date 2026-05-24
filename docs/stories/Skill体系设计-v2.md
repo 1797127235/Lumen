@@ -359,7 +359,7 @@ print(loader.build_skills_summary())
 ## 注意事项
 
 - `SkillsLoader` 是无状态的，每轮对话按需读取文件，不缓存激活状态
-- `always=true` 目前没有内置技能使用，预留给未来的核心伴侣行为（如特定人格规则）
+- `always=true` 目前没有内置技能使用，预留给未来的核心伙伴行为（如特定人格规则）
 - `build_skills_summary()` 用 `filter_unavailable=False` 展示全部技能（含不可用的），让 Agent 知道存在但需要配置
 - 技能正文不做工具白名单过滤，工具解锁交给 `tool_search` 机制
 - SKILL.md 文件变更无需重启，下次对话自动生效（因为每轮都重新读文件）

@@ -21,18 +21,6 @@ export type {
 export { getConfig, getProviders, testConfig, updateConfig } from "./api/config";
 export type { Config, ConfigTestResponse, ProviderCatalog } from "./api/config";
 
-// ── Data Sources ──
-export {
-  createDataSource,
-  deleteDataSource,
-  listDataSources,
-  pauseDataSource,
-  resumeDataSource,
-  syncDataSource,
-  updateDataSource,
-} from "./api/data_sources";
-export type { DataSource, DataSourceCreate, DataSourceUpdate } from "./api/data_sources";
-
 // ── Memory ──
 export {
   correctAIUnderstanding,
@@ -57,5 +45,3 @@ export type {
 // ── Notes ──
 export { listNotes, createNote, updateNote, deleteNote } from "./api/notes";
 export type { Note } from "./api/notes";
-
-

@@ -9,12 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from core.config import get_settings
 from core.startup import lifespan
 from server.routes.chat import router as chat_router
-from server.routes.companion import router as companion_router
 from server.routes.config import router as config_router
 from server.routes.health import router as health_router
 from server.routes.mcp import router as mcp_router
 from server.routes.memory import router as memory_router
 from server.routes.notes import router as notes_router
+from server.routes.partner import router as partner_router
 from server.routes.providers import router as providers_router
 from shared.logging import RequestLoggingMiddleware, get_logger
 
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 app = FastAPI(
     title="Lumen",
-    description="一个真正认识你的 AI 伴侣",
+    description="一个真正认识你的 AI 伙伴",
     version="0.2.0",
     lifespan=lifespan,
 )
@@ -47,7 +47,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(providers_router, prefix="/api")
-app.include_router(companion_router, prefix="/api")
+app.include_router(partner_router, prefix="/api")
 app.include_router(mcp_router)
 
 

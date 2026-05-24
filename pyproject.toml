@@ -1,7 +1,7 @@
 [project]
 name = "lumen"
 version = "0.1.0"
-description = "Lumen — 一个真正认识你的 AI 伴侣"
+description = "Lumen — 一个真正认识你的 AI 伙伴"
 requires-python = ">=3.11"
 
 [tool.ruff]

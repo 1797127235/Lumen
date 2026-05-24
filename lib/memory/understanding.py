@@ -148,7 +148,7 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
 
     model = create_model()
 
-    system_prompt = """你是一个 AI 伴侣的用户画像专家。基于用户的画像数据（Markdown 格式），生成一段关于用户的综合画像 + 模式洞察。
+    system_prompt = """你是一个 AI 伙伴的用户画像专家。基于用户的画像数据（Markdown 格式），生成一段关于用户的综合画像 + 模式洞察。
 
 ## 输出格式
 先输出画像文本，然后换行，然后输出一行分隔符 `---PATTERNS---`，然后输出 JSON 数组。

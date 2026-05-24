@@ -36,7 +36,7 @@ def load_payload(event: GrowthEvent) -> dict:
 
 
 def extract_profile_fields(md_text: str) -> dict:
-    """从 AI 伴侣 memory.md 里提取结构化字段。"""
+    """从 AI 伙伴 memory.md 里提取结构化字段。"""
     patterns = {
         "name": r"- 名字[/／]昵称：(.+)",
         "bio": r"- 简介：(.+)",
@@ -134,7 +134,7 @@ def generate_memory_md(
     reflections: list[dict],
     relationships: dict,
 ) -> str:
-    """生成 AI 伴侣画像 memory.md。"""
+    """生成 AI 伙伴画像 memory.md。"""
     date_str = datetime.now().strftime("%Y-%m-%d")
     parts = ["# 关于你", ""]
     parts.append("> 由 Lumen 自动更新，记录 AI 对你的理解。")

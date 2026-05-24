@@ -1,4 +1,4 @@
-# Story: Lumen 伴侣化 Week 1 — 情绪引擎 + MoodStrip UI
+# Story: Lumen 伙伴化 Week 1 — 情绪引擎 + MoodStrip UI
 
 **Status:** Ready for implementation
 **Branch:** master
@@ -20,15 +20,15 @@
 | 文件 | 操作 |
 |---|---|
 | `core/migrations.py` | 新增 3 张表 DDL |
-| `lib/companion/` | 新建目录 |
-| `lib/companion/__init__.py` | 空文件 |
-| `lib/companion/models.py` | Lumen 伴侣相关 SQLAlchemy 模型 |
-| `lib/companion/mood_inference.py` | 情绪推断函数 |
-| `lib/companion/presence.py` | PresenceStore（last_user_at 更新） |
+| `lib/partner/` | 新建目录 |
+| `lib/partner/__init__.py` | 空文件 |
+| `lib/partner/models.py` | Lumen 伙伴相关 SQLAlchemy 模型 |
+| `lib/partner/mood_inference.py` | 情绪推断函数 |
+| `lib/partner/presence.py` | PresenceStore（last_user_at 更新） |
 | `lib/chat/persistence.py` | 2 处修改（presence 写入 + mood 任务） |
-| `server/routes/companion.py` | 新路由：GET /api/companion/mood |
+| `server/routes/partner.py` | 新路由：GET /api/partner/mood |
 | `main.py` | 注册新路由 |
-| `src/lib/api/companion.ts` | 前端 API client |
+| `src/lib/api/partner.ts` | 前端 API client |
 | `src/components/MoodStrip.tsx` | 新组件 |
 | `src/pages/Chat.tsx` | 插入 MoodStrip |
 
@@ -39,7 +39,7 @@
 在 `migrate_sqlite()` 函数的 SQL 列表末尾追加以下语句（保持现有幂等写法，用 `CREATE TABLE IF NOT EXISTS` 和 `try/except`）：
 
 ```python
-# ── Lumen 伴侣系统 ──
+# ── Lumen 伙伴系统 ──
 """CREATE TABLE IF NOT EXISTS lumen_thoughts (
     id INTEGER PRIMARY KEY,
     user_id TEXT NOT NULL DEFAULT 'demo_user',
@@ -86,12 +86,12 @@
 
 ---
 
-## 2. SQLAlchemy 模型（`lib/companion/models.py`）
+## 2. SQLAlchemy 模型（`lib/partner/models.py`）
 
 新建文件，参考 `lib/chat/models.py` 的写法：
 
 ```python
-"""Lumen 伴侣系统 — SQLAlchemy ORM 模型"""
+"""Lumen 伙伴系统 — SQLAlchemy ORM 模型"""
 from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import DateTime, Float, Integer, String, Text, func
@@ -140,7 +140,7 @@ class LumenThought(Base):
 
 ---
 
-## 3. 情绪推断（`lib/companion/mood_inference.py`）
+## 3. 情绪推断（`lib/partner/mood_inference.py`）
 
 **核心原则：** 只读互动元数据，不读对话文本，不读用户情绪。推断的是 Lumen 陪伴这段关系的体验，不是镜像用户情绪。
 
@@ -273,7 +273,7 @@ async def update_mood_state(db_session_factory, user_id: str) -> None:
     读取互动元数据 → 推断新情绪 → 更新 lumen_state（带切换防抖：连续 2 次相同新情绪才切换）
     """
     from core.db import get_async_session_maker
-    from lib.companion.models import LumenState
+    from lib.partner.models import LumenState
 
     try:
         async with get_async_session_maker()() as db:
@@ -318,7 +318,7 @@ async def update_mood_state(db_session_factory, user_id: str) -> None:
 
 ---
 
-## 4. PresenceStore（`lib/companion/presence.py`）
+## 4. PresenceStore（`lib/partner/presence.py`）
 
 ```python
 """PresenceStore — 追踪用户消息时间和推送时间"""
@@ -369,7 +369,7 @@ async def save_user_message(db: AsyncSession, conv, user_input: str) -> Message 
 
     # ── 新增：presence 记录（与用户消息同一 transaction）──
     try:
-        from lib.companion.presence import record_user_message
+        from lib.partner.presence import record_user_message
         # conv.user_id 需要从 conv 对象获取；如果 conv 没有 user_id 属性，
         # 传入字符串 "demo_user" 作为默认值
         _uid = getattr(conv, "user_id", "demo_user") or "demo_user"
@@ -394,7 +394,7 @@ async def save_user_message(db: AsyncSession, conv, user_input: str) -> Message 
 ```python
     # ── 新增：情绪推断（对话结束后异步更新）──
     try:
-        from lib.companion.mood_inference import update_mood_state
+        from lib.partner.mood_inference import update_mood_state
         from core.db import get_async_session_maker
         mood_task = asyncio.create_task(
             update_mood_state(get_async_session_maker, user_id),
@@ -411,12 +411,12 @@ async def save_user_message(db: AsyncSession, conv, user_input: str) -> Message 
 
 ---
 
-## 6. API 路由（`server/routes/companion.py`）
+## 6. API 路由（`server/routes/partner.py`）
 
 新建文件：
 
 ```python
-"""Lumen 伴侣系统 API"""
+"""Lumen 伙伴系统 API"""
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -425,7 +425,7 @@ from core.db import get_db
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/companion", tags=["companion"])
+router = APIRouter(prefix="/partner", tags=["partner"])
 
 _DEFAULT_USER = "demo_user"
 
@@ -468,15 +468,15 @@ async def get_current_mood(
 在现有路由注册区域加入（参考其他路由的写法）：
 
 ```python
-from server.routes.companion import router as companion_router
+from server.routes.partner import router as partner_router
 # ...（其他 import）...
 
-app.include_router(companion_router, prefix="/api")
+app.include_router(partner_router, prefix="/api")
 ```
 
 ---
 
-## 8. 前端 API Client（`src/lib/api/companion.ts`）
+## 8. 前端 API Client（`src/lib/api/partner.ts`）
 
 新建文件，参考 `src/lib/api/memory.ts` 的写法：
 
@@ -490,7 +490,7 @@ export type MoodState = {
 };
 
 export function getCurrentMood(): Promise<MoodState> {
-  return http<MoodState>("/api/companion/mood");
+  return http<MoodState>("/api/partner/mood");
 }
 ```
 
@@ -502,7 +502,7 @@ export function getCurrentMood(): Promise<MoodState> {
 
 ```tsx
 import { useEffect, useState, useRef } from 'react'
-import { getCurrentMood, type MoodState } from '../lib/api/companion'
+import { getCurrentMood, type MoodState } from '../lib/api/partner'
 
 // 情绪配置
 const MOOD_CONFIG: Record<
@@ -704,7 +704,7 @@ import InnerWorld from './pages/InnerWorld'
 4. 加载时：短暂脉冲点
 5. 加载后：显示"🌿 Lumen 正在·平静中"（初始状态 calm）
 6. 发几条消息，等情绪推断运行，刷新页面看情绪是否有变化
-7. `GET /api/companion/mood` 直接返回 JSON 确认接口
+7. `GET /api/partner/mood` 直接返回 JSON 确认接口
 
 ---
 

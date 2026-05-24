@@ -2,7 +2,7 @@
 
 ## 定位
 
-Lumen — 一个真正认识你的 AI 伴侣。FastAPI + SQLAlchemy + PydanticAI + LiteLLM + SQLite。前端 React 19 + Vite + Tailwind CSS 4。
+Lumen — 一个真正认识你的 AI 伙伴。FastAPI + SQLAlchemy + PydanticAI + LiteLLM + SQLite。前端 React 19 + Vite + Tailwind CSS 4。
 
 ---
 
@@ -68,7 +68,7 @@ curl http://localhost:8000/api/health
 
 1. **定义输入类型**：在 `lib/tools/` 下的对应模块中使用 `TypedDict` 定义参数 schema
 2. **实现 Handler**：在 `lib/tools/` 下的模块中定义 `async def handle_xxx(args: dict, ctx: Any) -> str` 函数
-3. **注册工具**：在 `lib/tools/factory.py` 的 `create_tool_runtime()` 中通过 `ToolDef` 注册
+3. **注册工具**：在 `lib/tools/factory.py` 的 `register_all_tools()` 中将工具加入 `all_tools` 列表，自动注册到 `ToolRegistry`
 4. **测试**：重启后端，在对话中触发工具调用
 
 关键约束：
@@ -97,22 +97,15 @@ curl http://localhost:8000/api/health
 1. **查看后端日志**：`DEBUG=true` 时日志输出结构化 JSON，包含 `event_kind`、`tool_name`、`conversation_id`
 2. **查看 Agent Trace**：`agent_traces` 表记录每一步推理、工具调用、耗时
 3. **检查上下文注入**：`memory/build_context()` 的输出被注入到 system prompt 中，日志中搜索 `build_context` 可查看注入内容
-4. **强制刷新 Agent 缓存**：修改工具或配置后，`_tool_runtime` 全局缓存不会自动刷新，需重启后端
+4. **强制刷新工具缓存**：修改工具或配置后，`ToolRegistry` 和 `ToolDiscoveryState` 是内存单例，不会自动刷新，需重启后端
 
 ### 运行测试
 
 ```bash
-pytest                    # 全部 104 条测试
+pytest                    # 全部 105 条测试
 pytest -x                # 遇到失败立即停
 pytest tests/test_memory_dedup.py -v   # 单文件详细输出
 ```
-
-### 配置外部数据源
-
-1. 前端打开「设置 → 我的世界」
-2. 添加本地文件夹路径（.md/.txt）
-3. `IngestionPipeline` 自动扫描 → 解析 → 写入 `external_items` → 同步 FTS5 + LanceDB
-4. Agent 对话中用 `scope='knowledge'` 搜索外部文档
 
 ### 添加或管理 Skill
 
@@ -122,7 +115,7 @@ Skill 是可插拔的 Agent 指令包，放在 `lib/skills/builtins/<skill-name>
 
 | Skill | 触发方式 | 说明 |
 |-------|---------|------|
-| `emotional-companion` | `always: true` | 情感支持与引导，常驻注入 |
+| `emotional-partner` | `always: true` | 情感支持与引导，常驻注入 |
 | `obsidian-markdown` | `$obsidian-markdown` 或 `skill_load` | Obsidian 风味 Markdown 语法 |
 | `obsidian-bases` | `$obsidian-bases` 或 `skill_load` | Obsidian Bases 数据库视图 |
 | `json-canvas` | `$json-canvas` 或 `skill_load` | JSON Canvas 白板文件 |
@@ -159,13 +152,13 @@ Skill 是可插拔的 Agent 指令包，放在 `lib/skills/builtins/<skill-name>
 ### 项目结构
 
 ```
-career-os/
+Lumen/
 ├── main.py                     # FastAPI 入口，lifespan 中自动建表 + 初始化
 ├── core/                       # 基础设施
 │   ├── config.py               # pydantic-settings，从根目录 .env + ~/.lumen/config.json 加载
 │   ├── db.py                   # SQLAlchemy AsyncEngine + Base + get_async_session_maker
 │   ├── migrations.py           # SQLite 兼容迁移、FTS5 表、触发器
-│   ├── startup.py              # 启动初始化（建表、IngestionPipeline、DocumentIndexProvider）
+│   ├── startup.py              # 启动初始化（建表、Channel 启动、Provider 补偿循环）
 │   ├── agent.py                # PydanticAI Agent 定义 + 动态系统提示词
 │   └── vector_store.py         # 向量存储（LanceDB 封装）
 ├── shared/                     # 跨模块通用工具
@@ -175,10 +168,19 @@ career-os/
 │   └── path_utils.py           # 路径工具（find_project_root）
 ├── lib/                        # 业务模块（按领域拆分）
 │   ├── model_registry.py       # SQLAlchemy 模型注册
+│   ├── bus/                    # 事件总线 + 消息队列
+│   │   ├── event_bus.py        # EventBus：进程内事件发布订阅
+│   │   └── queue.py            # MessageBus：异步消息队列（inbound/outbound）
+│   ├── channels/               # 多渠道抽象（Web / Telegram / CLI）
+│   │   ├── base.py             # BaseChannel 抽象基类
+│   │   ├── web.py              # WebChannel：SSE 流式对话
+│   │   ├── telegram.py         # Telegram Bot 渠道
+│   │   └── cli.py              # CLI 渠道
 │   ├── chat/                   # 对话模块
-│   │   ├── service.py          # 对话业务：Agent Loop 集成 + SSE 流式输出
+│   │   ├── agent_runner.py     # AgentRunner：后台消费消息，运行 Agent Loop
 │   │   ├── session.py          # 会话状态管理
 │   │   ├── persistence.py      # 消息持久化
+│   │   ├── session_files.py    # 会话附件管理
 │   │   ├── lock.py             # 对话并发锁
 │   │   ├── summary.py          # 对话摘要后台任务
 │   │   ├── agent_trace.py      # AgentTrace 可观测性
@@ -190,7 +192,7 @@ career-os/
 │   │   ├── classifier.py       # 事件分类（Profile / Narrative / L0 路由）
 │   │   ├── writer.py           # 事件写入（单条/批量，含 L1/L2 去重）
 │   │   ├── searcher.py         # 搜索/召回 + 上下文构建（L0/L1/L2 分层注入）
-│   │   ├── search.py           # 全文搜索（FTS5 + Provider 语义）+ 外部文档搜索
+│   │   ├── search.py           # 全文搜索（FTS5 + Provider 语义）
 │   │   ├── relational_store.py # Repository + FTS5 触发器管理
 │   │   ├── projection.py       # .md 投影同步、全量重建、删除、重置
 │   │   ├── markdown.py         # .md 原子读写 + growth_events → memory.md
@@ -199,28 +201,14 @@ career-os/
 │   │   ├── understanding.py    # AI 综合画像生成（about_you.md + patterns + intents）
 │   │   └── review_service.py   # 后台记忆审查（Agent fork 审查对话）
 │   ├── profile/                # 画像模块
-│   │   ├── models.py           # User + UserProfile（通用伴侣画像）
+│   │   ├── models.py           # User + UserProfile（通用伙伴画像）
 │   │   └── schemas.py          # ProfilePayload, KeyValuePayload, DecisionPayload
+│   ├── partner/              # 伙伴系统（情绪、主动对话、潜意识）
+│   │   ├── models.py           # LumenState + LumenPresence + LumenThought ORM
+│   │   ├── mood_inference.py   # 情绪推断逻辑
+│   │   └── presence.py         # 在线状态与主动触发管理
 │   ├── config/                 # 配置模块
 │   │   └── service.py          # 配置业务逻辑
-│   ├── data_sources/           # 外部数据接入
-│   │   ├── models.py           # DataSource + ExternalItem ORM
-│   │   ├── schemas.py          # 数据源 Pydantic schema
-│   │   ├── registry.py         # DataSource 注册表
-│   │   ├── service.py          # 数据源业务逻辑
-│   │   └── ingestion/          # 接入管道
-│   │       ├── connector.py
-│   │       ├── pipeline.py
-│   │       ├── store.py
-│   │       ├── parser.py
-│   │       ├── retry.py
-│   │       ├── document_index_provider.py
-│   │       ├── provider_factory.py
-│   │       ├── connectors/
-│   │       │   └── local_folder.py
-│   │       └── providers/
-│   │           ├── lancedb.py
-│   │           └── null.py
 │   ├── providers/              # LLM Provider 目录
 │   │   ├── __init__.py         # PROVIDER_CATALOG + ProviderRegistry
 │   │   ├── _client.py          # probe_provider / build_auth_headers
@@ -228,11 +216,17 @@ career-os/
 │   └── tools/                  # Agent 工具系统
 │       ├── __init__.py
 │       ├── _base.py            # ToolDef dataclass + tool_ok / tool_error
+│       ├── _registry.py        # ToolRegistry：全局工具注册表 + 搜索
+│       ├── _discovery.py       # ToolDiscoveryState：conversation 级工具可见性缓存
 │       ├── _middleware.py      # 工具中间件
-│       ├── factory.py          # 工具工厂（create_tool_runtime）
+│       ├── _search_tool.py     # tool_search：关键词搜索可用工具
+│       ├── factory.py          # 工具工厂（注册所有内置工具 + MCP 工具）
+│       ├── skill_load.py       # skill_load 工具（动态加载 Skill）
 │       ├── memory.py           # memory_search, memory_save
 │       ├── notes.py            # 随记工具
 │       ├── profile.py          # get_profile, update_profile
+│       ├── shell.py            # Shell 命令执行工具
+│       ├── files.py            # 文件读写工具
 │       ├── web_search.py       # 网络搜索（需配置 SEARCH_PROVIDER）
 │       └── mcp/                # MCP 工具桥接
 │           ├── client_manager.py
@@ -248,7 +242,8 @@ career-os/
 │       ├── health.py           # GET /api/health
 │       ├── providers.py        # Provider 管理 API
 │       ├── notes.py            # 随记 API
-│       └── mcp.py              # MCP 服务器管理 API
+│       ├── mcp.py              # MCP 服务器管理 API
+│       └── partner.py        # 伙伴系统 API（情绪状态）
 ├── src/                        # React 前端（Vite）
 │   ├── App.tsx
 │   ├── main.tsx                # 路由配置
@@ -257,8 +252,8 @@ career-os/
 │   │   ├── Chat.tsx            # SSE 流式对话 + 历史抽屉 + 思考过程
 │   │   ├── Profile.tsx         # AI 综合画像 + 主动塑造 + 模式/心愿/此刻/时间线
 │   │   ├── Memories.tsx        # 记忆列表管理
-│   │   ├── MyWorld.tsx         # 外部数据源管理（我的世界）
-│   │   └── Settings.tsx        # Provider 选择 + API Key + 数据源配置
+│   │   ├── InnerWorld.tsx      # 伙伴内心状态（建设中）
+│   │   └── Settings.tsx        # Provider 选择 + API Key
 │   ├── components/
 │   │   ├── Card.tsx
 │   │   ├── EmptyState.tsx
@@ -274,12 +269,12 @@ career-os/
 │           ├── chat.ts
 │           ├── memory.ts
 │           ├── config.ts
-│           └── data_sources.ts
+│           └── partner.ts
 ├── src-tauri/                  # Tauri v2 桌面壳（Rust）
 │   └── src/
 │       ├── lib.rs              # start_backend / stop_backend
 │       └── main.rs
-├── tests/                      # pytest 测试（104 条）
+├── tests/                      # pytest 测试
 ├── docs/                       # 设计文档
 │   ├── architecture/           # 系统架构设计
 │   ├── memory-structure/       # 记忆结构（memory.md + entities/*.md）
@@ -296,7 +291,7 @@ career-os/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/health` | 健康检查（含 DocumentIndexProvider 状态） |
+| `GET` | `/api/health` | 健康检查 |
 | `POST` | `/api/chat` | SSE 流式对话，body: `{ message, conversation_id?, user_id? }` |
 | `GET` | `/api/chat/history?user_id=&limit=` | 对话历史列表 |
 | `GET` | `/api/chat/{conversation_id}` | 单条会话消息详情 |
@@ -336,14 +331,7 @@ career-os/
 | `GET` | `/api/memory/observations` | 观察事件列表 |
 | `PATCH` | `/api/memory/{event_id}` | 更新指定记忆事件 |
 | `POST` | `/api/memory/{event_id}/review` | 审查指定记忆事件 |
-| `GET` | `/api/data_sources` | 列出数据源 |
-| `POST` | `/api/data_sources` | 创建数据源 |
-| `GET` | `/api/data_sources/{id}` | 获取数据源详情 |
-| `PATCH` | `/api/data_sources/{id}` | 更新数据源 |
-| `DELETE` | `/api/data_sources/{id}` | 删除数据源 |
-| `POST` | `/api/data_sources/{id}/sync` | 手动同步数据源 |
-| `POST` | `/api/data_sources/{id}/pause` | 暂停数据源 |
-| `POST` | `/api/data_sources/{id}/resume` | 恢复数据源 |
+| `GET` | `/api/partner/mood` | 获取 Lumen 当前情绪状态 |
 
 ### 环境变量
 
@@ -358,8 +346,6 @@ career-os/
 | `DEBUG` | `true`（开发）/ `false`（生产） |
 | `SEARCH_PROVIDER` | 搜索 Provider（tavily / serper / brave）|
 | `SEARCH_API_KEY` | 搜索 API 密钥 |
-| `EXTERNAL_DATA_ENABLED` | `true` 开启外部数据接入 |
-| `EXTERNAL_DATA_DIRS` | 逗号分隔的本地目录路径 |
 
 ### Code Style
 
@@ -470,18 +456,21 @@ career-os/
 
 ### 工具系统分层
 
-工具系统已从四层架构简化为扁平化设计：
+工具系统采用注册表 + 动态发现模式：
 
-1. **ToolDef**（元数据）— `lib/tools/_base.py` 中定义，含名称、描述、输入 schema、执行函数
-2. **工厂层** — `lib/tools/factory.py` 负责组装所有工具实例
-3. **中间件层** — `lib/tools/_middleware.py` 提供通用横切能力
-4. **具体工具** — `lib/tools/memory.py`, `notes.py`, `profile.py`, `web_search.py` 等
-5. **MCP 桥接** — `lib/tools/mcp/` 将外部 MCP 服务器暴露为 Agent 工具
+1. **ToolDef**（元数据）— `lib/tools/_base.py` 中定义，含名称、描述、输入 schema、执行函数、风险等级、标签等
+2. **注册表层** — `lib/tools/_registry.py` 的 `ToolRegistry` 管理全量工具索引，提供搜索和按名称过滤 schema 能力
+3. **发现层** — `lib/tools/_discovery.py` 的 `ToolDiscoveryState` 按 `conversation_id` 维护预加载缓存（LRU），实现 deferred 工具的按需解锁
+4. **工厂层** — `lib/tools/factory.py` 负责组装所有工具实例并注册到 `ToolRegistry`
+5. **中间件层** — `lib/tools/_middleware.py` 提供通用横切能力
+6. **具体工具** — `lib/tools/memory.py`, `notes.py`, `profile.py`, `shell.py`, `files.py`, `web_search.py` 等
+7. **MCP 桥接** — `lib/tools/mcp/` 将外部 MCP 服务器暴露为 Agent 工具
 
 为什么这样设计？
-- 扁平化降低心智负担：新增工具只需在 `lib/tools/` 下新增模块并在 `factory.py` 注册
-- MCP 桥接让外部工具生态零成本接入：任何兼容 MCP 的服务器都可被 Agent 调用
-- 中间件层统一处理横切关注点（日志、重试、超时），业务工具只关注核心逻辑
+- **动态发现**：非核心工具默认隐藏，Agent 需要通过 `tool_search` 解锁，减少首次调用的 schema 体积
+- **扁平化注册**：新增工具只需在 `lib/tools/` 下新增模块并在 `factory.py` 注册
+- **MCP 桥接**：任何兼容 MCP 的服务器都可被 Agent 调用，外部工具生态零成本接入
+- **中间件层**：统一处理横切关注点（日志、重试、超时），业务工具只关注核心逻辑
 
 ### 为什么用 SQLite + FTS5
 
@@ -496,10 +485,10 @@ career-os/
 
 ## Gotchas
 
-- `lib/chat/service.py` 流式对话使用 `db.commit()` 而非 `flush()`，确保用户消息立即落库，流中断不丢失
+- `lib/chat/agent_runner.py` 流式对话在持久化时使用 `db.commit()`，确保用户消息立即落库，流中断不丢失
 - `update_profile` 中 `null` 可以清空字段（通过 `model_fields_set` 区分"未传"和"传 null"）
 - `chatSession.tsx` 使用 `sessionStorage` 持久化 conversationId，刷新页面不丢失对话
-- `core/agent.py` 的 `_tool_runtime` 是全局缓存，配置变更后需重启后端，否则工具列表不会刷新
+- `lib/tools/_registry.py` 的 `ToolRegistry` 和 `lib/tools/_discovery.py` 的 `ToolDiscoveryState` 是内存单例，配置变更后需重启后端，否则工具列表和发现状态不会刷新
 - `understanding.py` 的 AI 画像生成有 5 分钟防抖（`_DEBOUNCE_SECONDS = 300`），频繁触发不会重复调用 LLM
 - `search.py` 三路搜索并行执行，但 Provider 故障会被静默吞掉并返回空列表 — 语义搜索降级为 FTS5，不会报错
 - `shared/logging.py` 使用 structlog + stdlib 混合模式，`bind_chat_context()` 在 Agent Loop 中自动绑定 `conversation_id`/`user_id` 到所有子日志
@@ -516,6 +505,7 @@ career-os/
 - **snapshot.py 耦合 chat 模块**：`build_snapshot` 直接 import `chat.models`，无法独立测试 memory 模块
 - **数据层耦合**：`lib/providers/__init__.py` 直接操作文件系统（`~/.lumen/providers.json`），缺乏抽象层
 - **搜索 Provider 未配置时 web_search 工具静默失败**：缺少运行时的用户友好提示
+- **ToolRegistry 是内存单例**：多 worker 部署（如 gunicorn）时每个进程有独立的工具缓存和发现状态
 
 ---
 

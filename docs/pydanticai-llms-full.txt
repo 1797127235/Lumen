@@ -41470,7 +41470,7 @@ capabilities:
 
 ## Saving specs
 
-`AgentSpec.to_file` saves a spec to YAML or JSON and optionally generates a companion JSON Schema file for editor autocompletion:
+`AgentSpec.to_file` saves a spec to YAML or JSON and optionally generates a partner JSON Schema file for editor autocompletion:
 
 save\_spec\_example.py
 

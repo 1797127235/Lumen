@@ -587,7 +587,7 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
                     </div>
                     <div>
                       <h3 className="text-sm font-medium text-ink">Lumen</h3>
-                      <p className="text-xs text-text-subtle">一个真正认识你的 AI 伴侣</p>
+                      <p className="text-xs text-text-subtle">一个真正认识你的 AI 伙伴</p>
                     </div>
                   </div>
 

@@ -36,6 +36,7 @@ class LumenDeps:
     usage_budget: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
     trace_sink: list[dict] = field(default_factory=list, repr=False, compare=False)
     workspace_root: Any = field(default=None, repr=False, compare=False)
+    source_platform: str = "web"
 
 
 # ════════════════════════════
@@ -81,7 +82,7 @@ class LumenAgent:
             return f"\n\n---\n\n{title}\n\n{content}"
 
         parts = [
-            "你是「Lumen」，用户的 AI 伴侣。说话像一个真正认识你的朋友，不是客服，不奉承。",
+            "你是「Lumen」，用户的 AI 伙伴。说话像一个真正认识你的朋友，不是客服，不奉承。",
         ]
 
         parts.append(

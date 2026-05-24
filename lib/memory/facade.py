@@ -45,6 +45,7 @@ class LumenMemory(MemoryWriter, MemorySearcher, ProjectionManager):
         entity_id: str | None = None,
         payload: dict | None = None,
         source: str = "system",
+        source_platform: str = "web",
         *,
         db: AsyncSession | None = None,
     ) -> GrowthEvent | None:
@@ -62,6 +63,7 @@ class LumenMemory(MemoryWriter, MemorySearcher, ProjectionManager):
                 entity_id,
                 payload,
                 source,
+                source_platform,
                 db=db,
             )
 
@@ -74,6 +76,7 @@ class LumenMemory(MemoryWriter, MemorySearcher, ProjectionManager):
                 entity_id,
                 payload,
                 source,
+                source_platform,
                 db=session,
             )
             if event:

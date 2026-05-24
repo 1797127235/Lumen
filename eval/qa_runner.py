@@ -1,4 +1,7 @@
-"""QA Runner — 在隔离的 runtime 中对 Agent 提问并收集回答。"""
+"""QA Runner — 在隔离的 runtime 中对 Agent 提问并收集回答。
+
+使用新架构：AgentRunner + MessageBus + EventBus
+"""
 
 from __future__ import annotations
 
@@ -6,28 +9,60 @@ import asyncio
 import logging
 import time
 
-from core.db import get_async_session_maker
 from eval.dataset import LMEInstance
 from eval.runtime import BenchmarkRuntime
-from lib.chat.service import stream_chat
+from lib.bus.event_bus import EventBus
+from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
+from lib.chat.agent_runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 180.0
 
 
-async def _collect_stream(db, user_id: str, question: str) -> str:
-    """收集 stream_chat 的全部 token 输出。"""
-    tokens: list[str] = []
-    async for event in stream_chat(db, user_id, question):
-        kind = event.get("type")
-        if kind == "token":
-            tokens.append(event.get("content", ""))
-        elif kind == "done":
-            break
-        elif kind == "error":
-            raise RuntimeError(event.get("message", "stream_chat error"))
-    return "".join(tokens)
+async def _collect_stream(user_id: str, question: str) -> str:
+    """使用 AgentRunner + MessageBus 收集 Agent 回复。"""
+    bus = MessageBus()
+    event_bus = EventBus()
+    runner = AgentRunner(bus, event_bus)
+    runner.start()
+
+    # 收集 outbound 消息
+    response_content: list[str] = []
+
+    async def on_response(msg: OutboundMessage) -> None:
+        response_content.append(msg.content)
+
+    bus.subscribe_outbound("web", on_response)
+
+    # 启动分发
+    dispatch_task = asyncio.create_task(bus.dispatch_outbound())
+
+    try:
+        # 发布问题
+        await bus.publish_inbound(
+            InboundMessage(
+                channel="web",
+                sender=user_id,
+                chat_id=f"qa-{time.time()}",
+                content=question,
+            )
+        )
+
+        # 等待回复（带超时）
+        for _ in range(int(_DEFAULT_TIMEOUT_S * 10)):
+            if response_content:
+                return response_content[0]
+            await asyncio.sleep(0.1)
+
+        return ""
+    finally:
+        await runner.stop()
+        dispatch_task.cancel()
+        try:
+            await dispatch_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def run_qa_instance(
@@ -55,11 +90,10 @@ async def run_qa_instance(
     t0 = time.monotonic()
 
     try:
-        async with get_async_session_maker()() as db:
-            predicted = await asyncio.wait_for(
-                _collect_stream(db, rt.user_id, question),
-                timeout=timeout_s,
-            )
+        predicted = await asyncio.wait_for(
+            _collect_stream(rt.user_id, question),
+            timeout=timeout_s,
+        )
     except TimeoutError:
         error = f"timeout after {timeout_s}s"
         logger.warning("QA timeout: %s", instance.question_id)

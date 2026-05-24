@@ -19,7 +19,7 @@ Skill v2 的激活机制有两个问题：
 | `lib/tools/skill_load.py` | 新建 | `skill_load` 工具实现 |
 | `lib/tools/factory.py` | 修改 | 注册 `create_skill_tools()` |
 | `core/agent.py` | 修改 | `_skills_prompt` 只保留 XML 目录，删除正文注入逻辑 |
-| `lib/skills/builtins/emotional-companion/SKILL.md` | 修改 | `always: false`，精简 description |
+| `lib/skills/builtins/emotional-partner/SKILL.md` | 修改 | `always: false`，精简 description |
 
 ---
 
@@ -169,7 +169,7 @@ async def _skills_prompt(ctx: RunContext[LumenDeps]) -> str:
 
 ---
 
-## 任务 4 — 修改 `emotional-companion/SKILL.md`
+## 任务 4 — 修改 `emotional-partner/SKILL.md`
 
 ### 改动点
 
@@ -180,7 +180,7 @@ async def _skills_prompt(ctx: RunContext[LumenDeps]) -> str:
 
 ```yaml
 ---
-name: emotional-companion
+name: emotional-partner
 description: 情感支持与引导。当用户表现出焦虑、迷茫、低落、压力大、烦躁、难受、崩溃等情绪时加载此技能。
 metadata:
   always: false
@@ -212,7 +212,7 @@ from lib.tools.skill_load import _load
 class FakeDeps: pass
 
 async def test():
-    result = await _load({'skill_name': 'emotional-companion'}, FakeDeps())
+    result = await _load({'skill_name': 'emotional-partner'}, FakeDeps())
     print(result[:200])   # 应输出 skill 正文前 200 字
 
 asyncio.run(test())
@@ -233,7 +233,7 @@ asyncio.run(test())
 "
 
 # 4. system prompt 不再包含 skill 正文（只有 XML 目录）
-# 启动后发一条对话，在后端日志中搜索 system prompt，确认只含 <skills> 标签，无 '# 情感伴侣 Skill' 字样
+# 启动后发一条对话，在后端日志中搜索 system prompt，确认只含 <skills> 标签，无 '# 情感伙伴 Skill' 字样
 ```
 
 ---

@@ -220,8 +220,9 @@ async def migrate_sqlite(conn) -> None:
         # ── 记忆审核机制 ──
         "ALTER TABLE growth_events ADD COLUMN confirmation_status VARCHAR(16) NOT NULL DEFAULT 'confirmed'",
         "ALTER TABLE growth_events ADD COLUMN reviewed_at DATETIME",
+        "ALTER TABLE growth_events ADD COLUMN source_platform VARCHAR(16) NOT NULL DEFAULT 'web'",
         "CREATE INDEX IF NOT EXISTS ix_growth_events_confirmation ON growth_events (user_id, confirmation_status)",
-        # ── Lumen 伴侣系统 ──
+        # ── Lumen 伙伴系统 ──
         """CREATE TABLE IF NOT EXISTS lumen_thoughts (
             id INTEGER PRIMARY KEY,
             user_id TEXT NOT NULL DEFAULT 'demo_user',

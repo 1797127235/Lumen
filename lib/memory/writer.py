@@ -33,6 +33,7 @@ class EventSpec(TypedDict, total=False):
     entity_id: str | None
     payload: dict | None
     source: str
+    source_platform: str
 
 
 def _deep_merge_payload(event_type: str, base: dict, update: dict) -> dict:
@@ -248,6 +249,7 @@ class MemoryWriter:
                 entity_id=spec.get("entity_id"),
                 payload=spec.get("payload"),
                 source=spec.get("source", "system"),
+                source_platform=spec.get("source_platform", "web"),
             )
             if event:
                 created.append(event)
@@ -263,6 +265,7 @@ class MemoryWriter:
         entity_id: str | None = None,
         payload: dict | None = None,
         source: str = "system",
+        source_platform: str = "web",
         *,
         db: AsyncSession,
     ) -> GrowthEvent | None:
@@ -273,6 +276,7 @@ class MemoryWriter:
             "entity_id": entity_id,
             "payload": payload,
             "source": source,
+            "source_platform": source_platform,
         }
         created = await self._write_events(user_id, [spec], db)
         return created[0] if created else None

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { getCurrentMood, type MoodState } from '../lib/api/companion'
+import { getCurrentMood, type MoodState } from '../lib/api/partner'
 
 // 情绪配置
 const MOOD_CONFIG: Record<

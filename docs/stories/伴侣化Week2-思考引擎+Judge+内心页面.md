@@ -1,9 +1,9 @@
-# Story: Lumen 伴侣化 Week 2 — 思考引擎 + 两段式 Judge + 内心页面
+# Story: Lumen 伙伴化 Week 2 — 思考引擎 + 两段式 Judge + 内心页面
 
 **Status:** Ready for implementation（前提：Week 1 验证门通过）
 **Branch:** master
 **设计依据:** `docs/liu-master-design-20260521-093458.md`（APPROVED）
-**前置条件:** Week 1 实现已合并；`lib/companion/`、`lumen_state`、`lumen_presence` 已存在
+**前置条件:** Week 1 实现已合并；`lib/partner/`、`lumen_state`、`lumen_presence` 已存在
 
 ---
 
@@ -31,18 +31,18 @@
 
 | 文件 | 操作 |
 |---|---|
-| `lib/companion/energy.py` | 新建 — 电量模型 |
-| `lib/companion/judge.py` | 新建 — 两段式 Judge |
-| `lib/companion/deduper.py` | 新建 — MessageDeduper |
-| `lib/companion/thought_engine.py` | 新建 — 思考引擎主循环 |
+| `lib/partner/energy.py` | 新建 — 电量模型 |
+| `lib/partner/judge.py` | 新建 — 两段式 Judge |
+| `lib/partner/deduper.py` | 新建 — MessageDeduper |
+| `lib/partner/thought_engine.py` | 新建 — 思考引擎主循环 |
 | `core/startup.py` | 修改 — 注册 thought_loop 任务 |
-| `server/routes/companion.py` | 修改 — 新增 GET /api/companion/thoughts |
-| `src/lib/api/companion.ts` | 修改 — 新增 getThoughts() |
+| `server/routes/partner.py` | 修改 — 新增 GET /api/partner/thoughts |
+| `src/lib/api/partner.ts` | 修改 — 新增 getThoughts() |
 | `src/pages/InnerWorld.tsx` | 修改 — 完整实现（Week 1 是占位） |
 
 ---
 
-## 1. 电量模型（`lib/companion/energy.py`）
+## 1. 电量模型（`lib/partner/energy.py`）
 
 三时间尺度指数衰减，将互动历史转化为"想法驱动分"和"下次 tick 间隔"。
 
@@ -202,7 +202,7 @@ async def get_energy_inputs(user_id: str) -> dict:
 
 ---
 
-## 2. 两段式 Judge（`lib/companion/judge.py`）
+## 2. 两段式 Judge（`lib/partner/judge.py`）
 
 Stage 1 确定性否决（无 LLM），Stage 2 LLM 多维评分（每天最多 5 次）。
 
@@ -337,7 +337,7 @@ async def judge_stage2(
             model=model,
             output_type=_JudgeScores,
             system_prompt=(
-                "你是一个质量评审员。评估以下 AI 伴侣想法的发送价值，"
+                "你是一个质量评审员。评估以下 AI 伙伴想法的发送价值，"
                 "对三个维度分别打 1-5 分（1=极差，5=极好）。只输出 JSON，不要解释。"
             ),
         )
@@ -382,7 +382,7 @@ async def judge_stage2(
 
 ---
 
-## 3. MessageDeduper（`lib/companion/deduper.py`）
+## 3. MessageDeduper（`lib/partner/deduper.py`）
 
 对比新想法与近 5 条已推送（`sent_at IS NOT NULL`）想法，检查是否实质重复。
 
@@ -468,7 +468,7 @@ async def is_duplicate(
 
 ---
 
-## 4. 思考引擎主循环（`lib/companion/thought_engine.py`）
+## 4. 思考引擎主循环（`lib/partner/thought_engine.py`）
 
 Python asyncio 后台循环。在 `lifespan` 中注册，进程关闭时自动取消。
 
@@ -580,7 +580,7 @@ async def _generate_thought(user_id: str, mood: str, memory_summary: str) -> str
         agent: Agent[None, str] = Agent(
             model=model,
             output_type=str,
-            system_prompt="你是 Lumen，一个个人 AI 伴侣。你正在私下思考，不是在和用户对话。",
+            system_prompt="你是 Lumen，一个个人 AI 伙伴。你正在私下思考，不是在和用户对话。",
         )
         result = await agent.run(prompt)
         thought = (result.output or "").strip()
@@ -673,14 +673,14 @@ async def _run_tick(user_id: str) -> int:
 
     返回下次 tick 的等待分钟数。
     """
-    from lib.companion.energy import (
+    from lib.partner.energy import (
         compute_energy,
         composite_score,
         get_energy_inputs,
         next_tick_seconds,
         random_weight,
     )
-    from lib.companion.judge import judge_stage1, judge_stage2
+    from lib.partner.judge import judge_stage1, judge_stage2
     from core.db import get_async_session_maker
 
     # 1. 读取电量模型输入
@@ -751,7 +751,7 @@ async def _run_tick(user_id: str) -> int:
     dup_reason = ""
     async with _LLM_SEMAPHORE:
         async with get_async_session_maker()() as db:
-            from lib.companion.deduper import is_duplicate
+            from lib.partner.deduper import is_duplicate
             is_dup, dup_reason = await is_duplicate(thought_content, user_id, db)
 
     if is_dup:
@@ -822,9 +822,9 @@ async def lifespan(app: FastAPI):
     # ── 新增：思考引擎后台循环 ──
     thought_task: asyncio.Task | None = None
     try:
-        from lib.companion.thought_engine import run_thought_loop
+        from lib.partner.thought_engine import run_thought_loop
         thought_task = asyncio.create_task(
-            run_thought_loop("demo_user"), name="companion-thought-loop"
+            run_thought_loop("demo_user"), name="partner-thought-loop"
         )
     except Exception as e:
         logger.warning("thought_loop_start_failed", error=str(e))
@@ -859,7 +859,7 @@ async def lifespan(app: FastAPI):
 
 ---
 
-## 6. 新增 thoughts 接口（`server/routes/companion.py`）
+## 6. 新增 thoughts 接口（`server/routes/partner.py`）
 
 在现有文件末尾追加（保留 `/mood` 路由不变）：
 
@@ -920,7 +920,7 @@ async def get_thoughts(
 
 ---
 
-## 7. 前端 API（`src/lib/api/companion.ts`）
+## 7. 前端 API（`src/lib/api/partner.ts`）
 
 在现有文件末尾追加（保留 `getCurrentMood` 不变）：
 
@@ -941,7 +941,7 @@ export type ThoughtsResponse = {
 }
 
 export function getThoughts(limit = 30): Promise<ThoughtsResponse> {
-  return http<ThoughtsResponse>(`/api/companion/thoughts?limit=${limit}`)
+  return http<ThoughtsResponse>(`/api/partner/thoughts?limit=${limit}`)
 }
 ```
 
@@ -954,8 +954,8 @@ export function getThoughts(limit = 30): Promise<ThoughtsResponse> {
 ```tsx
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getThoughts, type ThoughtItem } from '../lib/api/companion'
-import { getCurrentMood } from '../lib/api/companion'
+import { getThoughts, type ThoughtItem } from '../lib/api/partner'
+import { getCurrentMood } from '../lib/api/partner'
 
 // 情绪标签配置（复用 MoodStrip 的映射）
 const MOOD_ICON: Record<string, string> = {
@@ -1125,7 +1125,7 @@ useEffect(() => {
    FROM lumen_thoughts
    ORDER BY created_at DESC LIMIT 10;
    ```
-4. 访问 `GET /api/companion/thoughts`，确认返回 JSON
+4. 访问 `GET /api/partner/thoughts`，确认返回 JSON
 5. 前端访问 `/inner-world`，应显示想法列表
 6. 点击某条想法的"以此开始对话 →"，确认跳转到 Chat 并预填文本
 

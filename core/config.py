@@ -30,7 +30,7 @@ def _ensure_user_data_dir() -> None:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(Path(__file__).parents[2] / ".env"),
+        env_file=str(Path(__file__).parents[1] / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -77,6 +77,9 @@ class Settings(BaseSettings):
 
     # ── 应用 ──
     debug: bool = True
+    # ── 多平台通道 ──
+    enable_web: bool = True
+    telegram_bot_token: str = ""
     # ── 语义去重 ──
     semantic_dedup_enabled: bool = False
     semantic_dedup_default_threshold: float = 0.85

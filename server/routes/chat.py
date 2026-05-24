@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query  # pyright: ignore[reportMissingImports]
+from fastapi import APIRouter, Depends, HTTPException, Query, Request  # pyright: ignore[reportMissingImports]
 from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel
 from sqlalchemy import func, select  # pyright: ignore[reportMissingImports]
@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 
 from core.db import get_db
 from lib.chat.models import Conversation, Message
-from lib.chat.service import stream_chat
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -57,23 +56,24 @@ class MessageItem(BaseModel):
 
 
 @router.post("")
-async def send_message(req: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def send_message(req: ChatRequest, request: Request):
+    """使用 WebChannel 处理 SSE 流式对话"""
+
+    # 从 app.state 获取 web_channel
+    web_channel = request.app.state.web_channel
+
     async def sse_stream():
         try:
-            async for event in stream_chat(
-                db=db,
+            async for event in web_channel.handle_request(
                 user_id=req.user_id,
-                user_input=req.message,
                 conversation_id=req.conversation_id,
-                attachments=req.attachments,  # 新增
+                message=req.message,
             ):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield event
         except asyncio.CancelledError:
-            # 客户端断开连接，静默退出
             logger.debug("SSE client disconnected", conversation_id=req.conversation_id)
             return
         except Exception as exc:
-            # 防止未捕获异常导致500错误
             logger.warning("SSE stream error", error=str(exc), conversation_id=req.conversation_id)
             yield f"data: {json.dumps({'type': 'error', 'message': '连接中断'}, ensure_ascii=False)}\n\n"
 

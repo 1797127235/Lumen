@@ -108,7 +108,7 @@ async def persist_turn(
     # ── 新增：情绪推断（对话结束后异步更新）──
     try:
         from core.db import get_async_session_maker
-        from lib.companion.mood_inference import update_mood_state
+        from lib.partner.mood_inference import update_mood_state
 
         mood_task = asyncio.create_task(
             update_mood_state(get_async_session_maker, user_id), name=f"mood-inference-{conv.conversation_id[:8]}"
@@ -194,7 +194,7 @@ async def save_user_message(db: AsyncSession, conv, user_input: str) -> Message 
 
     # ── 新增：presence 记录（与用户消息同一 transaction）──
     try:
-        from lib.companion.presence import record_user_message
+        from lib.partner.presence import record_user_message
 
         _uid = getattr(conv, "user_id", "demo_user") or "demo_user"
         await record_user_message(db, _uid)

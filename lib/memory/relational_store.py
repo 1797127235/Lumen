@@ -73,6 +73,7 @@ class GrowthEventRepository(BaseRepository[GrowthEvent]):
         entity_id: str | None = None,
         payload: dict | None = None,
         source: str = "system",
+        source_platform: str = "web",
     ) -> GrowthEvent | None:
         payload_hash = _make_payload_hash(payload)
         dedupe_key = _make_dedupe_key(user_id, event_type, entity_type, entity_id, payload_hash)
@@ -94,6 +95,7 @@ class GrowthEventRepository(BaseRepository[GrowthEvent]):
             entity_id=entity_id,
             payload_json=payload_json,
             source=source,
+            source_platform=source_platform,
             dedupe_key=dedupe_key,
             payload_hash=payload_hash,
         )

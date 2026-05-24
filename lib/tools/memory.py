@@ -69,6 +69,7 @@ async def _save(args: dict[str, Any], deps) -> str:
         entity_id=section,
         payload=payload,
         source="Agent工具",
+        source_platform=getattr(deps, "source_platform", "web"),
         db=deps.db,
     )
     if event and event.id is not None:

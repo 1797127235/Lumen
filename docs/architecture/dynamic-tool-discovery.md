@@ -101,8 +101,8 @@ class ToolMeta:
 
 | 工具 | always_on | risk | 理由 |
 |------|-----------|------|------|
-| memory_search | ✅ | read-only | 核心伴侣能力，随时可能需要回忆 |
-| memory_save | ✅ | write | 核心伴侣能力：听到用户信息必须立即保存，若 deferred 会漏记 |
+| memory_search | ✅ | read-only | 核心伙伴能力，随时可能需要回忆 |
+| memory_save | ✅ | write | 核心伙伴能力：听到用户信息必须立即保存，若 deferred 会漏记 |
 | get_profile | ✅ | read-only | 画像读取是基础上下文 |
 | update_profile | ❌ | write | 用户主动更新画像的场景低频， deferred 更合理；需要时通过 tool_search 解锁 |
 | tool_search | ✅ | read-only | 元工具本身必须是常驻的，否则 Agent 无法发现其他工具 |

@@ -1,4 +1,4 @@
-"""测试 AI 伴侣内存模型的事件分类器。"""
+"""测试 AI 伙伴内存模型的事件分类器。"""
 
 from __future__ import annotations
 

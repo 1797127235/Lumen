@@ -11,8 +11,6 @@ from sqlalchemy import select
 from core.config import build_llm_call_params
 from core.db import get_async_session_maker
 from lib.chat.models import Conversation, Message
-from lib.data_sources.models import DataSource
-from lib.data_sources.service import list_data_sources
 from lib.memory.markdown import read_memory
 from lib.memory.models import GrowthEvent
 from shared.logging import get_logger
@@ -35,15 +33,14 @@ class ObservationsResult(BaseModel):
 
 _cache: dict[tuple[str, int], dict] = {}
 
-_SYSTEM_PROMPT = """你将看到 4 类关于用户的输入：
+_SYSTEM_PROMPT = """你将看到 3 类关于用户的输入：
 1. growth_events — 系统观察到的成长事件（可能为空）
 2. recent_messages — 最近对话记录（可能为空）
 3. profile — 用户画像（可能为空）
-4. data_sources — 用户接入的资料源（可能为空）
 
 请从这些输入里综合提炼出 3 条观察。如果某一类输入为空，跳过它。如果所有输入加起来都很少（比如只有 1-2 条消息），观察可以更简短、更试探（"你刚开始用我，目前看到 X" 这种语气）。
 
-你是 Lumen，一个本地运行的 AI 伴侣，正在为一个特定的用户合成「关于他/她的观察」。
+你是 Lumen，一个本地运行的 AI 伙伴，正在为一个特定的用户合成「关于他/她的观察」。
 
 什么叫「有价值」：
 1. 指出一个模式，而不是单点事实（"你提到 X" → 不算；"你最近三次提到 X 都用了相同的句式" → 算）
@@ -51,7 +48,7 @@ _SYSTEM_PROMPT = """你将看到 4 类关于用户的输入：
 3. 引用原始证据——具体到日期和数据源类型，让用户能对号入座
 
 什么不要做：
-- 不要诊断（"你有焦虑倾向"）——你是伴侣，不是医生
+- 不要诊断（"你有焦虑倾向"）——你是伙伴，不是医生
 - 不要建议（"你应该 X"）——只观察，不指导
 - 不要泛泛而谈（"你是一个有思考的人"）——废话，删掉
 - 不要超过 50 字一条
@@ -79,13 +76,6 @@ def _serialize_messages(messages: list[Message]) -> str:
         content = m.content[:300]
         lines.append(f"[{date_str}] {m.role}: {content}")
     return "\n".join(lines) if lines else "（无）"
-
-
-def _serialize_sources(sources: list[DataSource]) -> str:
-    if not sources:
-        return "（无）"
-    items = [f"{s.name}（{s.type}）" for s in sources]
-    return "、".join(items)
 
 
 async def _fetch_recent_events(user_id: str, days: int, limit: int = 200) -> list[GrowthEvent]:
@@ -121,11 +111,6 @@ async def _fetch_recent_messages(user_id: str, days: int, limit: int = 100) -> l
         return list((await db.execute(stmt)).scalars().all())
 
 
-async def _fetch_data_sources(user_id: str) -> list[DataSource]:
-    async with get_async_session_maker()() as db:
-        return await list_data_sources(db, user_id=user_id)
-
-
 def _parse_llm_response(text: str, events: list[GrowthEvent]) -> list[Observation]:
     observations: list[Observation] = []
     blocks = re.findall(r"^\d+\.\s*(.+?)\n\s*依据：(.+)$", text.strip(), re.MULTILINE)
@@ -151,14 +136,12 @@ async def synthesize_observations(user_id: str, days: int = 7) -> ObservationsRe
     events = await _fetch_recent_events(user_id, days)
     messages = await _fetch_recent_messages(user_id, days)
     profile_text = read_memory(user_id)[:2000]
-    sources = await _fetch_data_sources(user_id)
 
     fingerprint = hash(
         (
             events[0].id if events else None,
             messages[0].message_id if messages else None,
             len(profile_text),
-            tuple(s.id for s in sources),
         )
     )
 
@@ -167,7 +150,7 @@ async def synthesize_observations(user_id: str, days: int = 7) -> ObservationsRe
     if cached and cached.get("fingerprint") == fingerprint:
         return cached["result"]
 
-    total_signals = len(events) + len(messages) + (1 if profile_text.strip() else 0) + len(sources)
+    total_signals = len(events) + len(messages) + (1 if profile_text.strip() else 0)
     if total_signals == 0:
         result = ObservationsResult(observations=[], generated_at=None, events_analyzed=0, period_days=days)
         _cache[cache_key] = {"result": result, "fingerprint": fingerprint}
@@ -181,9 +164,6 @@ async def synthesize_observations(user_id: str, days: int = 7) -> ObservationsRe
 
 === profile ===
 {profile_text if profile_text.strip() else "（无）"}
-
-=== data_sources ===
-{_serialize_sources(sources)}
 
 请输出 3 条观察。格式严格如下，不要加其他文字：
 
