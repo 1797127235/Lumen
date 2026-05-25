@@ -58,10 +58,10 @@ class AgentRunner:
         if self._task:
             await self._bus.publish_inbound(None)  # type: ignore[arg-type]
             self._task.cancel()
-            try:
+            import contextlib
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("AgentRunner stopped")
 
     async def _run_loop(self) -> None:
@@ -150,7 +150,9 @@ class AgentRunner:
 
                     # 加载历史并注入 context frame
                     history = load_pydantic_history(conv)
-                    history_with_frame = await _inject_context_frame(history, conv, user_id, user_input)
+                    history_with_frame = await _inject_context_frame(
+                        history, conv, user_id, user_input, session_key=session_key
+                    )
                     context_frame_msg = history_with_frame[-1] if history_with_frame else None
 
                     # 运行 Agent
@@ -237,6 +239,20 @@ class AgentRunner:
                             context_frame_msg=context_frame_msg,
                         )
 
+                # 同步到外部记忆 provider
+                if state.full_content:
+                    from lib.memory import get_memory_manager
+
+                    manager = get_memory_manager()
+                    try:
+                        await manager.sync_all(
+                            user_input,
+                            state.full_content,
+                            session_id=session_key,
+                        )
+                    except Exception:
+                        logger.warning("sync_all failed", session_key=session_key)
+
                 # 发送最终回复
                 await self._bus.publish_outbound(
                     OutboundMessage(
@@ -291,32 +307,52 @@ async def _inject_context_frame(
     conv,
     user_id: str,
     user_input: str,
+    session_key: str = "",
 ) -> list:
-    """构建 context frame 并注入为 history 末尾的 user message。"""
+    """构建 context frame 并注入为 history 末尾的 user message。
+
+    Hermes-Pure 架构：
+    - L0（about_you.md 冻结快照）+ L1（近期对话）由 snapshot.py 提供
+    - L2（外部 provider prefetch）由 MemoryManager 提供
+    """
     from datetime import datetime
 
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    from lib.memory import get_memory
+    from lib.memory import get_memory_manager
+    from lib.memory.snapshot import build_snapshot
     from lib.tools.factory import build_deferred_tools_hint
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    manager = get_memory_manager()
 
-    memory_instance = get_memory()
+    # L0 + L1：用户画像快照 + 近期对话
+    static_ctx = ""
     try:
-        context = await memory_instance.build_context(
+        static_ctx = await build_snapshot(user_id)
+    except Exception:
+        logger.debug("build_snapshot failed", user_id=user_id)
+
+    # L2：外部 provider 动态召回
+    dynamic_ctx = ""
+    try:
+        dynamic_ctx = await manager.build_context(
             user_id,
             user_input=user_input,
-            conversation_summary=conv.summary if conv.summary else None,
+            session_key=session_key,
+            conversation_summary=conv.summary or "",
         )
     except Exception:
-        context = ""
+        logger.debug("MemoryManager.build_context failed", user_id=user_id)
 
     parts = [f"当前时间：{timestamp}"]
-    if context.strip():
-        parts.append(f"# 用户记忆\n\n{context}")
+    if static_ctx.strip():
+        parts.append(f"# 用户记忆\n\n{static_ctx}")
     else:
         parts.append("【用户画像为空】当用户提供信息时，调用 memory_save 或 update_profile 保存。")
+
+    if dynamic_ctx.strip():
+        parts.append(dynamic_ctx)
 
     deferred_hint = build_deferred_tools_hint(conv.conversation_id)
     if deferred_hint:

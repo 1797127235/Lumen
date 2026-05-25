@@ -32,8 +32,8 @@ async def background_memory_review(
 ) -> None:
     """后台审查本轮对话，判断是否有值得保存的记忆。
 
-    审查 Agent 写入的事件只触发 .md 投影 + 缓存失效，不触发
-    _update_understanding（主对话的 persist_turn 已处理），避免递归链。
+    Hermes-Pure 架构下，审查 Agent 直接调用 memory_save / update_profile 工具，
+    工具内部已写入 memory.md，无需额外投影同步。
     """
     try:
         from core.agent import LumenDeps, get_agent
@@ -54,19 +54,11 @@ async def background_memory_review(
             )
 
             await agent.run(prompt, deps=deps)
-
             await db.commit()
 
-            if deps.pending_event_ids:
-                from lib.memory.markdown import sync_user_md_projection
-                from lib.memory.snapshot import invalidate_cache
-
-                await sync_user_md_projection(user_id)
-                await invalidate_cache(user_id)
-                logger.info(
-                    "后台审查已保存 %d 条记忆",
-                    len(deps.pending_event_ids),
-                    conversation_id=conversation_id,
-                )
+            logger.info(
+                "后台记忆审查完成",
+                conversation_id=conversation_id,
+            )
     except Exception:
         logger.exception("后台记忆审查失败", conversation_id=conversation_id)

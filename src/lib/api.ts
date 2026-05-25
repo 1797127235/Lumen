@@ -32,6 +32,7 @@ export {
   refreshAIUnderstanding,
   resetMemory,
   reviewMemory,
+  saveMemoryContent,
   tellAI,
   updateMemory,
 } from "./api/memory";
@@ -41,7 +42,3 @@ export type {
   MemoryStats,
   TellType,
 } from "./api/memory";
-
-// ── Notes ──
-export { listNotes, createNote, updateNote, deleteNote } from "./api/notes";
-export type { Note } from "./api/notes";

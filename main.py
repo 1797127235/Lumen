@@ -13,7 +13,6 @@ from server.routes.config import router as config_router
 from server.routes.health import router as health_router
 from server.routes.mcp import router as mcp_router
 from server.routes.memory import router as memory_router
-from server.routes.notes import router as notes_router
 from server.routes.partner import router as partner_router
 from server.routes.providers import router as providers_router
 from shared.logging import RequestLoggingMiddleware, get_logger
@@ -45,7 +44,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
-app.include_router(notes_router, prefix="/api")
+
 app.include_router(providers_router, prefix="/api")
 app.include_router(partner_router, prefix="/api")
 app.include_router(mcp_router)

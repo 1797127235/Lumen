@@ -16,7 +16,6 @@ from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
-from lib.tools.notes import create_notes_tools
 from lib.tools.profile import create_profile_tools
 from lib.tools.shell import create_shell_tools
 from lib.tools.skill_load import create_skill_tools
@@ -42,7 +41,6 @@ def register_all_tools() -> ToolRegistry:
         *create_file_tools(),
         *create_memory_tools(),
         *create_profile_tools(),
-        *create_notes_tools(),
         *create_web_search_tools(),
         *create_shell_tools(),
         *create_skill_tools(),

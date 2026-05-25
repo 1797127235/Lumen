@@ -1,28 +1,29 @@
-"""记忆工具 — memory_search / memory_save。"""
+"""记忆工具 — memory_search / memory。
+
+对齐 Hermes：memory 工具统一入口，支持 add 到 MEMORY.md 或 USER.md。
+"""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
-from lib.memory import get_memory
+from lib.memory.markdown import AsyncMarkdownStore
+from lib.memory.understanding import update_ai_understanding
 from lib.tools._base import ToolDef, ToolMeta, tool_error
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# entity_type（模型可见）→ 内部事件类型
-_EVENT_TYPE_MAP: dict[str, str] = {
-    "interests": "interest_observed",
-    "values": "value_surfaced",
-    "preferences": "preference_learned",
-    "emotions": "emotional_pattern",
-    "moments": "significant_moment",
-    "decisions": "decision_made",
-    "reflections": "reflection_added",
-    "contradictions": "contradiction_noted",
-    "relationships": "relationship_noted",
-    "profile": "profile_updated",
-}
+_store = AsyncMarkdownStore()
+
+
+async def _bg_refresh_understanding(user_id: str) -> None:
+    """后台刷新 USER.md，失败静默。"""
+    try:
+        await update_ai_understanding(user_id)
+    except Exception as exc:
+        logger.debug("USER.md 后台刷新失败", error=str(exc))
 
 
 async def _search(args: dict[str, Any], deps) -> str:
@@ -30,72 +31,113 @@ async def _search(args: dict[str, Any], deps) -> str:
     if not query:
         return tool_error("请提供搜索关键词")
 
-    memory = get_memory()
-    items = await memory.recall(
-        deps.user_id,
-        query,
-        search_mode=args.get("search_mode", "keyword"),
-        time_filter=args.get("time_filter"),
-    )
-    if items:
-        return "\n".join(f"- [{item.categories[0] if item.categories else '?'}] {item.content[:300]}" for item in items)
+    user_id = deps.user_id
+
+    # 1. 本地 MEMORY.md 简单文本匹配
+    content = await _store.read_memory(user_id)
+    results: list[str] = []
+
+    if content:
+        keywords = [kw.lower() for kw in query.split() if len(kw) > 1]
+        if keywords:
+            paragraphs = content.split("\n\n")
+            for para in paragraphs:
+                para_lower = para.lower()
+                if any(kw in para_lower for kw in keywords):
+                    results.append(para[:300])
+
+    # 2. 外部 provider prefetch（如果有）
+    # 阶段 4 后通过 MemoryManager 注入，阶段 2 仅做本地匹配
+    # 预留：未来可通过 deps.memory_manager 获取外部 provider 召回
+
+    if results:
+        return "\n".join(f"- {r}" for r in results)
     return "未找到相关内容。"
 
 
-async def _save(args: dict[str, Any], deps) -> str:
-    entity_type = args.get("entity_type", "")
-    section = args.get("section", "")
+async def _memory(args: dict[str, Any], deps) -> str:
+    action = args.get("action", "").strip().lower()
+    target = args.get("target", "memory").strip().lower()
     content = args.get("content", "")
 
-    if entity_type not in _EVENT_TYPE_MAP:
-        return tool_error(
-            f"未知类型 '{entity_type}'。支持: {', '.join(_EVENT_TYPE_MAP)}",
-            "INVALID_ENTITY_TYPE",
-        )
+    if action not in {"add", "replace", "remove"}:
+        return tool_error("action 必须是 add / replace / remove")
 
-    payload: dict[str, Any] = {"key": section, "value": content, "source": "Agent工具"}
-    if entity_type == "decisions":
-        payload = {"title": section, "content": content}
-    elif entity_type == "moments":
-        payload = {"title": section, "description": content}
-    elif entity_type == "relationships":
-        payload = {"person": section, "description": content}
+    if target not in {"memory", "user"}:
+        return tool_error("target 必须是 memory 或 user")
 
-    memory = get_memory()
-    event = await memory.remember(
-        user_id=deps.user_id,
-        event_type=_EVENT_TYPE_MAP[entity_type],
-        entity_type=entity_type,
-        entity_id=section,
-        payload=payload,
-        source="Agent工具",
-        source_platform=getattr(deps, "source_platform", "web"),
-        db=deps.db,
-    )
-    if event and event.id is not None:
-        deps.pending_event_ids.append(str(event.id))
-        deps.build_context_cache = ""
-        return f"已记录 {entity_type}/{section}"
+    user_id = deps.user_id
 
-    return f"{entity_type}/{section} 内容未变化，跳过"
+    if action in {"replace", "remove"}:
+        return tool_error("replace / remove 暂未实现，请使用 add")
+
+    # action == "add"
+    if not content or not content.strip():
+        return "内容为空，跳过保存。"
+
+    # 安全扫描
+    from lib.memory.markdown import _scan_memory_content
+
+    safe, reason = _scan_memory_content(content)
+    if not safe:
+        logger.warning("记忆写入被拒绝", user_id=user_id, reason=reason)
+        return f"写入被拒绝: {reason}"
+
+    if target == "memory":
+        # 写入 MEMORY.md（带日期和 category 标签）
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        entry = f"- {date_str} — [memory] {content}"
+        await _store.append_memory_entry(user_id, "memory", content)
+    else:
+        # target == "user"：写入 USER.md
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        entry = f"- {date_str} — [user] {content}"
+        # USER.md 直接追加，不经过 append_memory_entry 的章节逻辑
+        import os
+        import tempfile
+
+        from lib.memory.markdown import _acquire_file_lock, _release_file_lock
+
+        user_dir = _store._user_dir(user_id)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        user_path = user_dir / "USER.md"
+        lock_path = user_dir / ".lock"
+
+        import asyncio
+
+        lock_fd = await asyncio.to_thread(_acquire_file_lock, lock_path)
+        try:
+            existing = await _store.read_about_you(user_id)
+            if not existing.strip():
+                existing = "# 用户画像\n\n"
+            new_content = existing.rstrip() + f"\n\n{entry}\n"
+            # 写入（使用底层原子写入）
+            fd, temp_path = tempfile.mkstemp(dir=str(user_dir), suffix=".tmp")
+            try:
+                os.write(fd, new_content.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(temp_path, user_path)
+        finally:
+            await asyncio.to_thread(_release_file_lock, lock_fd, lock_path)
+
+    # 触发 USER.md 刷新（后台，不阻塞）
+    import asyncio as _asyncio
+
+    _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+
+    return f"已记录到 {target}"
 
 
 def create_memory_tools() -> list[ToolDef]:
-    entity_types = " / ".join(_EVENT_TYPE_MAP)
     return [
         ToolDef(
             name="memory_search",
-            description=(
-                "搜索记忆。"
-                "search_mode: keyword（默认，关键词搜索）或 grep（时间范围浏览，需配合 time_filter）。"
-                "time_filter: today / yesterday / recent_3d / recent_7d / recent_30d / YYYY-MM-DD~YYYY-MM-DD。"
-            ),
+            description="搜索记忆。直接对 MEMORY.md 做关键词匹配。",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "搜索关键词或时间描述"},
-                    "search_mode": {"type": "string", "description": "keyword（默认）或 grep", "default": "keyword"},
-                    "time_filter": {"type": "string", "description": "时间过滤（today/yesterday/recent_7d 等）"},
+                    "query": {"type": "string", "description": "搜索关键词"},
                 },
                 "required": ["query"],
             },
@@ -104,18 +146,43 @@ def create_memory_tools() -> list[ToolDef]:
             meta=ToolMeta(always_on=True, risk="read-only", search_hint="搜索记忆、回忆、查找历史"),
         ),
         ToolDef(
-            name="memory_save",
-            description=("保存记忆。主动调用，不要等用户要求。" f"entity_type: {entity_types}"),
+            name="memory",
+            description=(
+                "保存持久化记忆，跨会话生效。主动调用，不要等用户要求。\n\n"
+                "WHEN TO SAVE:\n"
+                "- 用户纠正你或说'记住这个'\n"
+                "- 用户分享偏好、习惯、个人信息\n"
+                "- 你发现环境事实、项目约定、工具 quirks\n\n"
+                "TWO TARGETS:\n"
+                "- 'memory': 环境事实、项目约定、工具 quirks、学到的教训（写入 MEMORY.md）\n"
+                "- 'user': 用户偏好、沟通风格、习惯、关系（写入 USER.md）\n\n"
+                "ACTIONS: add (新增), replace (替换 — 暂未实现), remove (删除 — 暂未实现)"
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "entity_type": {"type": "string", "description": f"类型: {entity_types}"},
-                    "section": {"type": "string", "description": "标题/名称"},
-                    "content": {"type": "string", "description": "具体内容"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "replace", "remove"],
+                        "description": "操作类型: add 新增, replace 替换, remove 删除",
+                    },
+                    "target": {
+                        "type": "string",
+                        "enum": ["memory", "user"],
+                        "description": "目标: 'memory' 写入 MEMORY.md (环境/事实), 'user' 写入 USER.md (用户画像)",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "内容。add/replace 时必填。",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "用于 replace/remove 定位旧条目。replace/remove 时必填。",
+                    },
                 },
-                "required": ["entity_type", "section", "content"],
+                "required": ["action", "target"],
             },
-            execute=_save,
+            execute=_memory,
             read_only=False,
             meta=ToolMeta(always_on=True, risk="write", search_hint="保存记忆、记录、记住"),
         ),

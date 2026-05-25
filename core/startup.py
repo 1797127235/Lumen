@@ -38,18 +38,6 @@ async def _init_db() -> None:
 
 
 async def _shutdown(engine) -> None:
-    from lib.memory import cancel_background_tasks
-
-    cancel_background_tasks()
-
-    # Provider shutdown
-    with contextlib.suppress(Exception):
-        from core.vector_store import get_document_index_provider
-
-        provider = get_document_index_provider()
-        if provider is not None:
-            await provider.shutdown()
-
     await engine.dispose()
 
 
@@ -60,15 +48,17 @@ async def lifespan(app: FastAPI):
 
     await _init_db()
 
+    # Hermes-Pure: 文件命名迁移（memory.md → MEMORY.md, about_you.md → USER.md）
+    from core.migrations import migrate_md_files
+
+    await migrate_md_files()
+
     applied = apply_user_config(get_settings())
     if applied:
         logger.info("config.json 覆盖", keys=list(applied.keys()))
 
-    # 启动语义索引补偿循环（独立于对话流，修复进程崩溃或 LanceDB 恢复后的未同步事件）
-    with contextlib.suppress(Exception):
-        from lib.memory.projection import ProjectionManager
-
-        ProjectionManager.start_provider_compensation_loop()
+    # Hermes-Pure: 语义索引补偿循环已移除（ProjectionManager 已删除）
+    pass
 
     # 连接已配置的 MCP Servers
     with contextlib.suppress(Exception):

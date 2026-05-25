@@ -2,7 +2,6 @@
 
 每个 case 拥有：
   - 独立的 SQLite 数据库（文件级隔离）
-  - 独立的 NullProvider（跳过 LanceDB，只用 FTS5）
   - 临时的 Agent system prompt 覆盖（注入 benchmark 指令）
 """
 
@@ -15,8 +14,6 @@ from pathlib import Path
 
 from core.db import Base, get_async_session_maker, get_engine, init_db
 from core.migrations import migrate_sqlite
-from lib.data_sources.ingestion.pipeline import init_pipeline
-from lib.data_sources.ingestion.providers.null import NullProvider
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +61,9 @@ async def create_runtime(workspace: Path) -> BenchmarkRuntime:
     每次调用会：
       1. 删除旧数据库（如存在）
       2. 重新 init_db + 建表 + migrate
-      3. 注册 NullProvider（跳过语义搜索，只用 FTS5）
-      4. 注册用户
-      5. 注册工具
-      6. 覆盖 Agent system prompt
+      3. 注册用户
+      4. 注册工具
+      5. 覆盖 Agent system prompt
     """
     workspace.mkdir(parents=True, exist_ok=True)
     db_path = workspace / "bench.db"
@@ -90,8 +86,8 @@ async def create_runtime(workspace: Path) -> BenchmarkRuntime:
         await conn.run_sync(Base.metadata.create_all)
         await migrate_sqlite(conn)
 
-    # 3. 初始化 ingestion pipeline（NullProvider，不依赖 LanceDB）
-    init_pipeline(workspace, NullProvider())
+    # 3. 初始化 ingestion pipeline（跳过，data_sources 模块已移除）
+    pass
 
     # 4. 注册 benchmark 用户
     from lib.profile.models import User
@@ -114,13 +110,8 @@ async def create_runtime(workspace: Path) -> BenchmarkRuntime:
 
 async def close_runtime(rt: BenchmarkRuntime) -> None:
     """释放资源并恢复全局状态。"""
-    # 取消 ProjectionManager 后台任务（understanding 更新等）
-    try:
-        from lib.memory.projection import cancel_background_tasks
-
-        cancel_background_tasks()
-    except Exception as e:
-        logger.warning("cancel background tasks failed: %s", e)
+    # Hermes-Pure: 旧 ProjectionManager 后台任务已移除
+    pass
 
     # 给后台任务一点时间响应 cancel
     await asyncio.sleep(0.5)

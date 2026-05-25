@@ -17,9 +17,9 @@ MoodType = Literal["calm", "curious", "tender", "reflective", "energized"]
 
 # 推断规则（优先级从高到低）：
 # energized:  消息轮次 >= 10 且 间隔 <= 5 分钟
-# curious:    存在 "discovery" / "question" 类型的 GrowthEvent >= 1 条（近 5 次对话）
+# curious:    对话内容包含探索/提问关键词（"为什么", "怎么", "好奇"）
 # tender:     距上次对话 >= 2 天（重逢），或用户轮次少（<= 2）但对话间隔短
-# reflective: 消息轮次在 4-9 之间，且 GrowthEvent 包含 "reflection"/"struggle" 类型
+# reflective: 消息轮次在 4-9 之间，或用户表达困惑/反思
 # calm:       默认，以上都不满足
 
 
@@ -60,17 +60,32 @@ async def _get_interaction_metadata(db: AsyncSession, user_id: str) -> dict:
         # 距上次对话的天数（取最近两条对话的时间差）
         days_since_last = gap_minutes / 1440  # 转换为天
 
-        # 近 5 次对话的 GrowthEvent 类型分布
-        ge_result = await db.execute(
-            text("""
-            SELECT event_type FROM growth_events
-            WHERE user_id = :user_id
-            ORDER BY created_at DESC
-            LIMIT 20
-        """),
-            {"user_id": user_id},
-        )
-        event_types = [r[0] for r in ge_result.fetchall()]
+        # Hermes-Pure: growth_events 已移除，从消息内容推断关键词
+        event_types: list[str] = []
+        try:
+            msg_result = await db.execute(
+                text("""
+                SELECT content FROM messages
+                WHERE conversation_id IN (
+                    SELECT conversation_id FROM conversations
+                    WHERE user_id = :user_id
+                    ORDER BY last_message_at DESC
+                    LIMIT 5
+                )
+                AND role = 'user'
+                ORDER BY created_at DESC
+                LIMIT 20
+            """),
+                {"user_id": user_id},
+            )
+            for row in msg_result.fetchall():
+                content = (row[0] or "").lower()
+                if any(k in content for k in ("为什么", "怎么", "好奇", "想知", "探索")):
+                    event_types.append("question")
+                if any(k in content for k in ("困惑", "迷茫", "反思", "想通", "挣扎")):
+                    event_types.append("reflection")
+        except Exception:
+            pass
 
         return {
             "msg_count": msg_count,

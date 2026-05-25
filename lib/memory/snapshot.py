@@ -1,12 +1,11 @@
-"""Agent 系统提示快照 — 分层注入（固定块 + 近期上下文 + 语义召回）。
+"""Agent 系统提示快照 — 分层注入（固定块 + 近期上下文）。
 
-L0 固定块：用户画像聚合（Profile GrowthEvent → about_you.md / 字段拼接）
+L0 固定块：用户画像聚合（USER.md / MEMORY.md）
 L1 近期上下文：最近对话的摘要（Conversation + Message，非原始事件）
-L2 语义召回：FTS5 / Provider 检索 Narrative 事件（由 facade.build_context 触发）
 
-双管线架构：
-- Profile 事件（profile/skill/goal/preference/status）→ L0 only，不进搜索索引
-- Narrative 事件（experience/decision/document）→ L2 搜索索引
+Hermes-Pure 架构下，snapshot.py 作为薄封装层：
+- L0 委托给 BuiltinMemoryProvider（通过 MemoryManager）
+- L1 保留原有对话查询逻辑
 """
 
 from __future__ import annotations
@@ -89,35 +88,45 @@ async def invalidate_cache(user_id: str) -> None:
         _static_cache.pop(user_id, None)
 
 
-# ── L0: 固定块（数据源 = about_you.md）───────────────────────────
+# ── L0: 固定块（数据源 = about_you.md / memory.md）────────────────
+
+_MIN_ABOUT_YOU_CHARS = 30
 
 
-_MIN_ABOUT_YOU_CHARS = 30  # 低于此视为画像不可用，而非硬编码 50
+async def _build_fixed_block(user_id: str, nickname: str | None = None) -> str:
+    """L0 固定块：同时注入 USER.md + MEMORY.md。
 
-
-def _build_fixed_block(user_id: str, nickname: str | None = None) -> str:
-    """L0 固定块：优先 AI 综合画像（about_you.md），缺失时降级到 memory.md。
-
-    剥离元数据注释行后判断内容是否可用。排除仅含模板占位符的默认文件。
-    若 nickname 存在，注入到固定块开头供模型称呼用户。
+    由 BuiltinMemoryProvider 读取文件内容。
     """
-    from lib.memory.markdown import _strip_meta, read_about_you, read_memory
+    from lib.memory import get_memory_manager
 
     parts: list[str] = []
     if nickname:
         parts.append(f"【用户称呼】你可以称呼用户为「{nickname}」，但不必每次都叫。")
 
-    about_you = read_about_you(user_id)
-    about_you = _strip_meta(about_you)
-    if about_you and _has_substantive_content(about_you):
-        parts.append(f"## AI 对你的理解\n{about_you.strip()}")
-    else:
-        # 降级：about_you 不可用时，直接读取结构化画像 memory.md
-        memory_content = read_memory(user_id)
-        if memory_content and _has_substantive_content(memory_content):
-            parts.append(f"## 用户画像\n{memory_content.strip()}")
+    manager = get_memory_manager()
+    l0_block = await manager.build_system_prompt(user_id=user_id)
+    l0_block = _strip_meta(l0_block)
+
+    if l0_block and _has_substantive_content(l0_block):
+        parts.append(f"## AI 对你的理解\n{l0_block.strip()}")
 
     return "\n\n".join(parts) if parts else ""
+
+
+def _strip_meta(text: str) -> str:
+    """移除元数据注释行。"""
+
+    lines = text.splitlines()
+    filtered: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        if stripped.startswith("<!--"):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
 
 
 def _has_substantive_content(text: str) -> bool:
@@ -127,7 +136,6 @@ def _has_substantive_content(text: str) -> bool:
     text = text.strip()
     if len(text) <= _MIN_ABOUT_YOU_CHARS:
         return False
-    # 移除所有"（待填写）"占位符后判断剩余内容
     stripped = _re.sub(r"（待填写）", "", text)
     stripped = _re.sub(r"_暂无记录_", "", stripped)
     stripped = stripped.strip()
@@ -140,7 +148,7 @@ def _has_substantive_content(text: str) -> bool:
 def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[str]]:
     """从最近对话中提取上下文摘要。
 
-    与 L0 不同：L0 来自 about_you.md（「用户是谁」），
+    与 L0 不同：L0 来自 USER.md + MEMORY.md（「用户是谁」），
     L1 从对话记录提取「最近在聊什么」— 数据源分离，避免重复注入。
     """
     if not contexts:
@@ -158,7 +166,6 @@ def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[
         if not msgs:
             continue
 
-        # 对话标题（优先用 title，否则用第一条用户消息截断）
         title = ctx.title
         if not title:
             user_msgs = [m for m in msgs if m.get("role") == "user"]
@@ -167,11 +174,9 @@ def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[
             else:
                 title = "未命名对话"
 
-        # 对话摘要（如果有 LLM 生成的 summary）
         if ctx.summary:
             line = f"- **{title}**：{ctx.summary[:80]}"
         else:
-            # 取最近几条消息的内容片段（带角色前缀，避免模型混淆格式）
             msg_parts: list[str] = []
             for msg in msgs[:_CONTEXT_MAX_MESSAGES_PER_CONV]:
                 content = msg.get("content")
@@ -188,7 +193,7 @@ def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[
         conv_ids.add(ctx.conversation_id)
         total_chars += len(line)
 
-    if len(lines) <= 1:  # 只有标题行
+    if len(lines) <= 1:
         return "", set()
 
     return "\n".join(lines), conv_ids
@@ -198,10 +203,8 @@ async def _default_fetch_recent_conversations(user_id: str, db) -> list[Conversa
     """默认 fetcher：延迟导入 chat 模型，转换为 ConversationContext。"""
     cutoff = datetime.now(UTC) - timedelta(days=_CONTEXT_MAX_AGE_DAYS)
 
-    # 延迟导入避免 import-time 跨模块耦合
     from lib.chat.models import Conversation, Message
 
-    # 取最近的对话
     conv_stmt = (
         select(Conversation)
         .where(
@@ -218,13 +221,11 @@ async def _default_fetch_recent_conversations(user_id: str, db) -> list[Conversa
     if not conversations:
         return []
 
-    # 取每个对话的最新消息
     conv_ids = [c.conversation_id for c in conversations]
     msg_stmt = select(Message).where(Message.conversation_id.in_(conv_ids)).order_by(Message.created_at.desc())
     msg_result = await db.execute(msg_stmt)
     all_messages = list(msg_result.scalars().all())
 
-    # 按对话分组，每个对话最多保留指定条数
     messages_by_conv: dict[str, list[Message]] = {}
     for msg in all_messages:
         msgs = messages_by_conv.setdefault(msg.conversation_id, [])
@@ -269,6 +270,10 @@ async def _evict_expired_cache() -> None:
 
 
 async def build_snapshot(user_id: str) -> str:
+    """构建用户画像快照（L0 + L1）。
+
+    Hermes-Pure 架构下保留为兼容层，内部使用 MemoryManager 获取 L0。
+    """
     await _evict_expired_cache()
     async with _cache_lock:
         cached = _static_cache.get(user_id)
@@ -276,7 +281,7 @@ async def build_snapshot(user_id: str) -> str:
             cached.last_accessed = datetime.now(UTC)
             return cached.content
 
-    # 查询用户 nickname（同步查询，避免开两个 session）
+    # 查询用户 nickname + 近期对话
     nickname: str | None = None
     try:
         from lib.profile.models import User
@@ -290,14 +295,13 @@ async def build_snapshot(user_id: str) -> str:
     except Exception:
         contexts = []
 
-    fixed_block = _build_fixed_block(user_id, nickname)
+    fixed_block = await _build_fixed_block(user_id, nickname)
 
     if not fixed_block and not contexts:
         content = "【用户画像为空】"
         await _cache_insert(_CacheEntry(user_id=user_id, content=content, created_at=datetime.now(UTC)))
         return content
 
-    # L1 近期上下文
     context_block, conv_ids = _build_context_block(contexts)
 
     parts = [p for p in [fixed_block, context_block] if p]

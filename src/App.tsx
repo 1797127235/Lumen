@@ -3,7 +3,6 @@ import { Outlet, useLocation, useSearchParams } from 'react-router-dom'
 import { ChatSessionProvider, useChatSession } from './lib/chatSession'
 import Sidebar from './components/Sidebar'
 import Settings from './pages/Settings'
-import QuickNotes from './components/QuickNotes'
 import TitleBar from './components/TitleBar'
 
 function ChatUrlSync() {
@@ -31,18 +30,11 @@ function ChatUrlSync() {
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [notesOpen, setNotesOpen] = useState(false)
 
   useEffect(() => {
     const handler = () => setSettingsOpen(true)
     window.addEventListener('lumen-open-settings', handler)
     return () => window.removeEventListener('lumen-open-settings', handler)
-  }, [])
-
-  useEffect(() => {
-    const handler = () => setNotesOpen(true)
-    window.addEventListener('lumen-open-notes', handler)
-    return () => window.removeEventListener('lumen-open-notes', handler)
   }, [])
 
   return (
@@ -56,7 +48,6 @@ export default function App() {
         </div>
       </div>
       <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <QuickNotes isOpen={notesOpen} onClose={() => setNotesOpen(false)} />
     </ChatSessionProvider>
   )
 }

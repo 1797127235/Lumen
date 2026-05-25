@@ -84,13 +84,7 @@ async def persist_turn(
 
     await persist_traces(db, conv.conversation_id, user_id, state.trace_records, deps.trace_sink)
 
-    if deps.pending_event_ids:
-        try:
-            from lib.memory import get_memory
-
-            await get_memory().sync_projections(user_id, deps.pending_event_ids)
-        except Exception as e:
-            logger.warning("记忆投影失败", error=str(e))
+    # Hermes-Pure: 记忆由工具直接写入 memory.md，无需额外投影同步
 
     if not state.cancelled and not deps.pending_event_ids:
         from lib.memory.review_service import background_memory_review

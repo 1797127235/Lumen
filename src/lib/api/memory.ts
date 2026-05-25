@@ -3,6 +3,7 @@ import { cachedUserId, http } from "./core";
 export type MemoryStats = {
   status: string;
   count: number;
+  path: string;
 };
 
 export type MemoryItem = {
@@ -13,9 +14,22 @@ export type MemoryItem = {
   confirmation_status: string;
 };
 
+// ── 活跃路由 ──
+
 export function getMemoryContent(): Promise<{ content: string }> {
   return http<{ content: string }>(
     `/api/memory/me?user_id=${encodeURIComponent(cachedUserId)}`,
+  );
+}
+
+export function saveMemoryContent(content: string): Promise<{ message: string; chars: number }> {
+  return http<{ message: string; chars: number }>(
+    `/api/memory/me?user_id=${encodeURIComponent(cachedUserId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    },
   );
 }
 
@@ -29,19 +43,6 @@ export function resetMemory(): Promise<{ deleted: number }> {
 export function getMemoryStats(): Promise<MemoryStats> {
   return http<MemoryStats>(
     `/api/memory/stats?user_id=${encodeURIComponent(cachedUserId)}`,
-  );
-}
-
-export function getMemoryList(): Promise<MemoryItem[]> {
-  return http<MemoryItem[]>(
-    `/api/memory/list?user_id=${encodeURIComponent(cachedUserId)}`,
-  );
-}
-
-export function deleteMemory(id: string): Promise<{ deleted: string }> {
-  return http<{ deleted: string }>(
-    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(cachedUserId)}`,
-    { method: "DELETE" },
   );
 }
 
@@ -101,34 +102,6 @@ export function correctAIUnderstanding(text: string): Promise<{ message: string;
 
 export type TellType = "interest" | "value" | "relationship" | "moment" | "reflection";
 
-export function updateMemory(
-  id: string,
-  content: string,
-): Promise<{ updated: string }> {
-  return http<{ updated: string }>(
-    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(cachedUserId)}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    },
-  );
-}
-
-export function reviewMemory(
-  id: string,
-  status: "confirmed" | "rejected",
-): Promise<{ reviewed: string; status: string }> {
-  return http<{ reviewed: string; status: string }>(
-    `/api/memory/${encodeURIComponent(id)}/review?user_id=${encodeURIComponent(cachedUserId)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    },
-  );
-}
-
 export function tellAI(
   eventType: TellType,
   content: string,
@@ -143,7 +116,33 @@ export function tellAI(
   );
 }
 
-// ── Observations（顶部观察条）──
+// ── 退役路由兼容（返回空结果） ──
+
+export function getMemoryList(): Promise<MemoryItem[]> {
+  return http<MemoryItem[]>(
+    `/api/memory/list?user_id=${encodeURIComponent(cachedUserId)}`,
+  );
+}
+
+export function deleteMemory(_id: string): Promise<{ deleted: string }> {
+  return Promise.reject(new Error("逐条删除已退役"));
+}
+
+export function updateMemory(
+  _id: string,
+  _content: string,
+): Promise<{ updated: string }> {
+  return Promise.reject(new Error("逐条编辑已退役"));
+}
+
+export function reviewMemory(
+  _id: string,
+  _status: "confirmed" | "rejected",
+): Promise<{ reviewed: string; status: string }> {
+  return Promise.reject(new Error("逐条审核已退役"));
+}
+
+// ── Observations（已退役） ──
 
 export type Observation = {
   text: string;
@@ -158,8 +157,11 @@ export type ObservationsResult = {
   period_days: number;
 };
 
-export function getObservations(days: number = 7): Promise<ObservationsResult> {
-  return http<ObservationsResult>(
-    `/api/memory/observations?days=${days}&user_id=${encodeURIComponent(cachedUserId)}`,
-  );
+export function getObservations(_days: number = 7): Promise<ObservationsResult> {
+  return Promise.resolve({
+    observations: [],
+    generated_at: null,
+    events_analyzed: 0,
+    period_days: 7,
+  });
 }

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import uuid
 from contextvars import ContextVar
@@ -24,6 +25,20 @@ from starlette.responses import Response
 from structlog.contextvars import bind_contextvars, clear_contextvars, merge_contextvars, unbind_contextvars
 
 from shared.path_utils import find_project_root
+
+# ── 敏感信息脱敏 ──────────────────────────────────────────
+# 匹配 Telegram Bot API URL 中的 token（bot123456:ABCxxx 格式）
+_TELEGRAM_TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]{30,}")
+
+
+def _redact_secrets(logger, method, event_dict):
+    """structlog processor：脱敏日志中的敏感 token。"""
+    for key in ("event",):
+        val = event_dict.get(key)
+        if isinstance(val, str) and _TELEGRAM_TOKEN_RE.search(val):
+            event_dict[key] = _TELEGRAM_TOKEN_RE.sub("bot***:***", val)
+    return event_dict
+
 
 # ── 日志文件路径 ────────────────────────────────────────────
 # 放在项目目录下 logs/ 中，便于开发时 tail -f 查看
@@ -55,6 +70,7 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
+        _redact_secrets,  # 脱敏敏感 token
         structlog.processors.CallsiteParameterAdder(
             {
                 structlog.processors.CallsiteParameter.FILENAME,
@@ -121,7 +137,15 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
         h.addFilter(_filter_sql)
 
     # 其他噪音源直接设 level（这些不需要 filter，level 设置够用）
-    for name in ("uvicorn.access", "watchfiles", "httpx", "httpcore", "aiosqlite"):
+    for name in (
+        "uvicorn.access",
+        "watchfiles",
+        "httpx",
+        "httpcore",
+        "aiosqlite",
+        "telegram",  # python-telegram-bot 内部 polling/API 调试日志
+        "httpx_helpers",  # telegram 依赖的 httpx 辅助模块
+    ):
         logging.getLogger(name).setLevel(logging.WARNING)
 
     # ── 彻底关闭 SQLAlchemy 噪音 ──

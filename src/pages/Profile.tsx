@@ -15,16 +15,6 @@ import { EmptyState } from '../components/EmptyState'
 //  工具函数
 // ═══════════════════════════════════════════
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return ''
-  try {
-    const d = new Date(dateStr)
-    return d.toLocaleDateString('zh-CN')
-  } catch {
-    return dateStr
-  }
-}
-
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return ''
   try {
@@ -42,19 +32,6 @@ function formatRelativeTime(dateStr: string | null): string {
   } catch {
     return dateStr
   }
-}
-
-const PATTERN_ICONS: Record<string, string> = {
-  time_preference: '🌙',
-  learning_style: '📚',
-  decision_pattern: '🎯',
-  value_orientation: '💎',
-  communication_style: '💬',
-  default: '💡',
-}
-
-function categoryIcon(category: string): string {
-  return PATTERN_ICONS[category] || PATTERN_ICONS.default
 }
 
 // ═══════════════════════════════════════════
@@ -283,92 +260,6 @@ export default function ProfilePage() {
     )
   }
 
-  function renderPatterns() {
-    if (!understanding?.patterns?.length) return null
-    return (
-      <Card title="AI 注意到的">
-        <div className="space-y-sm">
-          {understanding.patterns.map((p, i) => (
-            <div
-              key={i}
-              className="flex items-start gap-sm p-sm bg-bg rounded-lg border border-border-soft"
-            >
-              <span className="text-base">{categoryIcon(p.category)}</span>
-              <p className="text-sm text-text leading-relaxed">{p.insight}</p>
-            </div>
-          ))}
-        </div>
-      </Card>
-    )
-  }
-
-  function renderIntents() {
-    if (!understanding?.intents?.length) return null
-    return (
-      <Card title="你的心愿">
-        <div className="space-y-sm">
-          {understanding.intents.map((intent, i) => (
-            <div
-              key={i}
-              className="flex items-start gap-sm p-sm bg-bg rounded-lg border border-border-soft"
-            >
-              <span className="text-base">{intent.category === 'goal' ? '🎯' : '✨'}</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-text leading-relaxed">{intent.text}</p>
-                <p className="text-xs text-text-subtle mt-0.5">
-                  {intent.mention_count > 1
-                    ? `提过 ${intent.mention_count} 次 · 最近 ${formatRelativeTime(intent.last_mentioned_at)}`
-                    : `第一次提到 · ${formatRelativeTime(intent.first_mentioned_at)}`}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    )
-  }
-
-  function renderNow() {
-    const status = understanding?.now_status
-    if (!status || Object.keys(status).length === 0) return null
-    return (
-      <Card title="此刻">
-        <div className="space-y-xs">
-          {Object.entries(status).map(([k, v]) => (
-            <div key={k} className="flex items-baseline gap-xs">
-              <span className="text-xs text-text-subtle shrink-0">{k}</span>
-              <span className="text-sm text-text">{v}</span>
-            </div>
-          ))}
-        </div>
-      </Card>
-    )
-  }
-
-  function renderJourney() {
-    if (!understanding?.journey?.length) return null
-    return (
-      <Card title="你走过的路">
-        <div className="relative pl-lg">
-          <div className="absolute left-sm top-0 bottom-0 w-px bg-border-soft" />
-          <div className="space-y-md">
-            {understanding.journey.map((item) => (
-              <div key={item.id} className="relative">
-                <div className="absolute -left-lg top-1 w-2 h-2 rounded-full bg-ink/50 border border-ink" />
-                <div>
-                  <p className="text-sm text-text">{item.content}</p>
-                  <p className="text-xs text-text-subtle mt-0.5">
-                    {item.date ? formatDate(item.date) : ''}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Card>
-    )
-  }
-
   // ── 主渲染 ──
 
   if (loading) {
@@ -408,14 +299,6 @@ export default function ProfilePage() {
       <section className="mb-lg">{renderAboutYou()}</section>
 
       <section className="mb-lg">{renderTellAI()}</section>
-
-      {renderPatterns() && <section className="mb-lg">{renderPatterns()}</section>}
-
-      {renderIntents() && <section className="mb-lg">{renderIntents()}</section>}
-
-      {renderNow() && <section className="mb-lg">{renderNow()}</section>}
-
-      {renderJourney() && <section className="mb-lg">{renderJourney()}</section>}
 
       <footer className="text-center py-xl">
         <p className="text-text-subtle text-xs">

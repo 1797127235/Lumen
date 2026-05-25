@@ -1,8 +1,6 @@
 """Ingest — 将 haystack 对话历史写入 Lumen 记忆系统。
 
-career-os 没有自动 consolidation 机制，因此 ingest 阶段直接调用
-LumenMemory.remember() 把 haystack 内容保存为 narrative 事件。
-这样 QA 阶段 Agent 只能通过记忆系统召回，不能依赖对话历史。
+Hermes-Pure 架构下直接写入 memory.md，不再通过 GrowthEvent。
 """
 
 from __future__ import annotations
@@ -12,7 +10,7 @@ import logging
 
 from eval.dataset import LMEInstance
 from eval.runtime import BenchmarkRuntime
-from lib.memory import get_memory
+from lib.memory.markdown import AsyncMarkdownStore
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +48,13 @@ async def ingest_instance(
 ) -> int:
     """将 haystack 写入记忆系统，返回总 turn 数。
 
-    策略：
-      - 每个 session 的整体对话文本作为一个 significant_moment 事件
-      - 这样 FTS5 可以索引全部内容，memory_search 能命中
+    Hermes-Pure: 每个 session 的整体对话文本作为一条 memory.md 条目。
     """
     if not force and _is_ingested(rt):
         logger.info("skip ingest (already done): %s", instance.question_id)
         return 0
 
-    memory = get_memory()
+    store = AsyncMarkdownStore()
     total_turns = 0
 
     _write_ingest_state(rt, completed=False, turns=0)
@@ -72,15 +68,10 @@ async def ingest_instance(
 
         session_text = "\n".join(lines)
 
-        await memory.remember(
+        await store.append_memory_entry(
             user_id=rt.user_id,
-            event_type="significant_moment",
-            payload={
-                "title": f"Session {session_idx + 1}",
-                "description": session_text,
-                "source": "benchmark_haystack",
-            },
-            source="benchmark",
+            category="benchmark_haystack",
+            content=session_text,
         )
 
         logger.debug(

@@ -263,6 +263,33 @@ fn start_folder_watch(path: String, app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// Open a file or folder in the OS file manager / default application.
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    }
+    Ok(())
+}
+
 // ── Application Entry ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -319,6 +346,7 @@ pub fn run() {
             is_backend_running,
             restart_backend,
             start_folder_watch,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

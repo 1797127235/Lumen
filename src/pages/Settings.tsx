@@ -1,20 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useProvidersStore } from "../store/providersStore";
 
 import {
   getConfig,
+  getMemoryContent,
   getMemoryStats,
   resetMemory,
-  getMemoryList,
-  deleteMemory,
-  reviewMemory,
-  updateMemory,
+  saveMemoryContent,
 } from "../lib/api";
 import { ProvidersTab } from "../components/providers/ProvidersTab";
 import type {
   Config,
   MemoryStats,
-  MemoryItem,
 } from "../lib/api";
 
 type TabKey = "memory" | "providers" | "about";
@@ -65,20 +63,33 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
   const [memConfirming, setMemConfirming] = useState(false);
   const [memResetMsg, setMemResetMsg] = useState("");
 
-  const [memories, setMemories] = useState<MemoryItem[]>([]);
-  const [memLoading, setMemLoading] = useState(false);
-  const [memError, setMemError] = useState("");
-  const [memDeleting, setMemDeleting] = useState<string | null>(null);
-  const [memConfirmDelete, setMemConfirmDelete] = useState<string | null>(null);
-  const [memEditingId, setMemEditingId] = useState<string | null>(null);
-  const [memEditText, setMemEditText] = useState("");
+  const [memContent, setMemContent] = useState("");
+  const [memOriginal, setMemOriginal] = useState("");
+  const [memContentLoading, setMemContentLoading] = useState(false);
   const [memSaving, setMemSaving] = useState(false);
-  const [memReviewing, setMemReviewing] = useState<string | null>(null);
+  const [memSaveMsg, setMemSaveMsg] = useState("");
+  const [pathCopyMsg, setPathCopyMsg] = useState("");
+  const memHasChanges = memContent !== memOriginal;
+  const inTauri = isTauri();
 
-  const [docIndexProvider, setDocIndexProvider] = useState("lancedb");
-  const [docIndexProviderStatus, setDocIndexProviderStatus] = useState("ready");
-
-  const savedTimer = useRef<number | null>(null);
+  const openMemoryFolder = async () => {
+    if (!memStats?.path) return;
+    if (inTauri) {
+      try {
+        await invoke("open_path", { path: memStats.path });
+      } catch (e) {
+        setMemSaveMsg(`打开失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(memStats.path);
+        setPathCopyMsg("已复制");
+        setTimeout(() => setPathCopyMsg(""), 2000);
+      } catch {
+        setPathCopyMsg("复制失败");
+      }
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -86,124 +97,51 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
     setError("");
     Promise.all([
       getConfig().catch((e) => ({ _error: `配置: ${e instanceof Error ? e.message : String(e)}` })),
-      getMemoryStats().catch(() => ({ status: "error", count: 0 })),
-      loadMemories(),
+      getMemoryStats().catch(() => ({ status: "error", count: 0, path: "" })),
+      getMemoryContent().catch(() => ({ content: "" })),
     ])
-      .then(([cfg, mem]) => {
+      .then(([cfg, mem, memDoc]) => {
         if ('_error' in cfg) {
           setError(cfg._error as string);
         } else {
           setConfig(cfg);
-          setDocIndexProvider(cfg.document_index_provider || "lancedb");
-          setDocIndexProviderStatus(cfg.document_index_provider_status || "ready");
           setMemStats(mem);
+          setMemContent(memDoc.content);
+          setMemOriginal(memDoc.content);
         }
       })
       .catch((e) => setError(`加载失败: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => setLoading(false));
   }, [isOpen]);
 
-  useEffect(() => {
-    return () => {
-      if (savedTimer.current) window.clearTimeout(savedTimer.current);
-    };
-  }, []);
-
-  async function loadMemories() {
-    setMemError("");
-    setMemLoading(true);
+  const loadMemContent = async () => {
+    setMemContentLoading(true);
+    setMemSaveMsg("");
     try {
-      const items = await getMemoryList();
-      setMemories(items);
+      const data = await getMemoryContent();
+      setMemContent(data.content);
+      setMemOriginal(data.content);
     } catch {
-      setMemError("记忆加载失败");
+      setMemSaveMsg("记忆读取失败，稍后再试");
     } finally {
-      setMemLoading(false);
+      setMemContentLoading(false);
     }
-  }
+  };
 
-  async function handleMemDelete(id: string) {
-    setMemDeleting(id);
-    setMemError("");
-    try {
-      await deleteMemory(id);
-      setMemories((prev) => prev.filter((m) => m.id !== id));
-      setMemStats((prev) => (prev ? { ...prev, count: prev.count - 1 } : null));
-    } catch {
-      setMemError("删除失败");
-    } finally {
-      setMemDeleting(null);
-      setMemConfirmDelete(null);
-    }
-  }
-
-  async function handleMemReview(id: string, status: "confirmed" | "rejected") {
-    setMemReviewing(id);
-    setMemError("");
-    try {
-      await reviewMemory(id, status);
-      setMemories((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, confirmation_status: status } : m)),
-      );
-    } catch {
-      setMemError("审核失败");
-    } finally {
-      setMemReviewing(null);
-    }
-  }
-
-  async function handleMemSaveEdit(id: string) {
-    if (!memEditText.trim()) return;
+  const handleMemSave = async () => {
+    if (memSaving) return;
     setMemSaving(true);
-    setMemError("");
+    setMemSaveMsg("");
     try {
-      await updateMemory(id, memEditText.trim());
-      setMemories((prev) =>
-        prev.map((m) =>
-          m.id === id
-            ? { ...m, memory: memEditText.trim(), confirmation_status: "modified" }
-            : m,
-        ),
-      );
-      setMemEditingId(null);
-      setMemEditText("");
+      await saveMemoryContent(memContent);
+      setMemOriginal(memContent);
+      setMemSaveMsg("已保存");
     } catch {
-      setMemError("保存失败");
+      setMemSaveMsg("保存失败");
     } finally {
       setMemSaving(false);
     }
-  }
-
-  function startMemEdit(item: MemoryItem) {
-    try {
-      const parsed = JSON.parse(item.memory);
-      setMemEditText(typeof parsed.value === "string" ? parsed.value : item.memory);
-    } catch {
-      setMemEditText(item.memory);
-    }
-    setMemEditingId(item.id);
-  }
-
-  function confirmationBadge(status: string): { text: string; className: string } {
-    if (status === "rejected")
-      return { text: "已否认", className: "bg-danger/10 text-danger" };
-    if (status === "modified")
-      return { text: "已编辑", className: "bg-ink/10 text-ink" };
-    return { text: "已确认", className: "bg-success/10 text-success" };
-  }
-
-  function formatDate(iso: string | null): string {
-    if (!iso) return "--";
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "--";
-    return date.toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
+  };
 
   const handleMemReset = async () => {
     if (memResetting) return;
@@ -212,6 +150,8 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
     try {
       const res = await resetMemory();
       setMemStats((prev) => (prev ? { ...prev, count: 0 } : null));
+      setMemContent("");
+      setMemOriginal("");
       setMemResetMsg(`已清空 ${res.deleted} 条记忆`);
       setMemConfirming(false);
     } catch {
@@ -240,7 +180,6 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
 
         {/* 左侧导航 */}
         <aside className="w-[200px] flex-shrink-0 border-r border-border-soft bg-bg/40 flex flex-col py-6">
-          {/* 标题行 */}
           <div className="px-5 mb-6 flex items-center gap-3">
             <button
               onClick={onClose}
@@ -254,7 +193,6 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
             <span className="text-base font-semibold text-text">设置</span>
           </div>
 
-          {/* 导航列表 */}
           <nav className="flex flex-col px-2 gap-0.5">
             {TABS.map((tab) => {
               const active = activeTab === tab.key;
@@ -284,10 +222,8 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
         {/* 右侧内容 */}
         <main className="flex-1 overflow-y-auto">
           <div className="px-8 py-6 w-full">
-            {/* 页面标题 */}
             <h1 className="text-xl font-semibold text-text mb-6">{TAB_TITLES[activeTab]}</h1>
 
-            {/* 错误提示 */}
             {error && (
               <div className="mb-6 flex items-center gap-2 px-4 py-2.5 bg-danger/10 border border-danger/20 text-danger text-sm rounded-sm">
                 <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
@@ -313,7 +249,7 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
                       <span className="text-sm font-medium text-ink">记忆状态</span>
                     </div>
                     <div className="text-xs text-text-subtle">
-                      {memStats?.status === "ready" ? "就绪" : memStats?.status === "no_api_key" ? "未配置 Key" : memStats?.status === "error" ? "异常" : "初始化中"}
+                      {memStats?.status === "ready" ? "就绪" : memStats?.status === "error" ? "异常" : "初始化中"}
                     </div>
                   </div>
                   <div className="p-4 rounded-sm border border-border bg-surface-elevated">
@@ -326,27 +262,74 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
                   </div>
                 </div>
 
+                {/* 记忆全文编辑 */}
+                <section className="p-6 rounded-sm border border-border bg-surface">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-medium text-ink">记忆内容</span>
+                    <div className="flex items-center gap-2">
+                      {memHasChanges && (
+                        <span className="text-xs text-amber-600">未保存</span>
+                      )}
+                      <button
+                        onClick={loadMemContent}
+                        disabled={memContentLoading}
+                        className="px-3 py-1.5 border border-border rounded-sm text-xs text-text hover:bg-surface-elevated disabled:opacity-40 transition-colors"
+                      >
+                        {memContentLoading ? "加载中..." : "刷新"}
+                      </button>
+                      <button
+                        onClick={handleMemSave}
+                        disabled={memSaving || !memHasChanges}
+                        className="px-3 py-1.5 bg-ink text-bg rounded-sm text-xs hover:bg-ink-deep disabled:opacity-40 transition-colors"
+                      >
+                        {memSaving ? "保存中..." : "保存"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {memSaveMsg && (
+                    <p className={`mb-3 text-sm ${memSaveMsg.includes("失败") ? "text-danger" : "text-success"}`}>
+                      {memSaveMsg}
+                    </p>
+                  )}
+
+                  <textarea
+                    value={memContent}
+                    onChange={(e) => setMemContent(e.target.value)}
+                    className="w-full min-h-[280px] rounded-sm border border-border-soft bg-surface-elevated px-4 py-3 text-sm text-text leading-relaxed focus:border-ink focus:outline-none resize-none"
+                    placeholder="记忆内容为空。多和 Lumen 聊聊，它会逐渐了解你。"
+                  />
+
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="text-xs text-text-subtle truncate" title={memStats?.path || ""}>
+                      {memStats?.path
+                        ? `存储位置：${memStats.path}`
+                        : "记忆以 Markdown 文件形式存储在本地，可直接编辑。"}
+                    </p>
+                    {memStats?.path && (
+                      <button
+                        onClick={openMemoryFolder}
+                        className="shrink-0 px-3 py-1.5 border border-border rounded-sm text-xs text-text hover:bg-surface-elevated transition-colors"
+                      >
+                        {inTauri ? "打开文件夹" : pathCopyMsg || "复制路径"}
+                      </button>
+                    )}
+                  </div>
+                </section>
+
                 {/* 记忆管理 */}
                 <section className="p-6 rounded-sm border border-border bg-surface">
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-sm font-medium text-ink">记忆管理</span>
 
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={loadMemories}
-                        disabled={memLoading}
-                        className="px-3 py-1.5 border border-border rounded-sm text-xs text-text-muted hover:text-text hover:bg-surface-elevated transition-colors disabled:opacity-40"
-                      >
-                        {memLoading ? "加载中..." : "刷新"}
-                      </button>
                       {!memConfirming ? (
                         <button
                           onClick={() => {
                             setMemConfirming(true);
                             setMemResetMsg("");
                           }}
-                          disabled={!memStats || memStats.count === 0}
-                          className="px-3 py-1.5 border border-border rounded-sm text-xs text-text-muted hover:text-danger hover:border-danger/30 transition-colors disabled:opacity-40"
+                          className="px-3 py-1.5 border border-border rounded-sm text-xs text-text-muted hover:text-danger hover:border-danger/30 transition-colors"
                         >
                           清空记忆
                         </button>
@@ -373,186 +356,12 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
 
                   {memResetMsg && (
                     <p
-                      className={`mb-4 text-sm ${memResetMsg.includes("失败") ? "text-danger" : "text-success"}`}
+                      className={`text-sm ${memResetMsg.includes("失败") ? "text-danger" : "text-success"}`}
                     >
                       {memResetMsg}
                     </p>
                   )}
 
-                  {memError && (
-                    <p className="mb-4 text-sm text-danger">{memError}</p>
-                  )}
-
-                  {memLoading && memories.length === 0 && (
-                    <p className="text-sm text-text-muted py-4">加载中...</p>
-                  )}
-
-                  {!memLoading && memories.length === 0 && (
-                    <p className="text-sm text-text-muted py-4">
-                      还没有记忆。聊几句之后，系统会逐步提取长期记忆。
-                    </p>
-                  )}
-
-                  {memories.length > 0 && (
-                    <div className="space-y-1.5 max-h-[340px] overflow-y-auto scroll-auto-hide pr-1">
-                      {memories.map((mem) => {
-                        const badge = confirmationBadge(mem.confirmation_status);
-                        const isRejected = mem.confirmation_status === "rejected";
-                        return (
-                          <div
-                            key={mem.id}
-                            className={`p-3 rounded-sm border ${
-                              isRejected
-                                ? "border-border-soft bg-surface/50 opacity-70"
-                                : "border-border-soft"
-                            }`}
-                          >
-                            {memEditingId === mem.id ? (
-                              <div className="flex flex-col gap-2">
-                                <textarea
-                                  value={memEditText}
-                                  onChange={(e) => setMemEditText(e.target.value)}
-                                  rows={3}
-                                  className="w-full rounded border border-border bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-ink"
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleMemSaveEdit(mem.id)}
-                                    disabled={memSaving}
-                                    className="rounded bg-ink px-3 py-1 text-xs text-bg hover:bg-ink/80 disabled:opacity-50"
-                                  >
-                                    {memSaving ? "保存中..." : "保存"}
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setMemEditingId(null);
-                                      setMemEditText("");
-                                    }}
-                                    className="rounded border border-border px-3 py-1 text-xs text-text-subtle hover:bg-surface"
-                                  >
-                                    取消
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <p
-                                  className={`text-sm leading-relaxed ${
-                                    isRejected ? "text-text-muted line-through" : "text-text"
-                                  }`}
-                                >
-                                  {mem.memory}
-                                </p>
-                                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-text-subtle">
-                                      {formatDate(mem.created_at)}
-                                    </span>
-                                    <span
-                                      className={`rounded px-1.5 py-0.5 text-xs ${badge.className}`}
-                                    >
-                                      {badge.text}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {isRejected ? (
-                                      <button
-                                        onClick={() => handleMemReview(mem.id, "confirmed")}
-                                        disabled={memReviewing === mem.id}
-                                        className="text-xs text-success hover:underline disabled:opacity-50"
-                                      >
-                                        {memReviewing === mem.id ? "..." : "恢复"}
-                                      </button>
-                                    ) : (
-                                      <button
-                                        onClick={() => handleMemReview(mem.id, "rejected")}
-                                        disabled={memReviewing === mem.id}
-                                        className="text-xs text-text-subtle hover:text-danger disabled:opacity-50"
-                                      >
-                                        {memReviewing === mem.id ? "..." : "否认"}
-                                      </button>
-                                    )}
-                                    <button
-                                      onClick={() => startMemEdit(mem)}
-                                      className="text-xs text-text-subtle hover:text-ink disabled:opacity-50"
-                                    >
-                                      编辑
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        if (memConfirmDelete === mem.id) {
-                                          void handleMemDelete(mem.id);
-                                        } else {
-                                          setMemConfirmDelete(mem.id);
-                                        }
-                                      }}
-                                      disabled={memDeleting === mem.id}
-                                      className={`text-xs transition-colors ${
-                                        memConfirmDelete === mem.id
-                                          ? "text-danger"
-                                          : "text-text-subtle hover:text-danger"
-                                      }`}
-                                    >
-                                      {memDeleting === mem.id
-                                        ? "删除中..."
-                                        : memConfirmDelete === mem.id
-                                          ? "确定？"
-                                          : "删除"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
-
-                {/* 语义搜索 Provider 选择 */}
-                <section className="p-6 rounded-sm border border-border bg-surface">
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-sm font-medium text-ink">语义搜索</span>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs text-text-subtle mb-1.5">Provider</label>
-                        <select
-                          value={docIndexProvider}
-                          onChange={(e) => setDocIndexProvider(e.target.value)}
-                          className="w-full px-3 py-2 border border-border rounded-sm text-sm bg-surface-elevated outline-none focus:border-ink transition-colors"
-                        >
-                          <option value="lancedb">LanceDB（向量搜索）</option>
-                          <option value="disabled">关闭（仅关键词搜索）</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs text-text-subtle mb-1.5">状态</label>
-                        <div className="flex items-center gap-2 px-3 py-2">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              docIndexProviderStatus === "ready" ? "bg-success" : "bg-danger"
-                            }`}
-                          />
-                          <span className="text-sm text-text">
-                            {docIndexProviderStatus === "ready"
-                              ? "就绪"
-                              : docIndexProviderStatus === "error"
-                              ? "错误"
-                              : docIndexProviderStatus === "not_initialized"
-                              ? "未初始化"
-                              : docIndexProviderStatus}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-xs text-text-subtle">
-                      切换后需重启应用生效
-                    </p>
-                  </div>
                 </section>
               </div>
             )}
@@ -560,7 +369,6 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
             {/* ── 关于 ── */}
             {activeTab === "about" && (
               <div className="space-y-6">
-                {/* 应用概览 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-4 rounded-sm border border-border bg-surface-elevated">
                     <div className="flex items-center gap-2 mb-1.5">
@@ -577,7 +385,6 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
                   </div>
                 </div>
 
-                {/* 关于卡片 */}
                 <section className="p-6 rounded-sm border border-border bg-surface">
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-10 h-10 rounded-sm bg-ink/5 border border-border-soft flex items-center justify-center">

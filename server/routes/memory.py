@@ -1,4 +1,9 @@
-"""记忆管理 API — 路由层，业务逻辑委托到 application"""
+"""记忆管理 API — 文件优先架构（Hermes-Pure）。
+
+改造后：
+- MEMORY.md / USER.md 直接读写
+- 退役路由返回空结果（前端兼容）
+"""
 
 from __future__ import annotations
 
@@ -8,26 +13,29 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from lib.memory.observations import ObservationsResult, synthesize_observations
+from lib.memory.markdown import AsyncMarkdownStore, ensure_memory_dirs, memory_dir
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+_store = AsyncMarkdownStore()
 
 _USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 def _validate_user_id(user_id: str) -> str:
     if not _USER_ID_PATTERN.match(user_id):
-        raise HTTPException(status_code=400, detail="user_id 格式无效，只允许字母、数字、下划线和连字符，长度 1-64")
+        raise HTTPException(
+            status_code=400,
+            detail="user_id 格式无效，只允许字母、数字、下划线和连字符，长度 1-64",
+        )
     return user_id
 
 
-def _get_memory():
-    from lib.memory.facade import get_memory
-
-    return get_memory()
+# ═══════════════════════════════════════════
+#  数据模型
+# ═══════════════════════════════════════════
 
 
 class MemoryContent(BaseModel):
@@ -37,6 +45,7 @@ class MemoryContent(BaseModel):
 class MemoryStats(BaseModel):
     status: str
     count: int
+    path: str = ""
 
 
 class MemoryResetResponse(BaseModel):
@@ -60,137 +69,73 @@ class AboutYouResponse(BaseModel):
     journey: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# ═══════════════════════════════════════════
+#  活跃路由（文件优先）
+# ═══════════════════════════════════════════
+
+
 @router.get("/me", response_model=MemoryContent)
 async def get_my_memory(user_id: str = Query("demo_user")) -> MemoryContent:
+    """读取 MEMORY.md 全文。"""
     _validate_user_id(user_id)
     try:
-        content = await _get_memory().get_memory_content(user_id)
-        return MemoryContent(content=content)
-    except Exception:
+        content = await _store.read_memory(user_id)
+        return MemoryContent(content=content or "")
+    except Exception as exc:
         logger.exception("Read memory failed: user_id=%s", user_id)
-        raise HTTPException(status_code=500, detail="读取画像失败") from None
+        raise HTTPException(status_code=500, detail="读取记忆失败") from exc
+
+
+@router.put("/me")
+async def put_my_memory(
+    body: dict[str, str],
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """保存完整 MEMORY.md。"""
+    _validate_user_id(user_id)
+    content = body.get("content", "")
+    try:
+        await _store.write_memory(user_id, content)
+        return {"message": "已保存", "chars": len(content)}
+    except Exception as exc:
+        logger.exception("Write memory failed: user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="保存记忆失败") from exc
 
 
 @router.get("/stats", response_model=MemoryStats)
 async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
     _validate_user_id(user_id)
-    memory = _get_memory()
-    status = "ready"
+    ensure_memory_dirs(user_id)
+    path = str(memory_dir(user_id))
     try:
-        count = await memory.count_events(user_id)
+        content = await _store.read_memory(user_id)
+        # 简单统计：按行数估算条目数
+        lines = [ln for ln in content.splitlines() if ln.strip().startswith("- ")]
+        return MemoryStats(status="ready", count=len(lines), path=path)
     except Exception as exc:
-        logger.error("Memory stats count failed: %s", exc)
-        count = 0
-    return MemoryStats(status=status, count=count)
+        logger.error("Memory stats failed: %s", exc)
+        return MemoryStats(status="ready", count=0, path=path)
 
 
 @router.post("/reset", response_model=MemoryResetResponse)
 async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse:
+    """清空 MEMORY.md 和 USER.md。"""
     _validate_user_id(user_id)
     try:
-        result = await _get_memory().reset(user_id)
-        return MemoryResetResponse(**result)
-    except HTTPException:
-        raise
+        await _store.reset_user_memory(user_id)
+        return MemoryResetResponse(deleted=0, index_cleared=True)
     except Exception as exc:
         logger.error("Memory reset failed: %s", exc)
         raise HTTPException(status_code=500, detail="清空失败，请查看日志")
 
 
-@router.get("/list", response_model=list[MemoryItemOut])
-async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItemOut]:
-    _validate_user_id(user_id)
-    try:
-        items = await _get_memory().list_events(user_id)
-    except Exception as exc:
-        logger.error("Memory list failed: %s", exc)
-        return []
-    return [MemoryItemOut(**item) for item in items]
-
-
-@router.post("/rebuild")
-async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
-    _validate_user_id(user_id)
-    try:
-        result = await _get_memory().rebuild(user_id)
-        md_ok = result.get("md_success", False)
-        msg = "重建成功"
-        if not md_ok:
-            msg = ".md 重建失败"
-        return {"message": msg, "user_id": user_id, **result}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Memory rebuild failed: %s", exc)
-        raise HTTPException(status_code=500, detail="重建失败，请查看日志")
-
-
-@router.get("/observations", response_model=ObservationsResult)
-async def get_observations(
-    days: int = Query(7),
-    user_id: str = Query("demo_user"),
-) -> ObservationsResult:
-    """返回 Lumen 关于当前用户的最新 3 条观察。
-
-    events < 10 条时返回 observations=[]，前端不渲染。
-    """
-    if not (1 <= days <= 90):
-        raise HTTPException(status_code=400, detail="days 必须在 1-90 之间")
-    _validate_user_id(user_id)
-    return await synthesize_observations(user_id=user_id, days=days)
-
-
-@router.get("/search")
-async def search_memories(
-    user_id: str = Query("demo_user"),
-    query: str = Query(...),
-    limit: int = Query(10),
-) -> list[MemoryItemOut]:
-    _validate_user_id(user_id)
-    try:
-        memory = _get_memory()
-        items = await memory.recall(user_id, query, limit=limit)
-        return [
-            MemoryItemOut(id=item.id, memory=item.content, created_at=item.created_at, categories=item.categories)
-            for item in items
-        ]
-    except Exception as exc:
-        logger.error("Memory search failed: %s", exc)
-        return []
-
-
-@router.delete("/{event_id}")
-async def delete_memory(event_id: str, user_id: str = Query("demo_user")) -> dict:
-    _validate_user_id(user_id)
-    try:
-        success, error = await _get_memory().delete_event(user_id, event_id)
-        if not success:
-            status_code = 403 if error and "无权" in error else 404
-            raise HTTPException(status_code=status_code, detail=error or "删除失败")
-        logger.info("Memory deleted: id=%s, user_id=%s", event_id, user_id)
-        return {"deleted": event_id}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Memory delete failed: %s", exc)
-        raise HTTPException(status_code=500, detail="删除失败")
-
-
 @router.get("/understanding", response_model=AboutYouResponse)
 async def get_ai_understanding(user_id: str = Query("demo_user")) -> AboutYouResponse:
-    """获取 AI 综合画像（关于你 + 模式洞察 + 此刻状态 + 时间线）。"""
+    """获取 AI 综合画像（USER.md）。"""
     _validate_user_id(user_id)
     try:
-        from lib.memory.understanding import get_about_you_data
-
-        data = await get_about_you_data(user_id)
-        return AboutYouResponse(
-            about_you=data.about_you,
-            updated_at=data.updated_at,
-            patterns=data.patterns,
-            now_status=data.now_status,
-            journey=data.journey,
-        )
+        content = await _store.read_about_you(user_id)
+        return AboutYouResponse(about_you=content or "")
     except Exception as exc:
         logger.error("AI understanding read failed: %s", exc)
         return AboutYouResponse()
@@ -215,18 +160,102 @@ async def correct_ai_understanding(
     body: dict[str, str],
     user_id: str = Query("demo_user"),
 ) -> dict:
-    """用户手动纠正 AI 画像文本。"""
+    """用户手动纠正 AI 画像文本（直接覆写 USER.md）。"""
     _validate_user_id(user_id)
     corrected_text = body.get("text", "")
     if not corrected_text:
         raise HTTPException(status_code=400, detail="纠正内容不能为空")
-    from lib.memory.markdown import write_about_you
+    try:
+        await _store.write_about_you(user_id, corrected_text)
+        from lib.memory.understanding import _update_profile_data
 
-    write_about_you(user_id, corrected_text)
-    from lib.memory.understanding import _update_profile_data
+        await _update_profile_data(user_id, corrected_text)
+        return {"message": "已更新", "chars": len(corrected_text)}
+    except Exception as exc:
+        logger.error("AI understanding correct failed: %s", exc)
+        raise HTTPException(status_code=500, detail="更新失败") from exc
 
-    await _update_profile_data(user_id, corrected_text)
-    return {"message": "已更新", "chars": len(corrected_text)}
+
+@router.post("/tell")
+async def tell_ai(
+    body: dict[str, str],
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """用户主动告诉 AI，追加到 MEMORY.md。"""
+    _validate_user_id(user_id)
+    event_type = body.get("event_type", "general")
+    content = body.get("content", "")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="content 不能为空")
+
+    try:
+        await _store.append_memory_entry(user_id, event_type, content)
+        # 触发 USER.md 刷新
+        import contextlib
+
+        from lib.memory.understanding import update_ai_understanding
+
+        with contextlib.suppress(Exception):
+            await update_ai_understanding(user_id)
+
+        return {"message": "已记录"}
+    except Exception as exc:
+        logger.error("tell_ai failed: %s", exc)
+        raise HTTPException(status_code=500, detail="记录失败") from exc
+
+
+@router.get("/search")
+async def search_memories(
+    user_id: str = Query("demo_user"),
+    query: str = Query(...),
+) -> list[MemoryItemOut]:
+    """搜索 MEMORY.md（简单文本匹配）。"""
+    _validate_user_id(user_id)
+    try:
+        content = await _store.read_memory(user_id)
+        if not content or not query:
+            return []
+
+        keywords = [kw.lower() for kw in query.split() if len(kw) > 1]
+        if not keywords:
+            return []
+
+        paragraphs = content.split("\n\n")
+        results: list[MemoryItemOut] = []
+        for i, para in enumerate(paragraphs):
+            para_lower = para.lower()
+            if any(kw in para_lower for kw in keywords):
+                results.append(
+                    MemoryItemOut(
+                        id=f"md-{i}",
+                        memory=para[:300],
+                        categories=[],
+                    )
+                )
+        return results
+    except Exception as exc:
+        logger.error("Memory search failed: %s", exc)
+        return []
+
+
+# ═══════════════════════════════════════════
+#  退役路由（返回兼容空结果，前端过渡用）
+# ═══════════════════════════════════════════
+
+
+@router.get("/list", response_model=list[MemoryItemOut])
+async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItemOut]:
+    """已退役：返回空列表。"""
+    _validate_user_id(user_id)
+    return []
+
+
+@router.delete("/{event_id}")
+async def delete_memory(event_id: str, user_id: str = Query("demo_user")) -> dict:
+    """已退役：返回 404。"""
+    _validate_user_id(user_id)
+    raise HTTPException(status_code=404, detail="逐条删除已退役，请使用全文编辑")
 
 
 @router.patch("/{event_id}")
@@ -235,98 +264,39 @@ async def update_memory(
     body: dict[str, Any],
     user_id: str = Query("demo_user"),
 ) -> dict:
-    """更新记忆内容。"""
+    """已退役：返回 404。"""
     _validate_user_id(user_id)
-    content = body.get("content", "")
-    if not content:
-        raise HTTPException(status_code=400, detail="content 不能为空")
-
-    try:
-        memory = _get_memory()
-        success, error = await memory.update_event(
-            user_id=user_id,
-            event_id=event_id,
-            payload={"key": content[:32], "value": content, "source": "用户编辑"},
-        )
-        if not success:
-            raise HTTPException(status_code=404, detail=error or "更新失败")
-        return {"updated": event_id}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Memory update failed: %s", exc)
-        raise HTTPException(status_code=500, detail="更新失败")
-
-
-class ReviewBody(BaseModel):
-    status: str
+    raise HTTPException(status_code=404, detail="逐条编辑已退役，请使用全文编辑")
 
 
 @router.post("/{event_id}/review")
 async def review_memory(
     event_id: str,
-    body: ReviewBody,
-    user_id: str = Query("demo_user"),
-) -> dict:
-    """审核记忆：confirmed 或 rejected。"""
-    _validate_user_id(user_id)
-    try:
-        memory = _get_memory()
-        success, error = await memory.review_event(
-            user_id=user_id,
-            event_id=event_id,
-            status=body.status,
-        )
-        if not success:
-            status_code = 400 if error and "必须是" in error else 404
-            raise HTTPException(status_code=status_code, detail=error or "审核失败")
-        return {"reviewed": event_id, "status": body.status}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Memory review failed: %s", exc)
-        raise HTTPException(status_code=500, detail="审核失败")
-
-
-@router.post("/tell")
-async def tell_ai(
     body: dict[str, str],
     user_id: str = Query("demo_user"),
 ) -> dict:
-    """用户主动告诉 AI 关于自己的信息，直接写入对应事件类型。"""
+    """已退役：返回 404。"""
     _validate_user_id(user_id)
-    event_type = body.get("event_type", "")
-    content = body.get("content", "")
+    raise HTTPException(status_code=404, detail="逐条审核已退役")
 
-    if not event_type or not content:
-        raise HTTPException(status_code=400, detail="event_type 和 content 不能为空")
 
-    valid_types = {
-        "interest": "interest_observed",
-        "value": "value_surfaced",
-        "relationship": "relationship_noted",
-        "moment": "significant_moment",
-        "reflection": "reflection_added",
+@router.get("/observations")
+async def get_observations(
+    days: int = Query(7),
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """已退役：返回空观察。"""
+    _validate_user_id(user_id)
+    return {
+        "observations": [],
+        "generated_at": None,
+        "events_analyzed": 0,
+        "period_days": days,
     }
-    if event_type not in valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的 event_type，支持: {', '.join(valid_types.keys())}",
-        )
 
-    try:
-        memory = _get_memory()
-        event = await memory.remember(
-            user_id=user_id,
-            event_type=valid_types[event_type],
-            entity_type=event_type,
-            entity_id=content[:32],
-            payload={"key": content[:32], "value": content, "source": "用户主动"},
-            source="用户主动",
-        )
-        if event and event.id:
-            return {"message": "已记录", "event_id": str(event.id)}
-        return {"message": "内容未变化，跳过"}
-    except Exception as exc:
-        logger.error("tell_ai failed: %s", exc)
-        raise HTTPException(status_code=500, detail="记录失败") from exc
+
+@router.post("/rebuild")
+async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
+    """已退役：新架构无需重建，直接返回成功。"""
+    _validate_user_id(user_id)
+    return {"message": "新架构无需重建", "user_id": user_id}

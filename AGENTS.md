@@ -76,21 +76,14 @@ curl http://localhost:8000/api/health
 - `ctx` 包含 `db`（AsyncSession）等上下文，Handler 内部可自由读写数据库
 - 工具返回必须是字符串（会被 Agent 读取作为工具执行结果）
 
-### 添加一个新的记忆事件类型
+### 写入长期记忆
 
-1. **分类决策**：该事件属于 Profile 管线还是 Narrative 管线？
-   - Profile（用户画像维度）：写入 `.md` 投影，不进搜索索引，L0 固定注入
-   - Narrative（时间线/经历类）：进入 FTS5 + LanceDB 搜索，L2 按需召回
+Hermes-Pure 架构下没有"事件类型"——所有长期记忆都是 `~/.lumen/memory/{user_id}/memory.md` 里的 Markdown 条目。
 
-2. **在 `classifier.py` 中注册**：
-   - `PROFILE_EVENT_TYPES` 或 `NARRATIVE_EVENT_TYPES` 中加入新类型
-   - `L0_FIXED_TYPES` 决定是否 L0 固定注入
-
-3. **事件合并规则**（`events_merger.py`）：
-   - 如果同类事件需要合并（如多次提到同一个兴趣），在 `deep_merge_payload()` 中添加合并逻辑
-   - 如果不需要合并（如每次独立经历），使用默认 newer-wins
-
-4. **在 Agent 中使用**：通过 `memory_save` 工具或直接调用 `memory.remember()`
+1. **主动写入**：Agent 调用 `memory_save` 工具（或 `tellAI` / `update_profile`）→ 追加带日期的 bullet 到 `memory.md` 的 `## Long-term notes` 章节
+2. **画像刷新**：写入后台触发 `understanding.py` 从 `memory.md` 重新生成 `about_you.md`（5 分钟防抖）
+3. **被动兜底**：`review_service.py` 在对话结束后 fork 一个 Agent 审查本轮，判断是否有值得写入 `memory.md` 的内容
+4. **外部召回**：如需语义检索，实现一个 `MemoryProvider` 插件放到 `~/.lumen/plugins/memory/<name>/`，由 `MemoryManager` 在 L2 prefetch 时调用
 
 ### 调试流式对话
 
@@ -102,9 +95,9 @@ curl http://localhost:8000/api/health
 ### 运行测试
 
 ```bash
-pytest                    # 全部 105 条测试
+pytest                    # 全部测试
 pytest -x                # 遇到失败立即停
-pytest tests/test_memory_dedup.py -v   # 单文件详细输出
+pytest tests/test_memory_manager.py -v   # 单文件详细输出
 ```
 
 ### 添加或管理 Skill
@@ -158,9 +151,8 @@ Lumen/
 │   ├── config.py               # pydantic-settings，从根目录 .env + ~/.lumen/config.json 加载
 │   ├── db.py                   # SQLAlchemy AsyncEngine + Base + get_async_session_maker
 │   ├── migrations.py           # SQLite 兼容迁移、FTS5 表、触发器
-│   ├── startup.py              # 启动初始化（建表、Channel 启动、Provider 补偿循环）
-│   ├── agent.py                # PydanticAI Agent 定义 + 动态系统提示词
-│   └── vector_store.py         # 向量存储（LanceDB 封装）
+│   ├── startup.py              # 启动初始化（建表、Channel 启动、关闭清理）
+│   └── agent.py                # PydanticAI Agent 定义 + 动态系统提示词
 ├── shared/                     # 跨模块通用工具
 │   ├── errors.py               # 统一错误体系（LumenError + severity/category/retryable）
 │   ├── logging.py              # structlog 日志：控制台彩色 + 文件纯文本，上下文绑定
@@ -185,21 +177,16 @@ Lumen/
 │   │   ├── summary.py          # 对话摘要后台任务
 │   │   ├── agent_trace.py      # AgentTrace 可观测性
 │   │   └── event_handlers.py   # Agent 事件处理（流式输出、工具调用跟踪）
-│   ├── memory/                 # 记忆层（双管线：Profile + Narrative）
-│   │   ├── facade.py           # LumenMemory 统一门面（多继承组合）
-│   │   ├── models.py           # GrowthEvent ORM 模型
-│   │   ├── observations.py     # 观察事件处理
-│   │   ├── classifier.py       # 事件分类（Profile / Narrative / L0 路由）
-│   │   ├── writer.py           # 事件写入（单条/批量，含 L1/L2 去重）
-│   │   ├── searcher.py         # 搜索/召回 + 上下文构建（L0/L1/L2 分层注入）
-│   │   ├── search.py           # 全文搜索（FTS5 + Provider 语义）
-│   │   ├── relational_store.py # Repository + FTS5 触发器管理
-│   │   ├── projection.py       # .md 投影同步、全量重建、删除、重置
-│   │   ├── markdown.py         # .md 原子读写 + growth_events → memory.md
-│   │   ├── snapshot.py         # Agent 系统提示词分层快照（L0/L1/L2）
-│   │   ├── events_merger.py    # 事件合并与 memory.md 生成（纯函数层）
-│   │   ├── understanding.py    # AI 综合画像生成（about_you.md + patterns + intents）
-│   │   └── review_service.py   # 后台记忆审查（Agent fork 审查对话）
+│   ├── memory/                 # 记忆层（Hermes-Pure 文件优先：memory.md 唯一真相源）
+│   │   ├── provider.py         # MemoryProvider 抽象接口 + NoOpMemoryProvider
+│   │   ├── manager.py          # MemoryManager 进程级单例（内置文件记忆 + 外部 provider 编排）
+│   │   ├── builtin_provider.py # BuiltinMemoryProvider（文件 backed，L0 冻结快照）
+│   │   ├── loader.py           # 从 ~/.lumen/plugins/memory/ 发现 provider 插件
+│   │   ├── markdown.py         # AsyncMarkdownStore：memory.md / about_you.md 原子读写
+│   │   ├── context_fence.py    # <memory-context> 围栏构建 + 注入内容清洗
+│   │   ├── snapshot.py         # 薄兼容层，委托 MemoryManager 构建 L0 + L1 近期对话
+│   │   ├── understanding.py    # AI 综合画像生成（memory.md → about_you.md，5 分钟防抖）
+│   │   └── review_service.py   # 后台记忆审查（Agent fork 审查对话，写入 memory.md）
 │   ├── profile/                # 画像模块
 │   │   ├── models.py           # User + UserProfile（通用伙伴画像）
 │   │   └── schemas.py          # ProfilePayload, KeyValuePayload, DecisionPayload
@@ -223,7 +210,6 @@ Lumen/
 │       ├── factory.py          # 工具工厂（注册所有内置工具 + MCP 工具）
 │       ├── skill_load.py       # skill_load 工具（动态加载 Skill）
 │       ├── memory.py           # memory_search, memory_save
-│       ├── notes.py            # 随记工具
 │       ├── profile.py          # get_profile, update_profile
 │       ├── shell.py            # Shell 命令执行工具
 │       ├── files.py            # 文件读写工具
@@ -241,7 +227,6 @@ Lumen/
 │       ├── config.py           # 配置 API
 │       ├── health.py           # GET /api/health
 │       ├── providers.py        # Provider 管理 API
-│       ├── notes.py            # 随记 API
 │       ├── mcp.py              # MCP 服务器管理 API
 │       └── partner.py        # 伙伴系统 API（情绪状态）
 ├── src/                        # React 前端（Vite）
@@ -277,7 +262,6 @@ Lumen/
 ├── tests/                      # pytest 测试
 ├── docs/                       # 设计文档
 │   ├── architecture/           # 系统架构设计
-│   ├── memory-structure/       # 记忆结构（memory.md + entities/*.md）
 │   ├── stories/                # 功能实现 story 记录
 │   ├── blog/                   # 博客文章
 │   └── issues/                 # 问题记录
@@ -316,10 +300,6 @@ Lumen/
 | `GET` | `/api/providers/{name}/discovered-models` | 获取已发现模型 |
 | `POST` | `/api/providers/test` | 测试 Provider 连通性 |
 | `PUT` | `/api/providers/{name}/models/{model_id}` | 更新 Provider 模型配置 |
-| `GET` | `/api/notes` | 随记列表 |
-| `POST` | `/api/notes` | 创建随记 |
-| `PATCH` | `/api/notes/{note_id}` | 更新随记 |
-| `DELETE` | `/api/notes/{note_id}` | 删除随记 |
 | `GET` | `/api/mcp/servers` | MCP 服务器列表 |
 | `POST` | `/api/mcp/servers` | 添加 MCP 服务器 |
 | `GET` | `/api/mcp/servers/{name}` | 获取 MCP 服务器详情 |
@@ -396,63 +376,63 @@ Lumen/
 
 ## Explanation: 关键架构决策
 
-### 双管线记忆架构
+### 多渠道 Bus/Channel 架构
 
-记忆不是一张表，而是两条独立管线：
-
-**Profile 管线** — 用户的"我是谁"：
-- 事件类型：`profile_updated`, `interest_observed`, `value_surfaced`, `preference_learned`, `emotional_pattern`
-- 去向：`.md` 投影文件（`memory.md`）
-- 召回方式：L0 固定注入 — 每次对话**必定**注入到系统提示词
-- 不进搜索索引，因为这些是"应该知道"而非"需要回忆"
-
-**Narrative 管线** — 用户的"我经历了什么"：
-- 事件类型：`significant_moment`, `decision_made`, `reflection_added`, `contradiction_noted`, `relationship_noted`
-- 去向：FTS5 全文索引 + LanceDB 语义索引
-- 召回方式：L2 按需搜索 — 只在用户提问相关时才召回
-
-为什么分两条？
-- Profile 是"前置知识"，Agent 每次回复都需要知道用户的性格和偏好
-- Narrative 是"背景信息"，只在特定话题时才需要（如用户问"上次我说的那件事"）
-- 如果混在一起，搜索噪声会淹没关键画像信息
-
-### L0 / L1 / L2 三层上下文注入
-
-`build_context()` 按优先级分层注入：
-
-**L0 — 固定注入（必含）**
-- 用户基础画像（nickname、bio）
-- AI 综合画像（about_you.md）
-- 对话摘要（conversation.summary）
-- 这些不经过搜索，直接读取
-
-**L1 — 精确匹配（去重后注入）**
-- 基于 `dedupe_key` 的精确去重事件
-- 如用户多次提到"喜欢猫"，只保留一条最新记录
-- 写入速度快，查询直接
-
-**L2 — 语义召回（按需搜索）**
-- FTS5 关键词搜索 + LanceDB 语义搜索 + 外部文档搜索
-- 三路并行（`asyncio.gather`）
-- 结果按相关度排序，取 top-N 注入
-
-分层的好处：
-- L0 保证"最应该知道的不丢失"
-- L1 避免冗余信息淹没上下文窗口
-- L2 在有限 token 内召回最相关的背景
-
-### 事件驱动投影
-
-当 `remember()` 写入事件时，同一会话内立即触发投影：
+Lumen 通过统一的 Bus/Channel 层同时支持三种接入方式，后端业务逻辑与渠道完全解耦：
 
 ```
-用户消息 → Agent 调用 memory_save → 写入 growth_events → 触发投影 →
-  Profile 事件 → 更新 memory.md
-  Narrative 事件 → 更新 FTS5 / LanceDB
-→ commit
+WebChannel (SSE)        TelegramChannel (Polling)     CLIChannel (stdin)
+      │                          │                           │
+      └──────────────────────────┼───────────────────────────┘
+                                 ↓
+                         MessageBus (lib/bus/)
+                    InboundMessage → AgentRunner
+                    AgentRunner → OutboundMessage
+                                 ↓
+                         EventBus (进程内 pub/sub)
+              StreamDeltaReady / ToolCallStarted / TurnStarted / ...
 ```
 
-所有操作在同一数据库事务内：写入和投影要么全成功要么全回滚。如果投影失败（如 LanceDB 不可用），事件不会提交，Agent 会收到错误提示，用户知道"没记住"。
+- **BaseChannel**（`lib/channels/base.py`）：抽象基类，`start()`/`stop()`/`send_message()`
+- **WebChannel**（`lib/channels/web.py`）：SSE 流式，前端 / Tauri 接入
+- **TelegramChannel**（`lib/channels/telegram.py`）：Polling 模式，缓冲流式增量，整条发送
+- **CLIChannel**（`lib/channels/cli.py`）：读 stdin，写 stdout
+- **AgentRunner**（`lib/chat/agent_runner.py`）：后台消费 MessageBus，驱动 PydanticAI Agent Loop
+
+**Tauri 打包**（`src-tauri/src/lib.rs`）：将 `python -m uvicorn main:app` 作为 sidecar subprocess 启动，通过 Windows Job Object 绑定生命周期，关闭窗口自动终止 Python 进程。Tauri 是分发壳，不影响 Channel 运行模式。
+
+### 文件优先记忆架构（Hermes-Pure）
+
+2026-05-25 重构：移除 GrowthEvent 事件管线，改为 Markdown 文件作为长期记忆的唯一真相源。运行时不再有记忆表、记忆 FTS、事件投影缓存或事件审核状态。
+
+每个用户对应 `~/.lumen/memory/{user_id}/`：
+- `memory.md`：可编辑的长期记忆文档（唯一真相源）
+- `about_you.md`：由 `memory.md` 生成的 AI 用户画像
+
+写入路径：`memory_save` / `tellAI` / `update_profile` 直接写 `memory.md` → 后台刷新 `about_you.md`（见上文「写入长期记忆」）。
+
+**作用域**：文件按 `user_id`（跨渠道共享一份记忆）；外部召回与会话生命周期按 `session_key`（`channel` + `chat_id`），避免 web 与 telegram 串台。
+
+### L0 / L1 / L2 三层上下文
+
+**L0 — 冻结快照（注入 system prompt）**
+- `about_you.md`（缺失时降级到 `memory.md`），由 `MemoryManager.build_system_prompt()` 经 `BuiltinMemoryProvider` 读取（`snapshot.py` 是薄兼容层）
+- 按 conversation（`chat_id`）冻结：进入对话取一次快照，对话内多轮复用同一份 system prompt（命中 prefix cache），5 分钟 LRU 缓存
+- mid-conversation 的 `memory_save` 写盘但不改当前对话的 system prompt，下一段对话才生效
+
+**L1 — 近期对话上下文**
+- 最近 5 个对话、7 天内，每个对话最多 3 条消息（`snapshot.py` 的 `_fetch_recent_conversations`）
+- 数据来源是 `Conversation + Message` 表，通过 `set_conversation_fetcher()` 依赖注入，解耦 memory 与 chat 模块
+- 本就在消息历史里，无需额外重复注入
+
+**L2 — 外部召回（按需，`<memory-context>` 围栏）**
+- `MemoryProvider.prefetch(query)`，按 `session_key` 隔离
+- 无外部 provider 时为空——内置文件记忆的内容已在 L0 冻结快照里
+
+### 轮次同步与压缩
+
+- 一次成功 assistant turn 后调用 `MemoryManager.sync_all(...)`，让外部 provider 摄取对话轮次；内置文件记忆不自动保存每轮，依赖有意图的 `memory_save` / `tellAI` / 后台 review
+- 压缩前调用 `MemoryManager.on_pre_compress(messages)`，将 provider 返回文本追加到压缩 prompt
 
 ### 工具系统分层
 
@@ -463,7 +443,7 @@ Lumen/
 3. **发现层** — `lib/tools/_discovery.py` 的 `ToolDiscoveryState` 按 `conversation_id` 维护预加载缓存（LRU），实现 deferred 工具的按需解锁
 4. **工厂层** — `lib/tools/factory.py` 负责组装所有工具实例并注册到 `ToolRegistry`
 5. **中间件层** — `lib/tools/_middleware.py` 提供通用横切能力
-6. **具体工具** — `lib/tools/memory.py`, `notes.py`, `profile.py`, `shell.py`, `files.py`, `web_search.py` 等
+6. **具体工具** — `lib/tools/memory.py`, `profile.py`, `shell.py`, `files.py`, `web_search.py` 等
 7. **MCP 桥接** — `lib/tools/mcp/` 将外部 MCP 服务器暴露为 Agent 工具
 
 为什么这样设计？
@@ -475,11 +455,10 @@ Lumen/
 ### 为什么用 SQLite + FTS5
 
 - **零运维**：单文件，无需部署 PostgreSQL
-- **FTS5 原生支持**：全文搜索无需额外服务，CJK 用 trigram tokenizer
+- **FTS5 原生支持**：外部文档（`external_items`）全文搜索无需额外服务，CJK 用 trigram tokenizer
 - **足够用**：单用户模式，数据量预期 < 100MB
-- **事务一致**：事件写入和投影在同一事务，这是 SQLite 的优势
 
- LanceDB 作为语义搜索的可插拔 Provider，在本地文件系统运行，同样零运维。
+长期记忆本身不再走 SQLite，而是文件优先（`memory.md`）。SQLite 现承载对话/消息、外部文档索引、伙伴系统状态等。外部语义召回由 `MemoryProvider` 插件提供。
 
 ---
 
@@ -490,9 +469,9 @@ Lumen/
 - `chatSession.tsx` 使用 `sessionStorage` 持久化 conversationId，刷新页面不丢失对话
 - `lib/tools/_registry.py` 的 `ToolRegistry` 和 `lib/tools/_discovery.py` 的 `ToolDiscoveryState` 是内存单例，配置变更后需重启后端，否则工具列表和发现状态不会刷新
 - `understanding.py` 的 AI 画像生成有 5 分钟防抖（`_DEBOUNCE_SECONDS = 300`），频繁触发不会重复调用 LLM
-- `search.py` 三路搜索并行执行，但 Provider 故障会被静默吞掉并返回空列表 — 语义搜索降级为 FTS5，不会报错
+- 外部 `MemoryProvider` 故障被静默隔离（`MemoryManager` 记录 warning 并降级到内置文件记忆），不会打断聊天
 - `shared/logging.py` 使用 structlog + stdlib 混合模式，`bind_chat_context()` 在 Agent Loop 中自动绑定 `conversation_id`/`user_id` 到所有子日志
-- FTS5 触发器更新时必须用 `DELETE FROM growth_events_fts WHERE rowid = old.rowid`，不能对虚拟表使用 `INSERT INTO ... VALUES(..., 'delete', ...)` 特殊语法
+- FTS5 触发器更新时必须用 `DELETE FROM external_items_fts WHERE rowid = old.rowid`，不能对虚拟表使用 `INSERT INTO ... VALUES(..., 'delete', ...)` 特殊语法
 - `lib/providers/` 与 `core.config` 解耦避免循环导入：`USER_DATA_DIR` 直接内联为 `Path.home() / ".lumen"`，不通过 `core.config` 获取
 
 ---
@@ -514,7 +493,6 @@ Lumen/
 设计文档在 `docs/` 下：
 
 - `docs/architecture/` — 系统架构设计与核心决策
-- `docs/memory-structure/` — 记忆结构（memory.md + entities/*.md）
 - `docs/stories/` — 功能实现 story 记录
 - `docs/blog/` — 博客文章
 - `docs/issues/` — 问题记录

@@ -16,28 +16,28 @@ async def test_lifespan_starts_web_channel():
 
     app = FastAPI()
 
-    with patch("core.startup._init_db", new=AsyncMock()):
-        with patch("core.startup.apply_user_config", return_value={}):
-            with patch("core.startup.get_settings") as mock_settings:
-                mock_settings.return_value.enable_web = True
-                mock_settings.return_value.telegram_bot_token = ""
-                with patch("lib.memory.projection.ProjectionManager.start_provider_compensation_loop"):
-                    with patch("lib.tools.mcp.client_manager.get_mcp_manager") as mock_mcp:
-                        mock_mcp.return_value.connect_all = AsyncMock()
-                        mock_mcp.return_value.disconnect_all = AsyncMock()
+    with (
+        patch("core.startup._init_db", new=AsyncMock()),
+        patch("core.startup.apply_user_config", return_value={}),
+        patch("core.startup.get_settings") as mock_settings,
+        patch("lib.tools.mcp.client_manager.get_mcp_manager") as mock_mcp,
+        patch("core.startup.get_engine") as mock_engine,
+    ):
+        mock_settings.return_value.enable_web = True
+        mock_settings.return_value.telegram_bot_token = ""
+        mock_mcp.return_value.connect_all = AsyncMock()
+        mock_mcp.return_value.disconnect_all = AsyncMock()
+        mock_engine.return_value.dispose = AsyncMock()
 
-                        with patch("core.startup.get_engine") as mock_engine:
-                            mock_engine.return_value.dispose = AsyncMock()
+        # 模拟 lifespan
+        ctx = lifespan(app)
+        await ctx.__aenter__()
 
-                            # 模拟 lifespan
-                            ctx = lifespan(app)
-                            await ctx.__aenter__()
+        # 验证 web_channel 已注册
+        assert hasattr(app.state, "web_channel")
+        assert app.state.web_channel is not None
 
-                            # 验证 web_channel 已注册
-                            assert hasattr(app.state, "web_channel")
-                            assert app.state.web_channel is not None
-
-                            await ctx.__aexit__(None, None, None)
+        await ctx.__aexit__(None, None, None)
 
 
 @pytest.mark.asyncio
@@ -81,10 +81,10 @@ async def test_web_channel_end_to_end():
     finally:
         await runner.stop()
         dispatch_task.cancel()
-        try:
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError):
             await dispatch_task
-        except asyncio.CancelledError:
-            pass
         await web_channel.stop()
 
 
@@ -160,20 +160,3 @@ async def test_agent_runner_with_source_platform():
 
     # 验证 outbound 有消息（即使失败也会有错误消息）
     # 这里主要是验证不崩溃
-
-
-@pytest.mark.asyncio
-async def test_source_platform_in_growth_event():
-    """验证 source_platform 正确写入 GrowthEvent"""
-    from lib.memory.models import GrowthEvent
-
-    # 验证模型字段存在
-    assert hasattr(GrowthEvent, "source_platform")
-
-    # 验证默认值
-    from sqlalchemy import inspect
-
-    # 获取列信息
-    mapper = inspect(GrowthEvent)
-    column_names = [c.name for c in mapper.columns]
-    assert "source_platform" in column_names

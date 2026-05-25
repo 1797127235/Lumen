@@ -18,10 +18,6 @@ export type Config = {
   // 旧字段（向后兼容）
   dashscope_api_key: string;
   has_api_key: boolean;
-
-  // Document Index Provider
-  document_index_provider: string;
-  document_index_provider_status: string;
 };
 
 export type ConfigTestResponse = {

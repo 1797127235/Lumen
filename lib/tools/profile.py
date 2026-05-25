@@ -1,69 +1,65 @@
-"""画像工具 — get_profile / update_profile。"""
+"""画像工具 — get_profile / update_profile。
+
+阶段 2 改造：直接读 USER.md / MEMORY.md，不再通过 GrowthEvent。
+"""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from lib.memory import get_memory
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.memory.markdown import AsyncMarkdownStore
+from lib.memory.understanding import update_ai_understanding
+from lib.tools._base import ToolDef, ToolMeta
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
+_store = AsyncMarkdownStore()
+
+
+async def _bg_refresh_understanding(user_id: str) -> None:
+    """后台刷新 USER.md，失败静默。"""
+    try:
+        await update_ai_understanding(user_id)
+    except Exception as exc:
+        logger.debug("USER.md 后台刷新失败", error=str(exc))
+
 
 async def _get_profile(args: dict[str, Any], deps) -> str:
-    if deps.build_context_cache and deps.build_context_cache.strip():
-        return _strip_tags(deps.build_context_cache)
+    user_id = deps.user_id
 
-    memory = get_memory()
-    context = await memory.build_context(deps.user_id)
-    if context.strip():
-        return _strip_tags(context)
+    # 优先读 USER.md，缺失回退到 MEMORY.md
+    user_md = await _store.read_about_you(user_id)
+    if user_md.strip():
+        return user_md
+
+    memory = await _store.read_memory(user_id)
+    if memory.strip():
+        return memory
 
     return "用户画像还是空白，多和我聊聊，我会逐渐了解你。"
 
 
 async def _update_profile(args: dict[str, Any], deps) -> str:
-    from lib.profile.schemas import ProfilePayload
-
     fields = {k: v for k in ("nickname", "bio") if (v := args.get(k)) is not None}
     if not fields:
         return "没有需要更新的字段。"
 
-    allowed = set(ProfilePayload.model_fields)
-    known = {k: v for k, v in fields.items() if k in allowed}
-    discarded = [k for k in fields if k not in allowed]
-    if discarded:
-        logger.warning("update_profile discarded unknown keys", discarded=discarded)
+    user_id = deps.user_id
+    parts: list[str] = []
+    for k, v in fields.items():
+        parts.append(f"{k}: {v}")
+    text = "; ".join(parts)
 
-    try:
-        validated = ProfilePayload.model_validate(known)
-    except Exception as e:
-        return tool_error(f"字段校验失败：{e}", "VALIDATION_ERROR")
+    await _store.append_memory_entry(user_id, "profile", text)
 
-    memory = get_memory()
-    event = await memory.remember(
-        user_id=deps.user_id,
-        event_type="profile_updated",
-        entity_type="profile",
-        entity_id="profile_fields",
-        payload=validated.model_dump(exclude_none=True),
-        source="Agent工具",
-        db=deps.db,
-    )
-    if event and event.id is not None:
-        deps.pending_event_ids.append(str(event.id))
-        deps.build_context_cache = ""
-        updated = ", ".join(validated.model_dump(exclude_none=True))
-        return f"画像已更新：{updated}"
+    # 触发 USER.md 刷新（后台，不阻塞）
+    import asyncio
 
-    return "画像内容没有变化，跳过更新。"
+    asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
 
-
-def _strip_tags(text: str) -> str:
-    text = re.sub(r"^<memory-context>\n\[System note:[^\]]*\]\n", "", text)
-    return text.removesuffix("\n</memory-context>")
+    updated = ", ".join(f"{k}={v}" for k, v in fields.items())
+    return f"画像已更新：{updated}"
 
 
 def create_profile_tools() -> list[ToolDef]:

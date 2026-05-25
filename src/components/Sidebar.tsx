@@ -119,17 +119,6 @@ export default function Sidebar() {
         新对话
       </button>
 
-      {/* 随记 */}
-      <button
-        onClick={() => window.dispatchEvent(new Event('lumen-open-notes'))}
-        className="flex items-center gap-xs px-sm py-xs rounded-md text-sm text-text-muted hover:bg-surface-elevated hover:text-text transition-colors w-full text-left"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
-        </svg>
-        随记
-      </button>
-
       {/* 对话历史 */}
       <div className="scroll-auto-hide flex min-h-0 flex-1 flex-col gap-xs mt-xs overflow-y-auto">
         {groups.map(group => (

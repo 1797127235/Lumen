@@ -61,28 +61,35 @@ cargo tauri dev
 ## 架构
 
 ```
-┌──────────────────────────────────────────┐
-│  Tauri v2 窗口（React 前端）              │
-│  http://localhost:5173 (Vite dev)        │
-│           │                              │
-│  Vite proxy: /api → 127.0.0.1:8000      │
-└───────────┼──────────────────────────────┘
-            │ HTTP
-┌───────────┼──────────────────────────────┐
-│  Rust lib.rs                             │
-│  ├─ start_backend()  ← Command::new()    │
-│  ├─ stop_backend()   ← kill + wait      │
-│  ├─ Tauri commands   ← IPC              │
-│  └─ 文件夹监听       ← notify crate      │
-└───────────┼──────────────────────────────┘
-            │ spawn subprocess
-┌───────────┼──────────────────────────────┐
-│  Python FastAPI (127.0.0.1:8000)         │
-│  ├─ SSE 流式对话 (PydanticAI Agent)      │
-│  ├─ 记忆系统 (growth_events → .md / FTS / 向量检索) │
-│  └─ SQLite (单文件，~/.lumen/lumen.db)   │
-└──────────────────────────────────────────┘
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐
+│  React 前端       │  │  Telegram Bot    │  │  CLI         │
+│  (Vite / Tauri)  │  │  (Polling)       │  │  (stdin)     │
+└────────┬─────────┘  └────────┬─────────┘  └──────┬───────┘
+         │ SSE / HTTP          │ Bot API            │ stdio
+         └─────────────────────┼────────────────────┘
+                                ↓
+              ┌──────────────────────────────────────┐
+              │  Python FastAPI  (127.0.0.1:8000)     │
+              │                                       │
+              │  WebChannel / TelegramChannel / CLI   │
+              │  Channel              ↓               │
+              │              MessageBus + EventBus    │
+              │                       ↓               │
+              │              AgentRunner (PydanticAI) │
+              │                       ↓               │
+              │  记忆系统 (memory.md 文件优先)         │
+              │  SQLite  (~/.lumen/lumen.db)           │
+              └──────────────────────────────────────┘
+                         ↑ sidecar subprocess
+              ┌──────────────────────────────────────┐
+              │  Rust lib.rs（Tauri 桌面模式）         │
+              │  start_backend() / Job Object 绑定    │
+              └──────────────────────────────────────┘
 ```
+
+桌面模式（`cargo tauri dev`）：Rust 管理 Python 子进程生命周期。  
+Web 开发模式（`.\start.ps1`）：直接运行 Python + Vite，无 Tauri。  
+Telegram 模式：配置 `telegram_bot_token` 后同一 Python 进程启动 TelegramChannel。
 
 ---
 
@@ -96,7 +103,7 @@ cargo tauri dev
 | Agent | PydanticAI + ReAct Loop | 流式推理，4 个工具，可观测 |
 | 数据库 | SQLite (aiosqlite) | 单文件零运维，FTS5 全文搜索 |
 | 前端 | React 19 + Tailwind CSS 4 | 现代 UI，OKLCH 配色 |
-| 记忆 | growth_events → .md + FTS5 + 向量检索 | 事件溯源、长期记忆与按需召回 |
+| 记忆 | memory.md 文件优先 + MemoryProvider 插件 | 长期记忆存为可编辑 Markdown（唯一真相源）；外部语义召回通过 provider 插件按需接入 |
 
 ---
 

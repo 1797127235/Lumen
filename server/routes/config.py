@@ -31,8 +31,6 @@ class ConfigResponse(BaseModel):
     has_embedding_key: bool = False
     dashscope_api_key: str = ""
     has_api_key: bool = False
-    document_index_provider: str = "lancedb"
-    document_index_provider_status: str = "ready"
 
 
 class ConfigUpdate(BaseModel):
@@ -45,7 +43,6 @@ class ConfigUpdate(BaseModel):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     dashscope_api_key: str | None = None
-    document_index_provider: str | None = None
     providers: dict[str, Any] | None = None
 
 
@@ -79,17 +76,6 @@ async def get_config() -> ConfigResponse:
     def mask_key(value: str) -> str:
         return "***" if value else ""
 
-    # 获取 provider 状态
-    provider_status = "ready"
-    try:
-        from core.vector_store import get_document_index_provider
-
-        provider = get_document_index_provider()
-        if provider is not None:
-            provider_status = provider.health_check().value
-    except Exception:
-        provider_status = "not_initialized"
-
     return ConfigResponse(
         llm_provider=user_config.get("llm_provider") or settings.llm_provider,
         llm_model=user_config.get("llm_model") or settings.llm_model,
@@ -103,8 +89,6 @@ async def get_config() -> ConfigResponse:
         has_embedding_key=has_embedding_key,
         dashscope_api_key=mask_key(user_config.get("dashscope_api_key") or settings.dashscope_api_key),
         has_api_key=has_api_key,
-        document_index_provider=user_config.get("document_index_provider", "lancedb"),
-        document_index_provider_status=provider_status,
     )
 
 
