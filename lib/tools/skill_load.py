@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from lib.skills import get_skills_loader
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-async def _load(args: dict[str, Any], deps) -> str:
+async def _load(args: dict[str, Any], deps):
     name = args.get("skill_name", "").strip()
     if not name:
         return tool_error("请提供 skill_name")
@@ -28,7 +28,7 @@ async def _load(args: dict[str, Any], deps) -> str:
         return tool_error(f"Skill '{name}' 正文为空")
 
     logger.info("skill 已加载", skill=name)
-    return body
+    return tool_ok(body, skill=name)
 
 
 def create_skill_tools() -> list[ToolDef]:

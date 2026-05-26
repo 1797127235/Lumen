@@ -107,7 +107,7 @@ def _docling_worker(file_path: str, result_queue: mp.Queue) -> None:
         result_queue.put(("error", str(e)))
 
 
-async def _read_docling(file_path: str, max_length: int) -> str:
+async def _read_docling(file_path: str, max_length: int):
     """Docling 在子进程中运行，超时 10s 后 terminate → kill 强制终止。"""
     result_queue: mp.Queue = mp.Queue()
     process = mp.Process(target=_docling_worker, args=(file_path, result_queue))
@@ -124,7 +124,7 @@ async def _read_docling(file_path: str, max_length: int) -> str:
                 text = payload
                 if len(text) > max_length:
                     text = text[:max_length] + f"\n\n[已截断，原文件共 {len(text)} 字符]"
-                return text
+                return tool_ok(text)
             await asyncio.sleep(0.05)
         raise TimeoutError()
     except TimeoutError:
@@ -136,7 +136,7 @@ async def _read_docling(file_path: str, max_length: int) -> str:
         return await _read_pdf_fallback(file_path, max_length)
 
 
-async def _read_pdf_fallback(file_path: str, max_length: int) -> str:
+async def _read_pdf_fallback(file_path: str, max_length: int):
     try:
         import pypdf
 
@@ -152,7 +152,7 @@ async def _read_pdf_fallback(file_path: str, max_length: int) -> str:
         result = await asyncio.to_thread(_extract)
         if len(result) > max_length:
             result = result[:max_length] + f"\n\n[已截断，原文件共 {len(result)} 字符]"
-        return result
+        return tool_ok(result)
     except Exception as e:
         return tool_error(f"PDF 降级提取失败：{e}")
 
@@ -160,7 +160,7 @@ async def _read_pdf_fallback(file_path: str, max_length: int) -> str:
 # ── Tool 实现 ──
 
 
-async def _file_read(args: dict[str, Any], deps) -> str:
+async def _file_read(args: dict[str, Any], deps):
     raw = args.get("file_path", "").strip()
     if not raw:
         return tool_error("请提供 file_path")
@@ -186,7 +186,7 @@ async def _file_read(args: dict[str, Any], deps) -> str:
                 out += f"\n\n（显示 {len(sliced)}/{len(entries)} 项，使用 offset={offset + len(sliced)} 继续）"
             else:
                 out += f"\n\n（共 {len(entries)} 项）"
-            return out + "\n</entries>"
+            return tool_ok(out + "\n</entries>")
         except PermissionError:
             return tool_error(f"无权访问目录：{resolved}")
 
@@ -202,7 +202,7 @@ async def _file_read(args: dict[str, Any], deps) -> str:
 
     # ── 图片：提示模型通过 vision 查看 ──
     if ext in _IMAGE_EXTS:
-        return "[图片文件，已作为视觉输入直接提供]"
+        return tool_ok("[图片文件，已作为视觉输入直接提供]")
 
     # ── 文本文件：保持现有 offset/limit 行分页逻辑 ──
     if _is_binary(resolved):
@@ -245,13 +245,13 @@ async def _file_read(args: dict[str, Any], deps) -> str:
             out += f"\n\n（已截断，显示第 {offset}–{last} 行，使用 offset={last + 1} 继续）"
         else:
             out += f"\n\n（文件共 {total} 行）"
-        return out + "\n</content>"
+        return tool_ok(out + "\n</content>")
 
     except OSError as e:
         return tool_error(f"读取失败：{e}")
 
 
-async def _file_write(args: dict[str, Any], deps) -> str:
+async def _file_write(args: dict[str, Any], deps):
     raw = args.get("file_path", "").strip()
     content = args.get("content", "")
     if not raw:
@@ -298,7 +298,7 @@ async def _file_write(args: dict[str, Any], deps) -> str:
     return tool_ok(f"已写入 {rel}（内容未变化）")
 
 
-async def _file_ls(args: dict[str, Any], deps) -> str:
+async def _file_ls(args: dict[str, Any], deps):
     raw = args.get("path", "").strip() or str(deps.workspace_root)
     resolved, err = _resolve(raw, str(deps.workspace_root))
     if err:
@@ -312,12 +312,12 @@ async def _file_ls(args: dict[str, Any], deps) -> str:
         entries = sorted(os.listdir(resolved))
         lines = [e + "/" if os.path.isdir(os.path.join(resolved, e)) else e for e in entries]
         rel = os.path.relpath(resolved, str(deps.workspace_root)) + "/"
-        return rel + "\n" + "\n".join(lines)
+        return tool_ok(rel + "\n" + "\n".join(lines))
     except PermissionError:
         return tool_error(f"无权访问：{resolved}")
 
 
-async def _file_grep(args: dict[str, Any], deps) -> str:
+async def _file_grep(args: dict[str, Any], deps):
     pattern = args.get("pattern", "").strip()
     search_path = args.get("path", "").strip() or str(deps.workspace_root)
     include = args.get("include", "").strip()
@@ -337,11 +337,11 @@ async def _file_grep(args: dict[str, Any], deps) -> str:
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=15)
         output = result.stdout.strip()
         if not output:
-            return "未找到匹配内容。"
+            return tool_ok("未找到匹配内容。")
         lines = output.splitlines()
         if len(lines) > 200:
-            return "\n".join(lines[:200]) + "\n\n（结果已截断，仅显示前 200 行）"
-        return "\n".join(lines)
+            return tool_ok("\n".join(lines[:200]) + "\n\n（结果已截断，仅显示前 200 行）")
+        return tool_ok("\n".join(lines))
     except FileNotFoundError:
         return tool_error("未找到 ripgrep（rg），请先安装：https://github.com/BurntSushi/ripgrep")
     except subprocess.TimeoutExpired:
@@ -368,7 +368,7 @@ def create_file_tools() -> list[ToolDef]:
             },
             execute=_file_read,
             read_only=True,
-            meta=ToolMeta(always_on=False, risk="read-only", search_hint="读取文件、查看文件内容"),
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="读取文件、查看文件内容"),
         ),
         ToolDef(
             name="file_write",
@@ -396,7 +396,7 @@ def create_file_tools() -> list[ToolDef]:
             },
             execute=_file_ls,
             read_only=True,
-            meta=ToolMeta(always_on=False, risk="read-only", search_hint="列出目录、查看文件夹"),
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="列出目录、查看文件夹"),
         ),
         ToolDef(
             name="file_grep",
@@ -412,6 +412,6 @@ def create_file_tools() -> list[ToolDef]:
             },
             execute=_file_grep,
             read_only=True,
-            meta=ToolMeta(always_on=False, risk="read-only", search_hint="搜索文件内容、grep、正则匹配"),
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="搜索文件内容、grep、正则匹配"),
         ),
     ]

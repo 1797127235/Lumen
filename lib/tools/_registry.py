@@ -145,28 +145,39 @@ class ToolRegistry:
     def get_documents(self) -> list[ToolDocument]:
         return list(self._documents.values())
 
-    def get_deferred_names(self, visible: set[str] | None = None) -> dict[str, list[str]]:
-        """返回所有 deferred 工具名，按来源分组。
+    def get_deferred_tools(self, visible: set[str] | None = None) -> dict[str, Any]:
+        """返回所有 deferred 工具，按来源分组。
 
         visible: 当前已可见工具名（always_on + preloaded），从结果中排除。
         deferred = 全量注册工具 - always_on - meta_tools - visible
+
+        返回:
+            {
+                "builtin": [(name, description), ...],
+                "mcp": {server_name: [(name, description), ...]}
+            }
         """
         always_on = self.get_always_on_names()
         excluded = always_on | _META_TOOLS | (visible or set())
-        builtin: list[str] = []
-        mcp: dict[str, list[str]] = {}
+
+        builtin: list[tuple[str, str]] = []
+        mcp: dict[str, list[tuple[str, str]]] = {}
 
         for name, doc in self._documents.items():
             if name in excluded:
                 continue
+            desc = doc.description.split("\n")[0][:80]  # 取第一行，截断到 80 字符
             if doc.source_type == "mcp":
-                mcp.setdefault(doc.source_name, []).append(name)
+                mcp.setdefault(doc.source_name, []).append((name, desc))
             else:
-                builtin.append(name)
+                builtin.append((name, desc))
+
+        builtin.sort(key=lambda x: x[0])
+        mcp = {k: sorted(v, key=lambda x: x[0]) for k, v in sorted(mcp.items())}
 
         return {
-            "builtin": sorted(builtin),
-            "mcp": {k: sorted(v) for k, v in sorted(mcp.items())},
+            "builtin": builtin,
+            "mcp": mcp,
         }
 
     def search(

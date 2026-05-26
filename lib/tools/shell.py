@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -278,7 +278,7 @@ def _shell_env() -> dict[str, str]:
 # ── Tool 实现 ────────────────────────────────────────────────────────
 
 
-async def _shell(args: dict[str, Any], deps) -> str:
+async def _shell(args: dict[str, Any], deps):
     command: str = args.get("command", "").strip()
     description: str = args.get("description", "")
     timeout_specified = "timeout" in args and args.get("timeout") is not None
@@ -324,7 +324,7 @@ async def _execute_background(
     cwd: Path | None,
     env: dict[str, str],
     timeout_s: int | None,
-) -> str:
+):
     task_id = f"shell_{uuid4().hex[:12]}"
     log_fd, log_path = tempfile.mkstemp(prefix=f"lumen-bg-{task_id}-", suffix=".log")
     os.close(log_fd)
@@ -351,18 +351,20 @@ async def _execute_background(
     _arm_background_timeout(task_id, bg)
     logger.info("shell bg started [%s] pid=%s log=%s", task_id, proc.pid, log_path)
 
-    return json.dumps(
-        {
-            "command": command,
-            "background_task_id": task_id,
-            "status": "running",
-            "output_path": log_path,
-            "started_at_ms": wall_start_ms,
-            "timeout_s": timeout_s,
-            "exit_code": None,
-            "interrupted": False,
-        },
-        ensure_ascii=False,
+    return tool_ok(
+        json.dumps(
+            {
+                "command": command,
+                "background_task_id": task_id,
+                "status": "running",
+                "output_path": log_path,
+                "started_at_ms": wall_start_ms,
+                "timeout_s": timeout_s,
+                "exit_code": None,
+                "interrupted": False,
+            },
+            ensure_ascii=False,
+        )
     )
 
 
@@ -374,7 +376,7 @@ async def _execute_foreground(
     timeout: int,
     timeout_specified: bool,
     auto_promote: bool,
-) -> str:
+):
     task_id = f"shell_{uuid4().hex[:12]}"
     log_fd, log_path = tempfile.mkstemp(prefix=f"lumen-fg-{task_id}-", suffix=".log")
     os.close(log_fd)
@@ -413,19 +415,21 @@ async def _execute_foreground(
         _BG_REGISTRY[task_id] = bg
         _arm_background_timeout(task_id, bg)
         logger.info("shell auto-promoted [%s] pid=%s", task_id, proc.pid)
-        return json.dumps(
-            {
-                "command": command,
-                "background_task_id": task_id,
-                "status": "running",
-                "output_path": log_path,
-                "started_at_ms": wall_start_ms,
-                "timeout_s": hard_timeout_s,
-                "exit_code": None,
-                "interrupted": False,
-                "auto_promoted": True,
-            },
-            ensure_ascii=False,
+        return tool_ok(
+            json.dumps(
+                {
+                    "command": command,
+                    "background_task_id": task_id,
+                    "status": "running",
+                    "output_path": log_path,
+                    "started_at_ms": wall_start_ms,
+                    "timeout_s": hard_timeout_s,
+                    "exit_code": None,
+                    "interrupted": False,
+                    "auto_promoted": True,
+                },
+                ensure_ascii=False,
+            )
         )
     except asyncio.CancelledError:
         with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -463,17 +467,19 @@ async def _execute_foreground(
             "omitted_lines": output_meta["omitted_lines"],
         }
 
-    return json.dumps(
-        {
-            "command": command,
-            "exit_code": exit_code,
-            "interrupted": False,
-            "duration_ms": duration_ms,
-            "output": output_meta["text"],
-            "truncation": truncation,
-            "full_output_path": full_output_path,
-        },
-        ensure_ascii=False,
+    return tool_ok(
+        json.dumps(
+            {
+                "command": command,
+                "exit_code": exit_code,
+                "interrupted": False,
+                "duration_ms": duration_ms,
+                "output": output_meta["text"],
+                "truncation": truncation,
+                "full_output_path": full_output_path,
+            },
+            ensure_ascii=False,
+        )
     )
 
 
@@ -483,7 +489,7 @@ async def _finalize_timed_out(
     pump: asyncio.Task,
     log_path: str,
     start_mono: float,
-) -> str:
+):
     with contextlib.suppress(ProcessLookupError, PermissionError):
         _kill_process_tree(proc)
 
@@ -516,21 +522,23 @@ async def _finalize_timed_out(
             "omitted_lines": output_meta["omitted_lines"],
         }
 
-    return json.dumps(
-        {
-            "command": command,
-            "exit_code": -1,
-            "interrupted": True,
-            "duration_ms": duration_ms,
-            "output": output_meta["text"],
-            "truncation": truncation,
-            "full_output_path": full_output_path,
-        },
-        ensure_ascii=False,
+    return tool_ok(
+        json.dumps(
+            {
+                "command": command,
+                "exit_code": -1,
+                "interrupted": True,
+                "duration_ms": duration_ms,
+                "output": output_meta["text"],
+                "truncation": truncation,
+                "full_output_path": full_output_path,
+            },
+            ensure_ascii=False,
+        )
     )
 
 
-async def _task_output(args: dict[str, Any], deps) -> str:
+async def _task_output(args: dict[str, Any], deps):
     task_id: str = args.get("task_id", "")
     block: bool = bool(args.get("block", False))
     timeout_ms: int = int(args.get("timeout_ms", 30000))
@@ -578,27 +586,29 @@ async def _task_output(args: dict[str, Any], deps) -> str:
             "omitted_lines": output_meta["omitted_lines"],
         }
 
-    return json.dumps(
-        {
-            "task_id": task_id,
-            "status": status,
-            "exit_code": exit_code,
-            "elapsed_ms": elapsed_ms,
-            "since_last_output_ms": since_last_output_ms,
-            "output": output_meta["text"],
-            "truncation": truncation,
-            "output_path": task.log_path,
-        },
-        ensure_ascii=False,
+    return tool_ok(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "status": status,
+                "exit_code": exit_code,
+                "elapsed_ms": elapsed_ms,
+                "since_last_output_ms": since_last_output_ms,
+                "output": output_meta["text"],
+                "truncation": truncation,
+                "output_path": task.log_path,
+            },
+            ensure_ascii=False,
+        )
     )
 
 
-async def _task_stop(args: dict[str, Any], deps) -> str:
+async def _task_stop(args: dict[str, Any], deps):
     task_id: str = args.get("task_id", "")
     if task_id not in _BG_REGISTRY:
-        return json.dumps({"task_id": task_id, "status": "not_found"}, ensure_ascii=False)
+        return tool_ok(json.dumps({"task_id": task_id, "status": "not_found"}, ensure_ascii=False))
     _bg_kill(task_id)
-    return json.dumps({"task_id": task_id, "status": "stopped"}, ensure_ascii=False)
+    return tool_ok(json.dumps({"task_id": task_id, "status": "stopped"}, ensure_ascii=False))
 
 
 # ── 辅助函数 ────────────────────────────────────────────────────────

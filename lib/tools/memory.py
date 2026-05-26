@@ -5,12 +5,13 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
 from lib.memory.markdown import AsyncMarkdownStore
 from lib.memory.understanding import update_ai_understanding
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,7 +27,7 @@ async def _bg_refresh_understanding(user_id: str) -> None:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
 
-async def _search(args: dict[str, Any], deps) -> str:
+async def _search(args: dict[str, Any], deps):
     query = args.get("query", "").strip()
     if not query:
         return tool_error("请提供搜索关键词")
@@ -51,11 +52,11 @@ async def _search(args: dict[str, Any], deps) -> str:
     # 预留：未来可通过 deps.memory_manager 获取外部 provider 召回
 
     if results:
-        return "\n".join(f"- {r}" for r in results)
-    return "未找到相关内容。"
+        return tool_ok("\n".join(f"- {r}" for r in results))
+    return tool_ok("未找到相关内容。")
 
 
-async def _memory(args: dict[str, Any], deps) -> str:
+async def _memory(args: dict[str, Any], deps):
     action = args.get("action", "").strip().lower()
     target = args.get("target", "memory").strip().lower()
     content = args.get("content", "")
@@ -68,12 +69,21 @@ async def _memory(args: dict[str, Any], deps) -> str:
 
     user_id = deps.user_id
 
-    if action in {"replace", "remove"}:
-        return tool_error("replace / remove 暂未实现，请使用 add")
+    if action == "add":
+        return await _memory_add(args, deps, user_id, target, content)
 
-    # action == "add"
+    # action == "replace" or "remove"
+    old_text = args.get("old_text", "")
+    if not old_text or not old_text.strip():
+        return tool_error(f"{action} 操作必须提供 old_text 参数")
+
+    return await _memory_replace_remove(action, user_id, target, old_text, content)
+
+
+async def _memory_add(args: dict[str, Any], deps, user_id: str, target: str, content: str) -> Any:
+    """处理 add 操作。"""
     if not content or not content.strip():
-        return "内容为空，跳过保存。"
+        return tool_ok("内容为空，跳过保存。")
 
     # 安全扫描
     from lib.memory.markdown import _scan_memory_content
@@ -81,7 +91,7 @@ async def _memory(args: dict[str, Any], deps) -> str:
     safe, reason = _scan_memory_content(content)
     if not safe:
         logger.warning("记忆写入被拒绝", user_id=user_id, reason=reason)
-        return f"写入被拒绝: {reason}"
+        return tool_error(f"写入被拒绝: {reason}", "SAFETY")
 
     if target == "memory":
         # 写入 MEMORY.md（带日期和 category 标签）
@@ -126,7 +136,113 @@ async def _memory(args: dict[str, Any], deps) -> str:
 
     _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
 
-    return f"已记录到 {target}"
+    return tool_ok(f"已记录到 {target}", target=target)
+
+
+async def _memory_replace_remove(
+    action: str,
+    user_id: str,
+    target: str,
+    old_text: str,
+    new_content: str | None = None,
+) -> Any:
+    """处理 replace / remove 操作。
+
+    在 MEMORY.md 或 USER.md 中查找包含 old_text 的行，执行替换或删除。
+    """
+    import asyncio as _asyncio
+    import os
+    import tempfile
+
+    from lib.memory.markdown import _acquire_file_lock, _release_file_lock
+
+    # 选择文件路径
+    if target == "memory":
+        file_path = _store._memory_path(user_id)
+    else:
+        file_path = _store._about_you_path(user_id)
+
+    # 读取文件
+    existing = await _store._read(file_path)
+    if not existing.strip():
+        return tool_error(f"{target} 文件为空，无法 {action}")
+
+    # 查找匹配行
+    lines = existing.splitlines(keepends=True)
+    matches: list[int] = []
+    for i, line in enumerate(lines):
+        if old_text in line:
+            matches.append(i)
+
+    if len(matches) == 0:
+        return tool_error(f"未找到包含 '{old_text}' 的条目", hint="可用 memory_search 查看现有内容")
+    if len(matches) > 1:
+        # 返回所有匹配行的预览
+        previews = [f"  行 {i + 1}: {lines[i].strip()[:80]}" for i in matches]
+        return tool_error(
+            f"找到 {len(matches)} 条匹配，请提供更精确的 old_text",
+            hint="\n".join(previews),
+        )
+
+    match_idx = matches[0]
+    matched_line = lines[match_idx]
+
+    if action == "remove":
+        # 删除该行
+        new_lines = lines[:match_idx] + lines[match_idx + 1 :]
+        result_msg = f"已删除条目: {matched_line.strip()[:80]}"
+    else:
+        # replace
+        if not new_content or not new_content.strip():
+            return tool_error("replace 操作必须提供 content 参数")
+
+        # 安全扫描
+        from lib.memory.markdown import _scan_memory_content
+
+        safe, reason = _scan_memory_content(new_content)
+        if not safe:
+            logger.warning("记忆写入被拒绝", user_id=user_id, reason=reason)
+            return tool_error(f"写入被拒绝: {reason}", "SAFETY")
+
+        # 保留前缀（日期 + category），替换内容部分
+        # 格式: "- 2026-05-26 — [category] content"
+        prefix_match = _MATCH_ENTRY_PREFIX.match(matched_line)
+        if prefix_match:
+            prefix = prefix_match.group(0)
+            new_line = prefix + new_content + "\n"
+        else:
+            # 非标准格式，整行替换
+            new_line = matched_line.replace(old_text, new_content, 1)
+            if new_line == matched_line:
+                new_line = new_content + "\n"
+
+        new_lines = lines[:match_idx] + [new_line] + lines[match_idx + 1 :]
+        result_msg = f"已替换条目: {matched_line.strip()[:80]} → {new_content[:80]}"
+
+    # 写回文件
+    user_dir = _store._user_dir(user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = user_dir / ".lock"
+
+    lock_fd = await _asyncio.to_thread(_acquire_file_lock, lock_path)
+    try:
+        fd, temp_path = tempfile.mkstemp(dir=str(user_dir), suffix=".tmp")
+        try:
+            os.write(fd, "".join(new_lines).encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(temp_path, file_path)
+    finally:
+        await _asyncio.to_thread(_release_file_lock, lock_fd, lock_path)
+
+    # 触发 USER.md 刷新（后台，不阻塞）
+    _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+
+    return tool_ok(result_msg, target=target, action=action)
+
+
+# 匹配记忆条目前缀的正则: "- 2026-05-26 — [category] "
+_MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2} — \[[^\]]+\] ")
 
 
 def create_memory_tools() -> list[ToolDef]:
@@ -156,7 +272,7 @@ def create_memory_tools() -> list[ToolDef]:
                 "TWO TARGETS:\n"
                 "- 'memory': 环境事实、项目约定、工具 quirks、学到的教训（写入 MEMORY.md）\n"
                 "- 'user': 用户偏好、沟通风格、习惯、关系（写入 USER.md）\n\n"
-                "ACTIONS: add (新增), replace (替换 — 暂未实现), remove (删除 — 暂未实现)"
+                "ACTIONS: add (新增), replace (替换), remove (删除)"
             ),
             input_schema={
                 "type": "object",

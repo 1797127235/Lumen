@@ -100,7 +100,7 @@ def test_registry_search_risk_filter() -> None:
     assert results[0]["name"] == "safe"
 
 
-def test_registry_get_deferred_names() -> None:
+def test_registry_get_deferred_tools() -> None:
     reg = ToolRegistry()
     reg.register(
         ToolDef(name="always", description="Always on", input_schema={}, meta=ToolMeta(always_on=True)),
@@ -112,10 +112,12 @@ def test_registry_get_deferred_names() -> None:
         source_name="test_server",
     )
 
-    deferred = reg.get_deferred_names(visible=set())
-    assert "always" not in deferred["builtin"]
-    assert "deferred1" in deferred["builtin"]
-    assert "mcp_tool" in deferred["mcp"].get("test_server", [])
+    deferred = reg.get_deferred_tools(visible=set())
+    builtin_names = [name for name, _ in deferred["builtin"]]
+    assert "always" not in builtin_names
+    assert "deferred1" in builtin_names
+    mcp_names = [name for name, _ in deferred["mcp"].get("test_server", [])]
+    assert "mcp_tool" in mcp_names
 
 
 def test_registry_get_schemas() -> None:
@@ -177,24 +179,30 @@ def test_register_all_tools_and_visible() -> None:
     names = [t.name for t in visible]
     # 冷启动时只有 always_on 工具
     assert "memory_search" in names
-    assert "memory_save" in names
+    assert "memory" in names  # memory 工具（含 save/replace/remove）
     assert "get_profile" in names
     assert "tool_search" in names
+    assert "file_read" in names
+    assert "file_ls" in names
+    assert "file_grep" in names
+    assert "update_profile" in names
     # deferred 工具不可见
     assert "shell" not in names
     assert "web_search" not in names
+    assert "file_write" not in names
 
 
 def test_deferred_hint_format() -> None:
     register_all_tools()
     hint = build_deferred_tools_hint("test-conv")
     assert "可用但未加载的工具" in hint
-    # tool_search 是 meta 工具，不应出现在 builtin 列表中
-    # 但 hint 描述文本中可能提到 "tool_search"，所以只检查 builtin 行
+    # deferred 工具应该带描述（— 分隔）
+    assert "shell" in hint
+    assert "file_write" in hint
+    # tool_search 作为 meta 工具不出现在 deferred 列表项中
     lines = hint.splitlines()
-    builtin_line = next((ln for ln in lines if ln.startswith("builtin:")), "")
-    assert "tool_search" not in builtin_line
-    assert "shell" in hint or "builtin:" in hint
+    deferred_items = [ln for ln in lines if ln.startswith("- ")]
+    assert not any("tool_search" in ln for ln in deferred_items)
 
 
 # ── tool_search 元工具测试 ─────────────────────────────────────────
@@ -205,7 +213,7 @@ async def test_tool_search_select_exact() -> None:
     register_all_tools()
     deps = FakeDeps(conversation_id="conv-select")
     result = await _tool_search({"query": "select:shell"}, deps)
-    data = json.loads(result)
+    data = json.loads(result.return_value)
     assert any(r["name"] == "shell" for r in data["matched"])
 
 
@@ -214,8 +222,7 @@ async def test_tool_search_keyword() -> None:
     register_all_tools()
     deps = FakeDeps(conversation_id="conv-keyword")
     result = await _tool_search({"query": "搜索网页"}, deps)
-    data = json.loads(result)
-    assert any(r["name"] == "web_search" for r in data["matched"])
+    data = json.loads(result.return_value)
     assert any(r["name"] == "web_search" for r in data["matched"])
 
 
@@ -227,7 +234,7 @@ async def test_tool_search_already_loaded() -> None:
     await _tool_search({"query": "select:shell"}, deps)
     # 再次 select
     result = await _tool_search({"query": "select:shell"}, deps)
-    data = json.loads(result)
+    data = json.loads(result.return_value)
     assert "shell" in data["already_loaded"]
 
 
@@ -237,7 +244,7 @@ async def test_tool_search_risk_filter() -> None:
     deps = FakeDeps(conversation_id="conv-risk")
     # 搜索 shell，但只允许 read-only
     result = await _tool_search({"query": "select:shell", "allowed_risk": ["read-only"]}, deps)
-    data = json.loads(result)
+    data = json.loads(result.return_value)
     assert "shell" in data.get("tip", "")  # 风险等级不符提示
     assert not any(r["name"] == "shell" for r in data["matched"])
 
@@ -247,7 +254,7 @@ async def test_tool_search_empty_query() -> None:
     register_all_tools()
     deps = FakeDeps(conversation_id="conv-empty")
     result = await _tool_search({"query": ""}, deps)
-    assert "工具错误" in result
+    assert "❌" in result.return_value
 
 
 # ── 预加载流转测试 ─────────────────────────────────────────────────
@@ -266,7 +273,7 @@ async def test_unlocked_tool_visible_next_turn() -> None:
 
     # 第一轮中调用 tool_search 解锁 shell
     result = await _tool_search({"query": "select:shell"}, deps)
-    data = json.loads(result)
+    data = json.loads(result.return_value)
     assert any(r["name"] == "shell" for r in data["matched"])
 
     # 第二轮：shell 已预加载，可见

@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic_ai import ToolReturn
+
 
 @dataclass
 class ToolMeta:
@@ -26,11 +28,22 @@ class ToolDef:
     meta: ToolMeta = field(default_factory=ToolMeta)
 
 
-def tool_ok(text: str) -> str:
-    return text
+def tool_ok(text: str, **metadata: Any) -> ToolReturn:
+    """工具成功返回。
+
+    text 发给 LLM；metadata 仅应用层可见（日志、追踪）。
+    """
+    return ToolReturn(return_value=text, metadata=metadata if metadata else None)
 
 
-def tool_error(message: str, code: str = "") -> str:
+def tool_error(message: str, code: str = "", **metadata: Any) -> ToolReturn:
+    """工具错误返回。
+
+    LLM 看到 ❌ 前缀 + 错误信息；code / metadata 仅应用层可见。
+    """
+    prefix = f"❌[{code}]" if code else "❌"
+    meta: dict[str, Any] = {"error": True}
     if code:
-        return f"[工具错误/{code}] {message}"
-    return f"[工具错误] {message}"
+        meta["code"] = code
+    meta.update(metadata)
+    return ToolReturn(return_value=f"{prefix} {message}", metadata=meta)

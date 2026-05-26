@@ -18,7 +18,7 @@ def wrap_with_logging(tools: list[ToolDef]) -> list[ToolDef]:
     def wrap(t: ToolDef) -> ToolDef:
         orig = t.execute
 
-        async def logged(args: dict[str, Any], deps, _orig=orig, _name=t.name) -> str:
+        async def logged(args: dict[str, Any], deps, _orig=orig, _name=t.name):
             start = time.perf_counter()
             try:
                 result = await _orig(args, deps)
@@ -41,7 +41,7 @@ def wrap_with_budget(tools: list[ToolDef], limit: int = 20) -> list[ToolDef]:
     def wrap(t: ToolDef) -> ToolDef:
         orig = t.execute
 
-        async def budgeted(args: dict[str, Any], deps, _orig=orig, _name=t.name) -> str:
+        async def budgeted(args: dict[str, Any], deps, _orig=orig, _name=t.name):
             used = deps.usage_budget.get("calls", 0)
             if used >= limit:
                 return tool_error(f"工具调用次数已达上限 ({used}/{limit})，请直接回答", "BUDGET")

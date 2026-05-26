@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,7 +74,7 @@ _PROVIDERS = {
 # ── 工具执行函数 ───────────────────────────────────────────────────
 
 
-async def _web_search(args: dict[str, Any], deps) -> str:
+async def _web_search(args: dict[str, Any], deps):
     from core.config import get_settings
 
     query = args.get("query", "").strip()
@@ -108,7 +108,7 @@ async def _web_search(args: dict[str, Any], deps) -> str:
         return tool_error(f"搜索失败：{e}")
 
     if not results:
-        return f"未找到关于「{query}」的相关结果。"
+        return tool_ok(f"未找到关于「{query}」的相关结果。")
 
     lines = [f"搜索「{query}」，来源：{provider}，共 {len(results)} 条结果：\n"]
     for i, r in enumerate(results, 1):
@@ -117,7 +117,7 @@ async def _web_search(args: dict[str, Any], deps) -> str:
         if r["snippet"]:
             lines.append(f"   {r['snippet'][:200]}")
         lines.append("")
-    return "\n".join(lines)
+    return tool_ok("\n".join(lines), provider=provider, results=len(results))
 
 
 # ── 工具注册 ──────────────────────────────────────────────────────

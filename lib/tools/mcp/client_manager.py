@@ -9,6 +9,7 @@ from typing import Any
 
 from mcp import ClientSession
 
+from lib.tools._base import tool_error, tool_ok
 from lib.tools.mcp.config_store import load_mcp_servers
 from lib.tools.mcp.models import McpServerConfig, McpServerStatus
 from lib.tools.mcp.transport import create_sse_transport, create_stdio_transport
@@ -100,7 +101,7 @@ class McpClientManager:
 
     # -- 工具调用 --
 
-    async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> str:
+    async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]):
         """调用指定 server 的 tool。
 
         Args:
@@ -113,11 +114,11 @@ class McpClientManager:
         """
         conn = self._connections.get(server_name)
         if conn is None:
-            return f"[MCP 错误] Server '{server_name}' 未配置"
+            return tool_error(f"Server '{server_name}' 未配置", "MCP")
         if not conn.is_connected:
-            return f"[MCP 错误] Server '{server_name}' 未连接: {conn.error_msg}"
+            return tool_error(f"Server '{server_name}' 未连接: {conn.error_msg}", "MCP")
         if conn.session is None:
-            return f"[MCP 错误] Server '{server_name}' Session 未初始化"
+            return tool_error(f"Server '{server_name}' Session 未初始化", "MCP")
 
         try:
             result = await conn.session.call_tool(tool_name, arguments)
@@ -130,10 +131,10 @@ class McpClientManager:
                     texts.append(f"[resource: {item.uri}]")
                 else:
                     texts.append(str(item))
-            return "\n".join(texts) if texts else "(空结果)"
+            return tool_ok("\n".join(texts) if texts else "(空结果)")
         except Exception as exc:
             logger.exception("MCP tool call failed", server=server_name, tool=tool_name, error=str(exc))
-            return f"[MCP 错误] 调用 '{tool_name}' 失败: {exc}"
+            return tool_error(f"调用 '{tool_name}' 失败: {exc}", "MCP")
 
     # -- 状态查询 --
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from lib.tools._base import ToolDef, ToolMeta, tool_error
+from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from lib.tools._discovery import get_tool_discovery_state
 from lib.tools._registry import get_tool_registry
 from shared.logging import get_logger
@@ -13,7 +13,7 @@ from shared.logging import get_logger
 logger = get_logger(__name__)
 
 
-async def _tool_search(args: dict[str, Any], deps) -> str:
+async def _tool_search(args: dict[str, Any], deps):
     query: str = args.get("query", "").strip()
     top_k: int = min(int(args.get("top_k", 5)), 10)
     allowed_risk: list[str] | None = args.get("allowed_risk")
@@ -49,22 +49,25 @@ async def _tool_search(args: dict[str, Any], deps) -> str:
         excluded_names=excluded,
     )
     if not results:
-        return json.dumps(
-            {
-                "matched": [],
-                "tip": "未找到匹配工具，请换个关键词重试",
-            },
-            ensure_ascii=False,
+        return tool_ok(
+            json.dumps(
+                {
+                    "matched": [],
+                    "tip": "未找到匹配工具，请换个关键词重试",
+                },
+                ensure_ascii=False,
+            )
         )
 
     unlocked = [r["name"] for r in results]
     discovery.update(conversation_id, unlocked, always_on)
     logger.info("tool_search unlocked", conversation_id=conversation_id, unlocked=unlocked)
 
-    return json.dumps(
-        {"matched": results},
-        ensure_ascii=False,
-        indent=2,
+    return tool_ok(
+        json.dumps(
+            {"matched": results},
+            ensure_ascii=False,
+        )
     )
 
 
@@ -76,16 +79,18 @@ def _handle_select(
     discovery,
     conversation_id: str | None,
     always_on: set[str],
-) -> str:
+):
     """处理 select:A,B,C 精确加载路径。"""
     requested = [n.strip() for n in names_str.split(",") if n.strip()]
     if not requested:
-        return json.dumps(
-            {
-                "matched": [],
-                "tip": "select: 后面需要提供工具名",
-            },
-            ensure_ascii=False,
+        return tool_ok(
+            json.dumps(
+                {
+                    "matched": [],
+                    "tip": "select: 后面需要提供工具名",
+                },
+                ensure_ascii=False,
+            )
         )
 
     risk_filter = set(allowed_risk) if allowed_risk else None
@@ -127,7 +132,7 @@ def _handle_select(
     if tip_parts:
         result["tip"] = "; ".join(tip_parts)
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return tool_ok(json.dumps(result, ensure_ascii=False))
 
 
 def create_tool_search() -> ToolDef:
