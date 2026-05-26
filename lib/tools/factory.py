@@ -14,6 +14,7 @@ from lib.tools._discovery import get_tool_discovery_state
 from lib.tools._middleware import wrap_with_budget, wrap_with_logging
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
+from lib.tools.edit import create_edit_tool
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
@@ -45,6 +46,7 @@ def register_all_tools() -> ToolRegistry:
         *create_shell_tools(),
         *create_skill_tools(),
         create_tool_search(),
+        create_edit_tool(),
     ]
 
     # 应用中间件（日志 + 预算）
@@ -63,7 +65,16 @@ def _register_mcp_tools(registry: ToolRegistry) -> None:
     try:
         from lib.tools.mcp.tool_bridge import discover_mcp_tools
 
-        for server_name, tool in discover_mcp_tools():
+        mcp_tools = discover_mcp_tools()
+        if not mcp_tools:
+            return
+
+        # 和内置工具一样走中间件（日志 + 预算）
+        tools_only = [tool for _, tool in mcp_tools]
+        tools_only = wrap_with_logging(tools_only)
+        tools_only = wrap_with_budget(tools_only, limit=20)
+
+        for (server_name, _), tool in zip(mcp_tools, tools_only, strict=False):
             registry.register(tool, source_type="mcp", source_name=server_name)
     except Exception as e:
         logger.warning("MCP 工具注册失败", error=str(e))
@@ -95,7 +106,7 @@ def build_deferred_tools_hint(conversation_id: str | None) -> str:
     preloaded = set(discovery.get_visible(conversation_id))
     visible = always_on | preloaded
 
-    deferred = registry.get_deferred_names(visible=visible)
+    deferred = registry.get_deferred_tools(visible=visible)
     builtin = deferred.get("builtin", [])
     mcp = deferred.get("mcp", {})
 
@@ -106,12 +117,15 @@ def build_deferred_tools_hint(conversation_id: str | None) -> str:
     lines.append("以下工具当前不可直接调用，但你可以使用 `tool_search` 搜索并加载它们：\n")
 
     if builtin:
-        lines.append(f"\nbuiltin: {', '.join(builtin)}")
+        lines.append("")
+        for name, desc in builtin:
+            lines.append(f"- {name} — {desc}")
 
     if mcp:
-        lines.append("")
-        for server_name, tool_names in sorted(mcp.items()):
-            lines.append(f"- {server_name}: {', '.join(tool_names)}")
+        for server_name, tools in sorted(mcp.items()):
+            lines.append(f"\n**{server_name}**:")
+            for name, desc in tools:
+                lines.append(f"  - {name} — {desc}")
 
     lines.append('\n加载方式：`tool_search(query="select:工具名")` 或 `tool_search(query="功能关键词")`')
     return "\n".join(lines)
@@ -142,7 +156,7 @@ def _to_pydantic_tool(t: ToolDef):
 
     from core.agent import LumenDeps
 
-    async def handler(ctx: RunContext[LumenDeps], **kwargs) -> str:
+    async def handler(ctx: RunContext[LumenDeps], **kwargs):
         return await t.execute(kwargs, ctx.deps)
 
     handler.__name__ = t.name
