@@ -212,7 +212,7 @@ Lumen/
 │       ├── memory.py           # memory_search, memory_save
 │       ├── profile.py          # get_profile, update_profile
 │       ├── shell.py            # Shell 命令执行工具
-│       ├── files.py            # 文件读写工具
+│       ├── files.py            # 文件工具：读 / 写 / 列目录 / grep / 局部编辑（file_edit）
 │       ├── web_search.py       # 网络搜索（需配置 SEARCH_PROVIDER）
 │       └── mcp/                # MCP 工具桥接
 │           ├── client_manager.py

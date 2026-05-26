@@ -49,12 +49,11 @@
 
 ```
 lib/tools/
-├── files.py              # 现有
-├── edit.py               # 新增：file_edit + 9 Replacer
-└── factory.py            # 修改：注册 file_edit
+├── files.py              # file_read/write/ls/grep + file_edit（9 Replacer）
+└── factory.py            # file_edit 随 create_file_tools 一并注册
 ```
 
-### 3.2 lib/tools/edit.py
+### 3.2 lib/tools/files.py（file_edit 部分）
 
 ```python
 """文件局部编辑工具 — SEARCH/REPLACE 式编辑。"""
@@ -573,18 +572,17 @@ def create_edit_tool() -> ToolDef:
 
 ### 3.3 集成到 factory.py
 
-```python
-from lib.tools.edit import create_edit_tool
+file_edit 由 `create_file_tools()` 一并返回，factory 无需单独注册：
 
+```python
 all_tools = [
-    *create_file_tools(),
+    *create_file_tools(),   # 含 file_read/write/ls/grep + file_edit
     *create_memory_tools(),
     *create_profile_tools(),
     *create_web_search_tools(),
     *create_shell_tools(),
     *create_skill_tools(),
     create_tool_search(),
-    create_edit_tool(),
 ]
 ```
 
@@ -593,7 +591,7 @@ all_tools = [
 ```python
 # tests/test_file_edit.py
 import pytest
-from lib.tools.edit import replace, trim_diff, _strip_line_prefixes
+from lib.tools.files import replace, trim_diff, _strip_line_prefixes
 
 
 class TestReplace:
@@ -636,7 +634,7 @@ class TestFileEdit:
     async def test_new_file(self, tmp_path):
         class D:
             workspace_root = tmp_path
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
         result = await _file_edit({"file_path": "x.txt", "old_string": "", "new_string": "hi"}, D())
         assert (tmp_path / "x.txt").read_text() == "hi"
 
@@ -645,7 +643,7 @@ class TestFileEdit:
         class D:
             workspace_root = tmp_path
         (tmp_path / "exists.txt").write_text("original")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
         result = await _file_edit({"file_path": "exists.txt", "old_string": "", "new_string": "hi"}, D())
         assert "已存在" in str(result)
 
@@ -654,7 +652,7 @@ class TestFileEdit:
         class D:
             workspace_root = tmp_path
         (tmp_path / "a.py").write_text("DEBUG = False\n")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
         await _file_edit({
             "file_path": "a.py",
             "old_string": "1: DEBUG = False",
@@ -668,7 +666,7 @@ class TestFileEdit:
             workspace_root = tmp_path
         p = tmp_path / "bom.txt"
         p.write_bytes(b"\xef\xbb\xbfhello")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
         await _file_edit({"file_path": "bom.txt", "old_string": "hello", "new_string": "world"}, D())
         assert p.read_bytes() == b"\xef\xbb\xbfworld"
 
@@ -678,7 +676,7 @@ class TestFileEdit:
             workspace_root = tmp_path
         p = tmp_path / "crlf.txt"
         p.write_text("a\r\nb\r\nc", encoding="utf-8")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
         await _file_edit({"file_path": "crlf.txt", "old_string": "b", "new_string": "x"}, D())
         assert "\r\n" in p.read_text(encoding="utf-8")
 ```
@@ -696,7 +694,7 @@ class TestFileEdit:
 
 | 阶段 | 内容 | 时间 |
 |---|---|---|
-| 1 | 实现 `edit.py`（9 Replacer + replace + 工具函数） | 3h |
+| 1 | 实现 file_edit（9 Replacer + replace + 工具函数，合入 `files.py`） | 3h |
 | 2 | 集成到 `factory.py` | 15min |
 | 3 | 编写测试 | 2h |
 | 4 | 运行测试修复 | 1h |
