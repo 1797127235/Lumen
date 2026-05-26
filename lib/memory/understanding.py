@@ -107,6 +107,15 @@ async def _do_update_understanding(user_id: str) -> str:
     # 分离画像文本和模式洞察
     about_you_text, patterns = _parse_understanding_output(raw_output)
 
+    # 保留现有 frontmatter（如果有）
+    from lib.memory.markdown import _parse_frontmatter
+
+    existing_frontmatter, _ = _parse_frontmatter(existing)
+    if existing_frontmatter:
+        from lib.memory.markdown import _dump_frontmatter
+
+        about_you_text = "---\n" + _dump_frontmatter(existing_frontmatter) + "\n---\n\n" + about_you_text
+
     await store.write_about_you(user_id, about_you_text)
     await _update_profile_data(user_id, about_you_text, patterns)
 

@@ -52,6 +52,18 @@ class ToolCallCompleted:
     result_preview: str = ""
 
 
+@dataclass
+class TraceReady:
+    """工具调用/结果 trace 事件，用于前端展示工具调用过程"""
+
+    channel: str
+    session_key: str
+    chat_id: str
+    kind: str  # "call" | "result"
+    tool: str
+    content: str
+
+
 # ═══════════════════════════════════════════════════════════════
 #  EventBus 实现
 # ═══════════════════════════════════════════════════════════════
@@ -72,7 +84,8 @@ class EventBus:
         for handler in handlers:
             try:
                 if asyncio.iscoroutinefunction(handler):
-                    asyncio.create_task(handler(event))
+                    task = asyncio.create_task(handler(event))
+                    del task
                 else:
                     handler(event)
             except Exception as e:

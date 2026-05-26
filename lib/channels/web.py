@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 
-from lib.bus.event_bus import EventBus, StreamDeltaReady
+from lib.bus.event_bus import EventBus, StreamDeltaReady, TraceReady
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 from lib.channels.base import BaseChannel
 
@@ -26,6 +26,7 @@ class WebChannel(BaseChannel):
         """启动：订阅出站消息和流式事件"""
         self._bus.subscribe_outbound("web", self._on_response)
         self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
+        self._event_bus.on(TraceReady, self._on_trace)
         logger.info("WebChannel started")
 
     async def stop(self) -> None:
@@ -101,11 +102,37 @@ class WebChannel(BaseChannel):
     async def _on_stream_delta(self, event: StreamDeltaReady) -> None:
         """接收流式输出片段"""
         queue = self._streams.get(event.session_key)
-        if queue and event.content_delta:
+        if not queue:
+            return
+        if event.thinking_delta:
+            data = json.dumps(
+                {
+                    "type": "thinking",
+                    "content": event.thinking_delta,
+                },
+                ensure_ascii=False,
+            )
+            await queue.put(f"data: {data}\n\n")
+        if event.content_delta:
             data = json.dumps(
                 {
                     "type": "token",
                     "content": event.content_delta,
+                },
+                ensure_ascii=False,
+            )
+            await queue.put(f"data: {data}\n\n")
+
+    async def _on_trace(self, event: TraceReady) -> None:
+        """接收工具调用 trace 事件"""
+        queue = self._streams.get(event.session_key)
+        if queue:
+            data = json.dumps(
+                {
+                    "type": "trace",
+                    "kind": event.kind,
+                    "tool": event.tool,
+                    "content": event.content,
                 },
                 ensure_ascii=False,
             )

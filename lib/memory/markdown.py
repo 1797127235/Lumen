@@ -13,6 +13,7 @@ import tempfile
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from core.config import USER_DATA_DIR
 from shared.logging import get_logger
@@ -58,6 +59,65 @@ _META_RE = re.compile(r"^<!-- lumen-meta:.*?-->\n?")
 def _strip_meta(content: str) -> str:
     """剥离 about_you.md 的元数据注释行，返回纯内容。"""
     return _META_RE.sub("", content, count=1)
+
+
+# ── YAML frontmatter 解析 ──
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    """解析 Markdown 的 YAML frontmatter。
+
+    Returns:
+        (frontmatter_dict, body_without_frontmatter)
+        frontmatter_dict 为空 dict 表示没有 frontmatter。
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return {}, content
+
+    yaml_text = match.group(1)
+    body = content[match.end() :]
+
+    # 简单 YAML 解析（只支持顶层 key: value，不处理嵌套）
+    data: dict[str, Any] = {}
+    for line in yaml_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            # 尝试解析 list
+            if val.startswith("[") and val.endswith("]"):
+                val = [v.strip().strip("\"'") for v in val[1:-1].split(",") if v.strip()]
+            elif val in ("true", "True"):
+                val = True
+            elif val in ("false", "False"):
+                val = False
+            elif val in ("null", "Null", "~"):
+                val = None
+            data[key] = val
+
+    return data, body
+
+
+def _dump_frontmatter(data: dict[str, Any]) -> str:
+    """将 dict 序列化为 YAML frontmatter 字符串（不含分隔线）。"""
+    lines: list[str] = []
+    for key, val in data.items():
+        if val is None:
+            lines.append(f"{key}: null")
+        elif isinstance(val, bool):
+            lines.append(f"{key}: {'true' if val else 'false'}")
+        elif isinstance(val, list):
+            items = ", ".join(f'"{v}"' for v in val)
+            lines.append(f"{key}: [{items}]")
+        else:
+            lines.append(f"{key}: {val}")
+    return "\n".join(lines)
 
 
 def _truncate_to_limit(content: str, limit: int) -> str:

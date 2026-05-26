@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { type ComponentPropsWithoutRef, type MouseEvent, useEffect, useRef, useState } from 'react'
+import { isTauri } from '@tauri-apps/api/core'
 import ReactMarkdown from 'react-markdown'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { stat } from '@tauri-apps/plugin-fs'
+import { open as openExternal } from '@tauri-apps/plugin-shell'
 import MoodStrip from '../components/MoodStrip'
 import { useChatSession, type AttachmentMeta } from '../lib/chatSession'
 import { parseThinkSegments } from '../lib/thinkSegments'
+
+const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
 
 export default function Chat() {
   const [draft, setDraft] = useState('')
@@ -86,6 +90,58 @@ export default function Chat() {
   )
 }
 
+function isExternalHref(href: string) {
+  try {
+    const url = new URL(href, window.location.href)
+    return EXTERNAL_PROTOCOLS.has(url.protocol)
+  } catch {
+    return false
+  }
+}
+
+async function openAssistantLink(href: string) {
+  if (isTauri()) {
+    await openExternal(href)
+    return
+  }
+
+  window.open(href, '_blank', 'noopener,noreferrer')
+}
+
+function MarkdownLink({
+  href,
+  children,
+  onClick,
+  rel,
+  target,
+  ...props
+}: ComponentPropsWithoutRef<'a'>) {
+  const external = typeof href === 'string' && isExternalHref(href)
+
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    onClick?.(event)
+    if (event.defaultPrevented || !href || !external) return
+
+    event.preventDefault()
+    void openAssistantLink(href).catch((error) => {
+      console.error('Failed to open assistant link', error)
+      window.open(href, '_blank', 'noopener,noreferrer')
+    })
+  }
+
+  return (
+    <a
+      {...props}
+      href={href}
+      onClick={handleClick}
+      rel={external ? 'noopener noreferrer' : rel}
+      target={external ? '_blank' : target}
+    >
+      {children}
+    </a>
+  )
+}
+
 function AssistantBubble({
   text,
   streaming,
@@ -115,7 +171,7 @@ function AssistantBubble({
           <ThinkingCard key={i} content={seg.content} closed={seg.closed} />
         ) : (
           <div key={i} className="prose prose-sm max-w-none text-base">
-            <ReactMarkdown>{seg.content}</ReactMarkdown>
+            <ReactMarkdown components={{ a: MarkdownLink }}>{seg.content}</ReactMarkdown>
             {streaming && i === segments.length - 1 && seg.content ? (
               <span className="ink-cursor" />
             ) : null}
@@ -258,7 +314,7 @@ function InputBox({
           <button
             onClick={async () => {
               try {
-                const paths = await open({
+                const paths = await openDialog({
                   multiple: true,
                   filters: [{
                     name: '文档与图片',

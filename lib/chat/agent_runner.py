@@ -14,6 +14,7 @@ from lib.bus.event_bus import (
     StreamDeltaReady,
     ToolCallCompleted,
     ToolCallStarted,
+    TraceReady,
     TurnStarted,
 )
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
@@ -163,7 +164,7 @@ class AgentRunner:
                         model_settings=ModelSettings(max_tokens=4096),
                         usage_limits=UsageLimits(
                             request_limit=12,
-                            tool_calls_limit=10,
+                            tool_calls_limit=20,
                         ),
                     ) as stream:
                         async for event in stream:
@@ -209,6 +210,17 @@ class AgentRunner:
                                                 tool_name=item.get("tool_name", ""),
                                                 status="done" if not item.get("is_error") else "error",
                                                 result_preview=str(item.get("result", ""))[:200],
+                                            )
+                                        )
+                                    elif item.get("type") == "trace":
+                                        self._event_bus.emit(
+                                            TraceReady(
+                                                channel=msg.channel,
+                                                session_key=session_key,
+                                                chat_id=msg.chat_id,
+                                                kind=item.get("kind", "call"),
+                                                tool=item.get("tool", ""),
+                                                content=item.get("content", ""),
                                             )
                                         )
 
