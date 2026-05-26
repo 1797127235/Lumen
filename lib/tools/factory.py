@@ -14,7 +14,6 @@ from lib.tools._discovery import get_tool_discovery_state
 from lib.tools._middleware import wrap_with_budget, wrap_with_logging
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
-from lib.tools.edit import create_edit_tool
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
@@ -46,7 +45,6 @@ def register_all_tools() -> ToolRegistry:
         *create_shell_tools(),
         *create_skill_tools(),
         create_tool_search(),
-        create_edit_tool(),
     ]
 
     # 应用中间件（日志 + 预算）

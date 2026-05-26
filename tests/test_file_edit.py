@@ -2,7 +2,7 @@
 
 import pytest
 
-from lib.tools.edit import _strip_line_prefixes, replace
+from lib.tools.files import _strip_line_prefixes, replace
 
 
 class TestReplace:
@@ -46,7 +46,7 @@ class TestFileEdit:
         class D:
             workspace_root = tmp_path
 
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
 
         await _file_edit({"file_path": "x.txt", "old_string": "", "new_string": "hi"}, D())
         assert (tmp_path / "x.txt").read_text() == "hi"
@@ -57,7 +57,7 @@ class TestFileEdit:
             workspace_root = tmp_path
 
         (tmp_path / "exists.txt").write_text("original")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
 
         result = await _file_edit({"file_path": "exists.txt", "old_string": "", "new_string": "hi"}, D())
         assert "已存在" in str(result)
@@ -68,7 +68,7 @@ class TestFileEdit:
             workspace_root = tmp_path
 
         (tmp_path / "a.py").write_text("DEBUG = False\n", encoding="utf-8", newline="")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
 
         await _file_edit(
             {
@@ -87,7 +87,7 @@ class TestFileEdit:
 
         p = tmp_path / "bom.txt"
         p.write_bytes(b"\xef\xbb\xbfhello")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
 
         await _file_edit({"file_path": "bom.txt", "old_string": "hello", "new_string": "world"}, D())
         assert p.read_bytes() == b"\xef\xbb\xbfworld"
@@ -99,7 +99,7 @@ class TestFileEdit:
 
         p = tmp_path / "crlf.txt"
         p.write_text("a\r\nb\r\nc", encoding="utf-8", newline="")
-        from lib.tools.edit import _file_edit
+        from lib.tools.files import _file_edit
 
         await _file_edit({"file_path": "crlf.txt", "old_string": "b", "new_string": "x"}, D())
         assert b"\r\n" in p.read_bytes()
