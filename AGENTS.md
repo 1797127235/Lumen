@@ -12,6 +12,7 @@ Lumen — 一个真正认识你的 AI 伙伴。FastAPI + SQLAlchemy + PydanticAI
 
 - Python 3.11+
 - Node.js 18+
+- Bun 1.x+（CLI TUI 需要）
 - Rust + cargo（仅桌面开发需要）
 - Windows PowerShell 或 cmd
 
@@ -21,8 +22,11 @@ Lumen — 一个真正认识你的 AI 伙伴。FastAPI + SQLAlchemy + PydanticAI
 # Python
 pip install -r requirements.txt
 
-# 前端
+# Web 前端
 npm install
+
+# CLI TUI（单独安装）
+cd lib/channels/cli && bun install
 ```
 
 ### 3. 配置 .env
@@ -43,6 +47,23 @@ LLM_MODEL=gpt-4o            # 或 qwen-max 等
 # 或双击 start.bat
 ```
 打开 http://localhost:5173
+
+**CLI TUI 模式：**
+```bash
+# 先启动后端
+python lumen.py --mode web
+
+# 再启动 TUI（新终端窗口）
+cd lib/channels/cli && bun run dev
+```
+
+**统一启动入口（lumen.py）：**
+```bash
+python lumen.py --mode web        # 仅 Web 模式（默认）
+python lumen.py --mode cli        # 提示手动启动 TUI
+python lumen.py --mode all        # Web + Telegram + Web
+python lumen.py --port 8080       # 指定端口（默认 8000）
+```
 
 **桌面模式（推荐）：**
 ```bash
@@ -84,6 +105,34 @@ Hermes-Pure 架构下没有"事件类型"——所有长期记忆都是 `~/.lume
 2. **画像刷新**：写入后台触发 `understanding.py` 从 `memory.md` 重新生成 `about_you.md`（5 分钟防抖）
 3. **被动兜底**：`review_service.py` 在对话结束后 fork 一个 Agent 审查本轮，判断是否有值得写入 `memory.md` 的内容
 4. **外部召回**：如需语义检索，实现一个 `MemoryProvider` 插件放到 `~/.lumen/plugins/memory/<name>/`，由 `MemoryManager` 在 L2 prefetch 时调用
+
+### 开发 CLI TUI
+
+CLI TUI 是独立的 TypeScript 项目，运行时直接 HTTP 连接 Lumen 后端。
+
+**启动开发模式：**
+```bash
+cd lib/channels/cli
+bun run dev         # 启动 TUI，连接默认端口 8000
+LUMEN_PORT=8080 bun run dev   # 指定后端端口
+```
+
+**关键文件：**
+
+| 文件 | 职责 |
+|------|------|
+| `lumen/api.ts` | Lumen REST + SSE 客户端（`sendMessage`, `listConversations`, `getConfig`...） |
+| `context/sdk.tsx` | Lumen API 适配器，将 SSE 事件广播为 `LumenEvent`（`token` / `thinking` / `trace` / `response.done`） |
+| `context/sync.tsx` | OpenCode store 适配，处理 `LumenEvent` → `store.message` / `store.part`，SolidJS 细粒度响应 |
+| `context/local.tsx` | model / agent / session 本地状态，在 mount 时从 `/api/config` 拉取实际 provider+model |
+| `routes/session/index.tsx` | 对话页面，渲染 `UserMessage` / `AssistantMessage`，含 thinking 和 tool-invocation part |
+| `component/logo.tsx` | 品牌 Logo，含 ripple 点击、hold-charge、idle shimmer 动画 |
+| `logo.ts` | Logo 字形数据（block 字体风格，LU 暗色 + MEN 亮色） |
+
+**SolidJS 响应式关键约束：**
+- Part 存储在 `store.part[messageID]`（独立于 message），使用 `setStore("part", msgID, partIdx, "text", val)` 直接路径更新才能触发细粒度响应
+- `produce()` 深层突变对标量值不可靠，只用于向数组追加元素
+- 流式 token 累积在 `streamingText Map`，每次 token 事件都更新 `store.part`
 
 ### 调试流式对话
 
@@ -163,11 +212,25 @@ Lumen/
 │   ├── bus/                    # 事件总线 + 消息队列
 │   │   ├── event_bus.py        # EventBus：进程内事件发布订阅
 │   │   └── queue.py            # MessageBus：异步消息队列（inbound/outbound）
-│   ├── channels/               # 多渠道抽象（Web / Telegram / CLI）
+│   ├── channels/               # 多渠道抽象（Web / Telegram / CLI TUI）
 │   │   ├── base.py             # BaseChannel 抽象基类
 │   │   ├── web.py              # WebChannel：SSE 流式对话
 │   │   ├── telegram.py         # Telegram Bot 渠道
-│   │   └── cli.py              # CLI 渠道
+│   │   └── cli/                # CLI TUI 渠道（独立 TypeScript/Bun 项目）
+│   │       ├── package.json    # Bun 依赖（@opentui/solid、SolidJS）
+│   │       ├── logo.ts         # Lumen 品牌 Logo（block 字体，含交互 shimmer）
+│   │       ├── lumen/api.ts    # Lumen FastAPI REST + SSE 客户端
+│   │       ├── context/        # SolidJS 响应式数据层
+│   │       │   ├── sdk.tsx     # Lumen API 适配器（sendMessage / abort / CRUD）
+│   │       │   ├── sync.tsx    # SSE 事件 → OpenCode store 映射层
+│   │       │   └── local.tsx   # 从 /api/config 动态获取 model 信息
+│   │       ├── routes/         # 页面路由
+│   │       │   ├── home.tsx    # 首页（Logo + Prompt 输入框）
+│   │       │   └── session/    # 对话页（流式文本 + 思考过程 + 工具调用）
+│   │       ├── component/      # 通用 UI 组件
+│   │       │   ├── logo.tsx    # 交互式 Logo（ripple / idle shimmer / hold-charge）
+│   │       │   └── prompt/     # 输入框（自控光标闪烁 600ms）
+│   │       └── stubs/          # OpenCode SDK 接口桩（适配 Lumen 后端）
 │   ├── chat/                   # 对话模块
 │   │   ├── agent_runner.py     # AgentRunner：后台消费消息，运行 Agent Loop
 │   │   ├── session.py          # 会话状态管理
@@ -229,6 +292,7 @@ Lumen/
 │       ├── providers.py        # Provider 管理 API
 │       ├── mcp.py              # MCP 服务器管理 API
 │       └── partner.py        # 伙伴系统 API（情绪状态）
+├── lumen.py                    # 统一启动入口（--mode web/cli/all/telegram）
 ├── src/                        # React 前端（Vite）
 │   ├── App.tsx
 │   ├── main.tsx                # 路由配置
@@ -280,6 +344,7 @@ Lumen/
 | `GET` | `/api/chat/history?user_id=&limit=` | 对话历史列表 |
 | `GET` | `/api/chat/{conversation_id}` | 单条会话消息详情 |
 | `DELETE` | `/api/chat/{conversation_id}` | 删除对话及其消息 |
+| `PATCH` | `/api/chat/{conversation_id}` | 更新对话（重命名 title / 置顶 is_pinned） |
 | `GET` | `/api/memory/me` | 读取用户画像记忆内容 |
 | `GET` | `/api/memory/stats?user_id=` | 记忆统计 |
 | `GET` | `/api/memory/list?user_id=` | 记忆列表 |
@@ -378,25 +443,30 @@ Lumen/
 
 ### 多渠道 Bus/Channel 架构
 
-Lumen 通过统一的 Bus/Channel 层同时支持三种接入方式，后端业务逻辑与渠道完全解耦：
+Lumen 通过统一的 Bus/Channel 层同时支持多种接入方式，后端业务逻辑与渠道完全解耦：
 
 ```
-WebChannel (SSE)        TelegramChannel (Polling)     CLIChannel (stdin)
-      │                          │                           │
-      └──────────────────────────┼───────────────────────────┘
-                                 ↓
-                         MessageBus (lib/bus/)
-                    InboundMessage → AgentRunner
-                    AgentRunner → OutboundMessage
-                                 ↓
-                         EventBus (进程内 pub/sub)
-              StreamDeltaReady / ToolCallStarted / TurnStarted / ...
+WebChannel (SSE)   TelegramChannel (Polling)   CLI TUI (独立 TypeScript/Bun 进程)
+      │                    │                              │
+      │                    │                    HTTP SSE → /api/chat
+      └────────────────────┼──────────────────────────────┘
+                           ↓
+                   MessageBus (lib/bus/)
+              InboundMessage → AgentRunner
+              AgentRunner → OutboundMessage
+                           ↓
+                   EventBus (进程内 pub/sub)
+        StreamDeltaReady / ToolCallStarted / TurnStarted / ...
 ```
 
 - **BaseChannel**（`lib/channels/base.py`）：抽象基类，`start()`/`stop()`/`send_message()`
 - **WebChannel**（`lib/channels/web.py`）：SSE 流式，前端 / Tauri 接入
 - **TelegramChannel**（`lib/channels/telegram.py`）：Polling 模式，缓冲流式增量，整条发送
-- **CLIChannel**（`lib/channels/cli.py`）：读 stdin，写 stdout
+- **CLI TUI**（`lib/channels/cli/`）：独立 TypeScript/Bun 项目，直接调用 Lumen REST API
+  - 基于 OpenCode 的 opentui 框架（SolidJS + 终端渲染引擎）
+  - `context/sdk.tsx`：Lumen API 适配层，将 SSE 事件转发到 OpenCode store
+  - `context/sync.tsx`：OpenCode 数据层适配，将 Lumen 对话映射为 Session/Message/Part
+  - 独立运行，无需 Python 进程间通信：`cd lib/channels/cli && bun run dev`
 - **AgentRunner**（`lib/chat/agent_runner.py`）：后台消费 MessageBus，驱动 PydanticAI Agent Loop
 
 **Tauri 打包**（`src-tauri/src/lib.rs`）：将 `python -m uvicorn main:app` 作为 sidecar subprocess 启动，通过 Windows Job Object 绑定生命周期，关闭窗口自动终止 Python 进程。Tauri 是分发壳，不影响 Channel 运行模式。
@@ -464,6 +534,9 @@ WebChannel (SSE)        TelegramChannel (Polling)     CLIChannel (stdin)
 
 ## Gotchas
 
+- **CLI TUI 独立运行**：`lib/channels/cli/` 是独立 TypeScript/Bun 项目，不通过 Python 进程间通信，直接 HTTP 连接后端。环境变量 `LUMEN_PORT` 控制后端端口（默认 8000）
+- **CLI TUI SolidJS 响应式**：`store.part[msgID]` 需用直接路径 `setStore("part", msgID, i, "field", val)` 更新，`produce()` 深层突变对标量不触发细粒度响应
+- **CLI TUI 光标闪烁**：opentui 原生 API 只支持开/关，不支持速率控制。速率由 `setInterval` 软件实现（600ms），在 `onCleanup` 中清理 timer
 - `lib/chat/agent_runner.py` 流式对话在持久化时使用 `db.commit()`，确保用户消息立即落库，流中断不丢失
 - `update_profile` 中 `null` 可以清空字段（通过 `model_fields_set` 区分"未传"和"传 null"）
 - `chatSession.tsx` 使用 `sessionStorage` 持久化 conversationId，刷新页面不丢失对话
