@@ -16,11 +16,11 @@ _engine = None
 _async_session_maker = None
 
 
-def init_db(database_url: str | None = None):
+def init_db(database_url: str | None = None, echo: bool | None = None):
     global _engine, _async_session_maker
     settings = get_settings()
     url = database_url or settings.database_url
-    _engine = create_async_engine(url, echo=settings.debug)
+    _engine = create_async_engine(url, echo=settings.debug if echo is None else echo)
     _async_session_maker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 

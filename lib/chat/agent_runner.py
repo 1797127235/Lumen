@@ -272,6 +272,7 @@ class AgentRunner:
                         chat_id=msg.chat_id,
                         content=state.full_content,
                         thinking=state.thinking_content or None,
+                        metadata={"usage": state.usage_data} if state.usage_data else {},
                     )
                 )
 

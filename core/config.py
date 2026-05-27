@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     llm_model: str = "qwen-plus"
     llm_api_key: str = ""
     llm_base_url: str = ""
+    # 模型上下文窗口上限（token）。0 = 由 CLI 从 models.dev 解析（带本地缓存）。
+    llm_context_limit: int = 0
 
     # 旧字段兼容（迁移后仅读取）
     dashscope_api_key: str = ""
@@ -177,6 +179,7 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "llm_model",
         "llm_api_key",
         "llm_base_url",
+        "llm_context_limit",
         "embedding_provider",
         "embedding_model",
         "embedding_api_key",

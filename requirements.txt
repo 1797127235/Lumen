@@ -49,6 +49,10 @@ mcp>=1.12.0
 python-telegram-bot>=22.0
 telegramify-markdown>=1.1.0
 
+# CLI 交互界面（独立应用：python -m lib.channels.cli）
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+
 # 依赖冲突修复：limits 4.4.1~4.8.x 限制 packaging<25，与 xai-sdk 冲突
 # limits 5.0.0+ 已解除上限
 limits>=5.0.0

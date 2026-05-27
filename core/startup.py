@@ -103,14 +103,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("TelegramChannel 启动失败（网络或 Token 问题），Web 端不受影响: %s", e)
 
-    # CLIChannel（CLI_MODE=true 时启用）
-    if os.getenv("CLI_MODE", "").lower() == "true":
-        from lib.channels.cli import CLIChannel
-
-        cli_channel = CLIChannel(bus, event_bus)
-        await cli_channel.start()
-        channels.append(cli_channel)
-        logger.info("CLIChannel enabled")
+    # CLI 已改为独立应用（python -m lib.channels.cli），不再挂在 FastAPI lifespan
 
     # 启动 AgentRunner
     runner = AgentRunner(bus, event_bus)
