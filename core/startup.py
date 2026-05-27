@@ -81,9 +81,10 @@ async def lifespan(app: FastAPI):
 
     # 启动 Channels（配置驱动）
     channels = []
+    enable_web = os.getenv("LUMEN_ENABLE_WEB", "1") != "0"
 
-    # WebChannel（始终启用，除非显式关闭）
-    if getattr(settings, "enable_web", True):
+    # WebChannel（配置驱动，默认启用）
+    if enable_web and getattr(settings, "enable_web", True):
         web_channel = WebChannel(bus, event_bus)
         await web_channel.start()
         channels.append(web_channel)
@@ -103,7 +104,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("TelegramChannel 启动失败（网络或 Token 问题），Web 端不受影响: %s", e)
 
-    # CLI 已改为独立应用（python -m lib.channels.cli），不再挂在 FastAPI lifespan
+    # CLI TUI 由 lumen.py 通过 --mode cli 管理，不在此处启动
+    # 独立运行: cd lib/channels/cli && bun run dev
 
     # 启动 AgentRunner
     runner = AgentRunner(bus, event_bus)

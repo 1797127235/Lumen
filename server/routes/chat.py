@@ -32,6 +32,12 @@ class ChatRequest(BaseModel):
     attachments: list[str] = []  # 本地绝对路径列表
 
 
+class ConversationUpdate(BaseModel):
+    title: str | None = None
+    is_pinned: bool | None = None
+    user_id: str = "demo_user"
+
+
 class ConversationSummary(BaseModel):
     conversation_id: str
     title: str | None
@@ -168,3 +174,22 @@ async def delete_conversation(
     await cleanup_session_files(conversation_id)
 
     return {"deleted": True}
+
+
+@router.patch("/{conversation_id}")
+async def update_conversation(
+    conversation_id: str,
+    req: ConversationUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    conv = await db.get(Conversation, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if conv.user_id != req.user_id:
+        raise HTTPException(status_code=403, detail="无权修改")
+    if req.title is not None:
+        conv.title = req.title
+    if req.is_pinned is not None:
+        conv.is_pinned = req.is_pinned
+    await db.commit()
+    return {"ok": True}

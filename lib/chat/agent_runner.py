@@ -101,7 +101,7 @@ class AgentRunner:
         async with get_async_session_maker()() as db:
             try:
                 # 确保会话存在
-                conv = await ensure_conversation(db, user_id, None, user_input)
+                conv = await ensure_conversation(db, user_id, msg.chat_id, user_input)
                 if isinstance(conv, str):
                     await self._bus.publish_outbound(
                         OutboundMessage(
