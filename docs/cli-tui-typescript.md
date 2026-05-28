@@ -2,7 +2,7 @@
 
 ## 背景
 
-原 `lib/channels/cli.py`（prompt_toolkit Python TUI）已删除。  
+原 `channels/cli.py`（prompt_toolkit Python TUI）已删除。  
 目标：用与 opencode 相同的技术栈（`@opentui/solid` + SolidJS）重写 CLI，  
 视觉和交互对齐 opencode，数据层换成 Lumen 自己的 FastAPI 后端。
 
@@ -26,7 +26,7 @@
 ## 目录结构
 
 ```
-lib/channels/cli/
+channels/cli/
   package.json
   tsconfig.json
   src/

@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "tauri": "cargo tauri"
+    "tauri": "cd channels/desktop && cargo tauri"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
