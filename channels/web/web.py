@@ -5,10 +5,10 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 
-from lib.bus.event_bus import EventBus, StreamDeltaReady, TraceReady
-from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 from channels.base import BaseChannel
 from channels.web.formatters import SSEFormatter
+from lib.bus.event_bus import EventBus, StreamDeltaReady, TraceReady
+from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,4 @@ class WebChannel(BaseChannel):
         """接收工具调用 trace 事件"""
         queue = self._streams.get(event.session_key)
         if queue:
-            await queue.put(
-                self._formatter.format_trace(event.kind, event.tool, event.content)
-            )
+            await queue.put(self._formatter.format_trace(event.kind, event.tool, event.content))

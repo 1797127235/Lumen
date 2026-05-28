@@ -71,9 +71,9 @@ async def lifespan(app: FastAPI):
     # ═══════════════════════════════════════════════════════════
     settings = get_settings()
 
+    from channels.web.web import WebChannel
     from lib.bus.event_bus import EventBus
     from lib.bus.queue import MessageBus
-    from channels.web.web import WebChannel
     from lib.chat.agent_runner import AgentRunner
 
     bus = MessageBus()
