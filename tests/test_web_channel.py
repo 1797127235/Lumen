@@ -4,7 +4,7 @@ import pytest
 
 from lib.bus.event_bus import EventBus, StreamDeltaReady
 from lib.bus.queue import MessageBus, OutboundMessage
-from lib.channels.web import WebChannel
+from channels.web.web import WebChannel
 
 
 @pytest.mark.asyncio

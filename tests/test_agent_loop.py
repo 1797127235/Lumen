@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
-from core.agent import LumenDeps, create_agent, get_agent
+from core.agent import LumenDeps, _lumen_agent, get_agent
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def mock_deps():
 
 def test_create_agent():
     """测试 Agent 创建"""
-    agent = create_agent()
+    agent = _lumen_agent.create()
     assert agent is not None
     assert agent._deps_type == LumenDeps
 
@@ -48,16 +48,14 @@ def test_get_agent_config_cache():
 @pytest.mark.asyncio
 async def test_agent_has_tools():
     """测试 Agent 工具注册"""
-    agent = create_agent()
-    # PydanticAI Agent 应该有注册的工具
-    # 注意：具体的工具检查依赖于 PydanticAI 的内部实现
+    agent = _lumen_agent.create()
     assert agent is not None
 
 
 @pytest.mark.asyncio
 async def test_agent_system_prompt():
     """测试 Agent 系统提示词"""
-    agent = create_agent()
+    agent = _lumen_agent.create()
     # 验证系统提示词包含关键信息
     # PydanticAI 使用 _system_prompts (复数) 存储系统提示词
     assert len(agent._system_prompts) > 0

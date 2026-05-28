@@ -4,7 +4,7 @@ import pytest
 
 from lib.bus.event_bus import EventBus
 from lib.bus.queue import MessageBus
-from lib.channels.telegram import TelegramChannel
+from channels.telegram.telegram import TelegramChannel
 
 
 @pytest.mark.asyncio
