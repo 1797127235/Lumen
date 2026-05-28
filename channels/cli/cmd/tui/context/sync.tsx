@@ -66,23 +66,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       message: {},
       part: {},
       todo: {},
-      provider: [
-        // Lumen uses Claude — provide a stub provider so the UI doesn't show "no provider" warning
-        {
-          id: "anthropic",
-          name: "Anthropic",
-          env: [],
-          models: {
-            "claude-sonnet-4-6": {
-              id: "claude-sonnet-4-6",
-              name: "Claude Sonnet 4.6",
-              context: 200000,
-              cost: { input: 3, output: 15 },
-            },
-          },
-        } as unknown as Provider,
-      ],
-      provider_default: { anthropic: "claude-sonnet-4-6" },
+      provider: [],
+      provider_default: {},
       provider_next: { providers: [], all: [] as Provider[], connected: [] as string[] },
       console_state: emptyConsoleState(),
       provider_auth: {},
@@ -316,9 +301,35 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
     }
 
+    async function refreshProviders() {
+      try {
+        const res = await fetch(`${LumenApi.BASE_URL}/providers/summary`)
+        if (!res.ok) return
+        const data = await res.json()
+        const providers: Provider[] = (data.providers ?? []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          env: p.env ?? [],
+          models: Object.fromEntries(
+            (p.models ?? []).map((mid: string) => [
+              mid,
+              { id: mid, name: mid, cost: { input: 0, output: 0 } },
+            ]),
+          ),
+        }))
+        if (providers.length > 0) {
+          setStore("provider", providers)
+          setStore("provider_next", { providers, all: providers, connected: [] as string[] })
+        }
+      } catch {
+        // 后端不可用时保持空数组，不影响启动
+      }
+    }
+
     onMount(async () => {
       await refreshSessions()
       await refreshCommands()
+      await refreshProviders()
       setStatusSignal("complete")
       setReadySignal(true)
     })

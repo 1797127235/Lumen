@@ -58,7 +58,7 @@ def run_cli(port: int) -> None:
         print("  [ERROR] bun 未安装。请先安装: https://bun.sh")
         sys.exit(1)
 
-    cli_dir = Path(__file__).parent / "lib" / "channels" / "cli"
+    cli_dir = Path(__file__).parent / "channels" / "cli"
 
     if not (cli_dir / "node_modules").exists():
         print("  [CLI] 安装依赖...")

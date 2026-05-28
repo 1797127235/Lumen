@@ -77,6 +77,8 @@ export interface SendOptions {
   message: string
   conversationId?: string
   userId?: string
+  model?: string
+  provider?: string
   onToken(token: string): void
   onThinking(delta: string): void
   onTrace(kind: string, tool: string, content: string): void
@@ -86,12 +88,18 @@ export interface SendOptions {
 }
 
 export async function sendMessage(opts: SendOptions): Promise<void> {
-  const { message, conversationId, userId = "demo_user", signal } = opts
+  const { message, conversationId, userId = "demo_user", model, provider, signal } = opts
 
   const res = await fetch(`${BASE_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, conversation_id: conversationId ?? null, user_id: userId }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId ?? null,
+      user_id: userId,
+      model: model ?? null,
+      provider: provider ?? null,
+    }),
     signal,
   })
 

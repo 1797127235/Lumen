@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
 
     from lib.bus.event_bus import EventBus
     from lib.bus.queue import MessageBus
-    from lib.channels.web import WebChannel
+    from channels.web.web import WebChannel
     from lib.chat.agent_runner import AgentRunner
 
     bus = MessageBus()
@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
     # TelegramChannel（TELEGRAM_BOT_TOKEN 存在时启用）
     telegram_token = getattr(settings, "telegram_bot_token", None) or os.getenv("TELEGRAM_BOT_TOKEN")
     if telegram_token:
-        from lib.channels.telegram import TelegramChannel
+        from channels.telegram.telegram import TelegramChannel
 
         tg_channel = TelegramChannel(telegram_token, bus, event_bus)
         try:

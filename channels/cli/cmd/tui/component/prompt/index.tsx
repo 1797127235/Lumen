@@ -50,6 +50,7 @@ import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogSessionList } from "../dialog-session-list"
+import { DialogModel } from "../dialog-model"
 import {
   confirmWorkspaceFileChanges,
   openWorkspaceSelect,
@@ -1199,14 +1200,24 @@ export function Prompt(props: PromptProps) {
           .catch(() => {})
         if (editorParts.length > 0) editor.markSelectionSent()
       } else {
-        // /resume 或 /delete 无参数 → 打开会话列表弹窗（内置删除功能）
-        if ((cmdName === "resume" || cmdName === "delete") && !args.trim()) {
-          dialog.replace(() => <DialogSessionList />)
-          input.clear()
-          input.extmarks.clear()
-          setStore("prompt", { input: "", parts: [] })
-          setStore("extmarkToPartIndex", new Map())
-          return true
+        // 纯客户端命令：不走后端，直接打开对应 dialog
+        if (!args.trim()) {
+          if (cmdName === "model") {
+            dialog.replace(() => <DialogModel />)
+            input.clear()
+            input.extmarks.clear()
+            setStore("prompt", { input: "", parts: [] })
+            setStore("extmarkToPartIndex", new Map())
+            return true
+          }
+          if (cmdName === "resume" || cmdName === "delete") {
+            dialog.replace(() => <DialogSessionList />)
+            input.clear()
+            input.extmarks.clear()
+            setStore("prompt", { input: "", parts: [] })
+            setStore("extmarkToPartIndex", new Map())
+            return true
+          }
         }
 
         try {
@@ -1257,6 +1268,19 @@ export function Prompt(props: PromptProps) {
               // 本地展示，不发给 AI
               if (result.response) {
                 toast.show({ message: result.response, variant: "info", duration: 8000 })
+              }
+              break
+            case "model_list":
+              // 打开模型选择 dialog
+              dialog.replace(() => <DialogModel />)
+              break
+            case "model_set":
+              // 直接设置模型
+              if (result.model) {
+                local.model.set({
+                  providerID: result.provider ?? local.model.current().providerID,
+                  modelID: result.model,
+                })
               }
               break
             case "exit":

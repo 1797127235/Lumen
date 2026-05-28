@@ -106,7 +106,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return false
         },
         toggleFavorite(_model: typeof DEFAULT_MODEL) {},
-        set(_model: typeof DEFAULT_MODEL, _opts?: { recent?: boolean }) {},
+        set(model: typeof DEFAULT_MODEL, _opts?: { recent?: boolean }) {
+          setModelInfo(prev => ({
+            ...prev,
+            providerID: model.providerID,
+            modelID: model.modelID,
+            provider: model.providerID.charAt(0).toUpperCase() + model.providerID.slice(1),
+            model: model.modelID,
+          }))
+        },
         cycle(_direction: 1 | -1) {},
         cycleFavorite(_direction: 1 | -1) {},
         variant: {
