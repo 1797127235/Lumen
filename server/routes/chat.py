@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request  # pyright: ignore[reportMissingImports]
 from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 
 from core.db import get_db
 from lib.chat.models import Conversation, Message
+from channels.web.formatters import SSEFormatter
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +29,9 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
     user_id: str = "demo_user"
-    attachments: list[str] = []  # 本地绝对路径列表
+    attachments: list[str] = []
+    model: str | None = None
+    provider: str | None = None
 
 
 class ConversationUpdate(BaseModel):
@@ -69,11 +71,14 @@ async def send_message(req: ChatRequest, request: Request):
     web_channel = request.app.state.web_channel
 
     async def sse_stream():
+        formatter = SSEFormatter()
         try:
             async for event in web_channel.handle_request(
                 user_id=req.user_id,
                 conversation_id=req.conversation_id,
                 message=req.message,
+                model=req.model,
+                provider=req.provider,
             ):
                 yield event
         except asyncio.CancelledError:
@@ -81,7 +86,7 @@ async def send_message(req: ChatRequest, request: Request):
             return
         except Exception as exc:
             logger.warning("SSE stream error", error=str(exc), conversation_id=req.conversation_id)
-            yield f"data: {json.dumps({'type': 'error', 'message': '连接中断'}, ensure_ascii=False)}\n\n"
+            yield formatter.format_error("连接中断")
 
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
 

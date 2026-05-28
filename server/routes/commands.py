@@ -36,6 +36,8 @@ class CommandExecuteResponse(BaseModel):
     text: str | None = None
     response: str | None = None
     error: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @router.get("/list", response_model=list[CommandItem])
@@ -57,6 +59,7 @@ async def list_commands():
         CommandItem(name="resume", description="恢复指定会话", arg_required=True),
         CommandItem(name="delete", description="删除会话", arg_required=True),
         CommandItem(name="rename", description="重命名会话", arg_required=True),
+        CommandItem(name="model", description="切换模型，无参数时打开选择列表"),
         CommandItem(name="exit", description="退出 TUI"),
         CommandItem(name="quit", description="退出 TUI（exit 别名）"),
         CommandItem(name="help", description="显示帮助信息"),
@@ -79,6 +82,22 @@ async def execute_command(req: CommandExecuteRequest, db: AsyncSession = Depends
             return CommandExecuteResponse(ok=False, error=result)
         await db.commit()
         return CommandExecuteResponse(ok=True, action="switch", session_id=result.conversation_id)
+
+    if cmd == "model":
+        if not args:
+            # 无参数 → 告诉 TUI 打开选择对话框
+            return CommandExecuteResponse(ok=True, action="model_list")
+        # 有参数：provider/model 或直接 model
+        if "/" in args:
+            provider_arg, _, model_arg = args.partition("/")
+        else:
+            provider_arg, model_arg = None, args.strip()
+        return CommandExecuteResponse(
+            ok=True,
+            action="model_set",
+            provider=provider_arg.strip() if provider_arg else None,
+            model=model_arg.strip(),
+        )
 
     if cmd in ("exit", "quit"):
         return CommandExecuteResponse(ok=True, action="exit")

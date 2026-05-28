@@ -45,6 +45,11 @@ docling>=2.94.0
 # MCP
 mcp>=1.12.0
 
+# Web 工具（可选，增强搜索/提取能力）
+duckduckgo-search>=6.0.0   # 免费搜索后端
+# firecrawl>=1.0.0         # Firecrawl 提取（可选，需 API Key）
+# exa-py>=1.0.0            # Exa 搜索（可选，用 httpx 直接调也可）
+
 # Telegram Bot
 python-telegram-bot>=22.0
 telegramify-markdown>=1.1.0

@@ -13,7 +13,7 @@ from collections import Counter
 
 from pydantic_ai import Agent
 
-from core.agent import create_model
+from core.agent import _lumen_agent
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ async def judge_answer(
         predicted=predicted.strip(),
     )
     try:
-        model = create_model()
+        model = _lumen_agent._create_model()
         agent = Agent(model, output_type=str)
         result = await agent.run(prompt)
         verdict = str(result.output).strip().lower()

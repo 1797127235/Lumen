@@ -24,6 +24,7 @@ class ConfigResponse(BaseModel):
     llm_api_key: str = ""
     llm_base_url: str = ""
     has_llm_key: bool = False
+    context_window: int = 128_000
     embedding_provider: str = "dashscope"
     embedding_model: str = "text-embedding-v4"
     embedding_api_key: str = ""
@@ -59,6 +60,53 @@ class ConfigTestResponse(BaseModel):
     error: str = ""
 
 
+_CONTEXT_WINDOW_PATTERNS: list[tuple[str, int]] = [
+    # DeepSeek V4+ — 1M context
+    ("deepseek-v4", 1_000_000),
+    # Gemini long-context variants
+    ("gemini-1.5-pro", 2_097_152),
+    ("gemini-1.5-flash", 1_048_576),
+    ("gemini-2", 1_048_576),
+    # Claude 3.x / 4.x — 200k
+    ("claude-3", 200_000),
+    ("claude-4", 200_000),
+    # GPT-4 128k
+    ("gpt-4-turbo", 128_000),
+    ("gpt-4o", 128_000),
+    # Qwen long-context
+    ("qwen-long", 1_000_000),
+    ("qwen2.5-72b", 131_072),
+]
+
+
+def _resolve_context_window(provider: str, model: str, user_override: int | None) -> int:
+    if user_override and user_override > 0:
+        return user_override
+
+    # Try litellm first
+    try:
+        import litellm
+        candidates = [f"{provider}/{model}", model]
+        for name in candidates:
+            try:
+                info = litellm.get_model_info(name)
+                ctx = info.get("max_input_tokens") or info.get("max_tokens")
+                if isinstance(ctx, int) and ctx > 0:
+                    return ctx
+            except Exception:
+                pass
+    except ImportError:
+        pass
+
+    # Pattern-based fallback (longest-match-first via ordering)
+    model_lower = model.lower()
+    for pattern, ctx in _CONTEXT_WINDOW_PATTERNS:
+        if pattern in model_lower:
+            return ctx
+
+    return 128_000
+
+
 @router.get("/config", response_model=ConfigResponse)
 async def get_config() -> ConfigResponse:
     user_config = load_user_config()
@@ -76,12 +124,20 @@ async def get_config() -> ConfigResponse:
     def mask_key(value: str) -> str:
         return "***" if value else ""
 
+    provider = user_config.get("llm_provider") or settings.llm_provider
+    model = user_config.get("llm_model") or settings.llm_model
+    user_ctx = user_config.get("llm_context_window")
+    context_window = _resolve_context_window(
+        provider, model, int(user_ctx) if user_ctx else None
+    )
+
     return ConfigResponse(
-        llm_provider=user_config.get("llm_provider") or settings.llm_provider,
-        llm_model=user_config.get("llm_model") or settings.llm_model,
+        llm_provider=provider,
+        llm_model=model,
         llm_api_key=mask_key(user_config.get("llm_api_key") or settings.llm_api_key),
         llm_base_url=user_config.get("llm_base_url") or settings.llm_base_url,
         has_llm_key=has_llm_key,
+        context_window=context_window,
         embedding_provider=user_config.get("embedding_provider") or settings.embedding_provider,
         embedding_model=user_config.get("embedding_model") or settings.embedding_model,
         embedding_api_key=mask_key(user_config.get("embedding_api_key") or settings.embedding_api_key),
