@@ -135,9 +135,9 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
     """调用 LLM 基于 memory.md 结构化画像生成 about_you 自然语言文本。"""
     from pydantic_ai import Agent
 
-    from core.agent import create_model
+    from core.agent import _lumen_agent
 
-    model = create_model()
+    model = _lumen_agent._create_model()
 
     system_prompt = """你是一个 AI 伙伴的用户画像专家。基于用户的画像数据（Markdown 格式），生成一段关于用户的综合画像 + 模式洞察。
 

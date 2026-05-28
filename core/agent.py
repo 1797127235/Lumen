@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,31 +44,37 @@ class LumenDeps:
 
 
 class LumenAgent:
-    """Lumen agent 实例，持有 PydanticAI Agent 缓存及其构建逻辑。"""
+    """Lumen agent 实例，按 (provider, model, tools) 缓存多个 Agent。"""
 
     def __init__(self) -> None:
-        self._agent: Agent[LumenDeps, str] | None = None
-        self._config_hash: str = ""
+        self._agents: dict[str, Agent[LumenDeps, str]] = {}
         self._generation: int = 0
 
     # ────────────────────────
     #  公开接口
     # ────────────────────────
 
-    def get(self) -> Agent[LumenDeps, str]:
-        """返回缓存的 Agent；config 或工具指纹变化时自动重建。"""
-        fp = self._config_fingerprint()
-        if self._agent is not None and self._config_hash == fp:
-            return self._agent
-        # Agent 重建前同步重建工具注册表，确保 MCP 工具增删反映到 Registry
-        from lib.tools.factory import register_all_tools
+    def get(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> Agent[LumenDeps, str]:
+        """返回对应 (provider, model) 的缓存 Agent；工具变化时清旧缓存。"""
+        s = get_settings()
+        eff_provider = provider or s.llm_provider
+        eff_model = model or s.llm_model
+        tools_fp = self._tool_fingerprint()
+        key = f"{eff_provider}|{eff_model}|{tools_fp}"
 
-        register_all_tools()
-        self._agent = self.create()
-        self._config_hash = fp
-        self._generation += 1
-        logger.info("Agent 已重建", generation=self._generation)
-        return self._agent
+        if key not in self._agents:
+            from lib.tools.factory import register_all_tools
+            register_all_tools()
+            self._agents = {k: v for k, v in self._agents.items() if k.endswith(tools_fp)}
+            self._agents[key] = self.create(eff_provider, eff_model)
+            self._generation += 1
+            logger.info("Agent 已构建", provider=eff_provider, model=eff_model, generation=self._generation)
+
+        return self._agents[key]
 
     def build_system_prompt(self) -> str:
         """组装静态 system prompt（对应 openhanako buildSystemPrompt 静态前缀）。
@@ -128,13 +133,17 @@ class LumenAgent:
 
         return "".join(parts)
 
-    def create(self) -> Agent[LumenDeps, str]:
+    def create(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> Agent[LumenDeps, str]:
         """创建一个新的 PydanticAI Agent 实例。
 
         工具通过 @agent.toolset 动态注册，每个 run step 前重新评估，
         使 tool_search 解锁的工具在同一轮对话的下一步即可使用。
         """
-        model = self._create_model()
+        model = self._create_model(provider, model)
 
         from pydantic_ai.capabilities.reinject_system_prompt import ReinjectSystemPrompt
 
@@ -183,13 +192,17 @@ class LumenAgent:
     #  内部方法
     # ────────────────────────
 
-    def _create_model(self) -> OpenAIChatModel:
+    def _create_model(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> OpenAIChatModel:
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
         settings = get_settings()
-        provider = settings.llm_provider
-        model_name = settings.llm_model
+        provider = provider or settings.llm_provider
+        model_name = model or settings.llm_model
         api_key = settings.llm_api_key or settings.dashscope_api_key
         base_url = settings.llm_base_url
 
@@ -210,17 +223,6 @@ class LumenAgent:
             model_name,
             provider=OpenAIProvider(base_url=base_url, api_key=api_key),
         )
-
-    def _config_fingerprint(self) -> str:
-        """计算配置指纹（LLM + MCP 工具），变化时触发 Agent 重建。"""
-        s = get_settings()
-        raw = (
-            f"{s.llm_provider}|{s.llm_model}"
-            f"|{s.llm_api_key or s.dashscope_api_key}"
-            f"|{s.llm_base_url}"
-            f"|{self._tool_fingerprint()}"
-        )
-        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _tool_fingerprint(self) -> str:
         """计算已连接 MCP 工具的指纹；新增/删除 MCP server 时 Agent 自动重建。"""
@@ -243,18 +245,12 @@ class LumenAgent:
 _lumen_agent = LumenAgent()
 
 
-def get_agent() -> Agent[LumenDeps, str]:
-    return _lumen_agent.get()
-
-
-def create_agent() -> Agent[LumenDeps, str]:
-    return _lumen_agent.create()
+def get_agent(
+    provider: str | None = None,
+    model: str | None = None,
+) -> Agent[LumenDeps, str]:
+    return _lumen_agent.get(provider, model)
 
 
 def get_agent_generation() -> int:
     return _lumen_agent.generation
-
-
-def create_model() -> OpenAIChatModel:
-    """创建 LLM 模型实例（供非 agent 场景使用，如 memory understanding）。"""
-    return _lumen_agent._create_model()

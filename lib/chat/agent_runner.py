@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+import openai
+from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
@@ -36,6 +37,7 @@ class _TurnState:
     new_msgs: list = field(default_factory=list)
     trace_records: list[dict] = field(default_factory=list)
     step: int = 0
+    in_think_tag: bool = False
 
 
 class AgentRunner:
@@ -131,8 +133,8 @@ class AgentRunner:
                 async with ConversationLock(conv.conversation_id):
                     await db.refresh(conv)
 
-                    # 构建 Agent
-                    agent = get_agent()
+                    # 构建 Agent（per-request 模型：None 时回退全局 config）
+                    agent = get_agent(provider=msg.provider, model=msg.model)
                     agent_generation = get_agent_generation()
                     deps = LumenDeps(
                         user_id=user_id,
@@ -291,21 +293,59 @@ class AgentRunner:
                         content="服务繁忙，请稍后重试",
                     )
                 )
-            except Exception as exc:
-                if isinstance(exc, UnexpectedModelBehavior):
-                    logger.warning("模型返回异常", error=str(exc))
-                    msg_text = "模型未返回内容，可能触发了内容过滤，请换一种说法重试"
+
+            except UsageLimitExceeded:
+                partial = state.full_content
+                if partial:
+                    logger.info("Agent 超出请求限制，返回已有内容", len=len(partial))
+                    await self._bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=partial,
+                        )
+                    )
                 else:
-                    logger.exception("生成 AI 回复失败")
-                    msg_text = "生成回复失败，请稍后重试"
+                    logger.warning("Agent 超出请求限制且无内容")
+                    await self._bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="我想了一会但还没整理好，可以让我继续或换个方式问",
+                        )
+                    )
+
+            except (ModelAPIError, openai.APIConnectionError) as exc:
+                logger.warning("LLM 连接失败", error=str(exc)[:200])
+                await self._bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="网络连接失败，请检查网络后重试",
+                    )
+                )
+
+            except UnexpectedModelBehavior as exc:
+                logger.warning("模型返回异常", error=str(exc))
+                await self._bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="模型未返回内容，可能触发了内容过滤，请换一种说法重试",
+                    )
+                )
+
+            except Exception as exc:
+                logger.exception("生成 AI 回复失败")
                 await db.rollback()
                 await self._bus.publish_outbound(
                     OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=msg_text,
+                        content="生成回复失败，请稍后重试",
                     )
                 )
+
             finally:
                 unbind_chat_context()
 

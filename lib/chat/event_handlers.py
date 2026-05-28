@@ -60,8 +60,7 @@ class EventHandlers:
 
         part = event.part
         if isinstance(part, TextPart) and part.content:
-            state.full_content += part.content
-            return [{"type": "token", "content": part.content, "conversation_id": deps["conversation_id"]}]
+            return _split_think_text(part.content, state, deps["conversation_id"])
         elif isinstance(part, ThinkingPart) and part.content:
             state.thinking_content += part.content
             return [{"type": "thinking", "content": part.content, "conversation_id": deps["conversation_id"]}]
@@ -74,8 +73,7 @@ class EventHandlers:
         delta = event.delta
         if isinstance(delta, TextPartDelta):
             text = delta.content_delta or ""
-            state.full_content += text
-            return [{"type": "token", "content": text, "conversation_id": deps["conversation_id"]}]
+            return _split_think_text(text, state, deps["conversation_id"])
         elif isinstance(delta, ThinkingPartDelta):
             text = delta.content_delta or ""
             state.thinking_content += text
@@ -93,6 +91,41 @@ class EventHandlers:
             except Exception:
                 pass
         return []
+
+
+def _split_think_text(text: str, state: Any, conversation_id: str) -> list[dict]:
+    """把内联 <think>...</think> 标签从文本流中分离出来，跨 delta 保持状态。"""
+    items: list[dict] = []
+    buf = text
+    while buf:
+        if state.in_think_tag:
+            end_idx = buf.find("</think>")
+            if end_idx == -1:
+                state.thinking_content += buf
+                items.append({"type": "thinking", "content": buf, "conversation_id": conversation_id})
+                buf = ""
+            else:
+                chunk = buf[:end_idx]
+                if chunk:
+                    state.thinking_content += chunk
+                    items.append({"type": "thinking", "content": chunk, "conversation_id": conversation_id})
+                state.in_think_tag = False
+                buf = buf[end_idx + len("</think>"):]
+        else:
+            start_idx = buf.find("<think>")
+            if start_idx == -1:
+                if buf:
+                    state.full_content += buf
+                    items.append({"type": "token", "content": buf, "conversation_id": conversation_id})
+                buf = ""
+            else:
+                before = buf[:start_idx]
+                if before:
+                    state.full_content += before
+                    items.append({"type": "token", "content": before, "conversation_id": conversation_id})
+                state.in_think_tag = True
+                buf = buf[start_idx + len("<think>"):]
+    return items
 
 
 def _safe_json(value: Any, max_len: int = 0) -> str:

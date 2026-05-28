@@ -19,6 +19,8 @@ class InboundMessage:
     content: str
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    model: str | None = None
+    provider: str | None = None
 
     @property
     def session_key(self) -> str:

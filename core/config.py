@@ -12,7 +12,6 @@ from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lib.providers import PROVIDER_CATALOG as PROVIDER_CATALOG
 
 # ── 目录常量 ────────────────────────────────────────
 
@@ -239,17 +238,15 @@ def build_llm_call_params(
 
 
 def get_provider_catalog_frontend() -> dict[str, dict]:
-    """返回前端所需的 Provider 配置格式
-
-    将后端 PROVIDER_CATALOG 转换为前端 Settings.tsx 所需的字段名，
-    避免前后端维护两份重复数据。
-    """
+    """返回前端所需的 Provider 配置格式，优先使用 models.dev 动态数据。"""
+    from lib.providers import get_provider_registry
+    summary = get_provider_registry().get_all_summary()
     return {
-        key: {
-            "name": val["label"],
-            "baseUrl": val["base_url"],
-            "models": val["chat_models"],
-            "embeddingModels": val["embedding_models"],
+        p["id"]: {
+            "name": p["name"],
+            "baseUrl": p["baseUrl"],
+            "models": p["models"],
+            "embeddingModels": p["embeddingModels"],
         }
-        for key, val in PROVIDER_CATALOG.items()
+        for p in summary
     }
