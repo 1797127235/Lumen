@@ -45,6 +45,27 @@ def test_get_agent_config_cache():
     assert isinstance(agent1, type(agent2))
 
 
+def test_get_agent_uses_config_as_single_source(monkeypatch):
+    """模型唯一来自 config（get_settings）——get() 不接受任何请求级覆盖参数。"""
+    from core.agent import LumenAgent
+    from core.config import get_settings
+
+    inst = LumenAgent()
+    captured: dict[str, str] = {}
+
+    def fake_create(provider, model):
+        captured["provider"] = provider
+        captured["model"] = model
+        return object()
+
+    monkeypatch.setattr(inst, "create", fake_create)
+    inst.get()
+
+    s = get_settings()
+    assert captured["model"] == s.llm_model
+    assert captured["provider"] == s.llm_provider
+
+
 @pytest.mark.asyncio
 async def test_agent_has_tools():
     """测试 Agent 工具注册"""

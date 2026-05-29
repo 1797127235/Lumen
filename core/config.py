@@ -12,7 +12,6 @@ from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # ── 目录常量 ────────────────────────────────────────
 
 # 用户运行时数据目录（SQLite / Chroma / config.json）
@@ -41,9 +40,6 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     # 模型上下文窗口上限（token）。0 = 由 CLI 从 models.dev 解析（带本地缓存）。
     llm_context_limit: int = 0
-
-    # 旧字段兼容（迁移后仅读取）
-    dashscope_api_key: str = ""
 
     # ── Embedding Provider ──
     embedding_provider: str = "dashscope"
@@ -146,7 +142,7 @@ def save_user_config(data: dict[str, Any]) -> dict[str, Any]:
     }
     existing.update(flat)
 
-    # providers 深合并（照抄 _saveAddedModels 的合并语义）
+    # providers 深合并
     # value 为 None → 删除该供应商（照抄 remove()）
     # value 为 dict → 字段级合并（照抄 saveProvider() 的 partial update）
     if "providers" in data and isinstance(data["providers"], dict):
@@ -195,14 +191,6 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
             else:
                 applied[key] = val
 
-    # 一次性迁移：旧用户 dashscope_api_key → llm_api_key
-    # 条件：llm_provider 是 dashscope（或未设置）且 llm_api_key 为空且 dashscope_api_key 非空
-    if settings.llm_provider in ("dashscope", "") and not settings.llm_api_key and settings.dashscope_api_key:
-        settings.llm_api_key = settings.dashscope_api_key
-        # 同步写入 config.json，避免下次重启重复迁移
-        save_user_config({"llm_api_key": settings.dashscope_api_key})
-        applied["llm_api_key"] = "***（从 dashscope_api_key 迁移）"
-
     return applied
 
 
@@ -232,7 +220,7 @@ def build_llm_call_params(
 
     return {
         "model": model_id,
-        "api_key": api_key or settings.llm_api_key or provider_key or settings.dashscope_api_key or "",
+        "api_key": api_key or settings.llm_api_key or provider_key or "",
         "base_url": base_url or settings.llm_base_url or provider_base_url,
     }
 
@@ -240,6 +228,7 @@ def build_llm_call_params(
 def get_provider_catalog_frontend() -> dict[str, dict]:
     """返回前端所需的 Provider 配置格式，优先使用 models.dev 动态数据。"""
     from lib.providers import get_provider_registry
+
     summary = get_provider_registry().get_all_summary()
     return {
         p["id"]: {

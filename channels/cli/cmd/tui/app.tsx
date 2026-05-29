@@ -36,7 +36,6 @@ import { useEvent } from "@tui/context/event"
 import { TuiConfig, createDefaultConfig } from "@/cli/cmd/tui/config/tui"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { ArgsProvider } from "@tui/context/args"
-import { EditorContextProvider } from "@tui/context/editor"
 import semver from "semver"
 import open from "open"
 
@@ -115,7 +114,6 @@ export function tui() {
                             <SyncProviderV2>
                               <ThemeProvider mode={mode}>
                                 <LocalProvider>
-                                  <EditorContextProvider>
                                   <PromptStashProvider>
                                     <DialogProvider>
                                       <CommandPaletteProvider>
@@ -129,7 +127,6 @@ export function tui() {
                                       </CommandPaletteProvider>
                                     </DialogProvider>
                                   </PromptStashProvider>
-                                  </EditorContextProvider>
                                 </LocalProvider>
                               </ThemeProvider>
                             </SyncProviderV2>

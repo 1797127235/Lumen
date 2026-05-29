@@ -3,7 +3,8 @@ import { createSignal, onMount } from "solid-js"
 import { createSimpleContext } from "./helper"
 import * as LumenApi from "@tui/lumen/api"
 
-// Fallback until backend config is fetched
+// 仅作 config 拉取完成前的展示占位符——非真实 provider/model 名。
+// 客户端不在发消息时回传模型（见 sdk.tsx），所以它永远不会到达后端/上游 API。
 const DEFAULT_PROVIDER_ID = "lumen"
 const DEFAULT_MODEL_ID = "lumen"
 
@@ -40,6 +41,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         const providerID = cfg.llm_provider
         const modelID = cfg.llm_model
         const provider = providerID.charAt(0).toUpperCase() + providerID.slice(1)
+        console.log("[Local] Config fetched:", { providerID, modelID })
         setModelInfo({
           providerID,
           modelID,
@@ -47,14 +49,17 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           model: modelID,
           contextWindow: cfg.context_window ?? 128_000,
         })
-      } catch {
+        // 等待 SolidJS 响应式更新生效
+        await new Promise(resolve => setTimeout(resolve, 0))
+        console.log("[Local] Model info updated, current:", modelInfo())
+      } catch (err) {
+        console.error("[Local] Failed to fetch config:", err)
         // backend not reachable — keep placeholder
       }
     })
 
     const [store, setStore] = createStore({
       agent: "lumen" as string,
-      model: DEFAULT_MODEL,
       recentModels: [DEFAULT_MODEL] as typeof DEFAULT_MODEL[],
       favoriteModels: [] as typeof DEFAULT_MODEL[],
       mcpEnabled: {} as Record<string, boolean>,

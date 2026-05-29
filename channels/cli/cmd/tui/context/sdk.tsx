@@ -71,12 +71,12 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           const userMsgID = `umsg_${Date.now()}`
           emit({ type: "message.user", sessionID, messageID: userMsgID, text })
 
+          // 不回传 model/provider：模型选择的唯一真相源是 config.json，由后端读 config 决定。
+          // 客户端只负责展示当前模型、以及通过 /model 改写 config，从不在发消息时断言用哪个模型。
           try {
             await LumenApi.sendMessage({
               message: text,
               conversationId: realConvID,
-              model: opts.model?.modelID,
-              provider: opts.model?.providerID,
               signal: abort.signal,
               onToken(token) {
                 emit({ type: "token", sessionID, token })

@@ -16,6 +16,7 @@ class SSEFormatter:
     TYPE_TRACE = "trace"
     TYPE_DONE = "done"
     TYPE_ERROR = "error"
+    TYPE_SUBAGENT_PROGRESS = "subagent_progress"
 
     @staticmethod
     def format_event(event_type: str, data: dict) -> str:
@@ -61,4 +62,12 @@ class SSEFormatter:
         return SSEFormatter.format_event(
             SSEFormatter.TYPE_ERROR,
             {"message": message},
+        )
+
+    @staticmethod
+    def format_subagent_progress(phase: str, detail: str) -> str:
+        """格式化子 Agent 进度事件"""
+        return SSEFormatter.format_event(
+            SSEFormatter.TYPE_SUBAGENT_PROGRESS,
+            {"phase": phase, "detail": detail},
         )

@@ -17,12 +17,14 @@ export type TraceEntry = {
   tool: string; args: string; result: string; done: boolean
   thinking?: string; duration?: string
 }
+export type SubagentProgress = { phase: string; detail: string }
 export type ChatMessage = {
   id: string
   role: 'user' | 'assistant'
   content: string
   usage?: { input: number; output: number }
   traces?: TraceEntry[]
+  subagentProgress?: SubagentProgress[]
   tokens_used?: number
 }
 
@@ -116,6 +118,20 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       return next
     }, [])
 
+  const appendSubagentProgress = useCallback((phase: string, detail: string) =>
+    (prev: ChatMessage[]) => {
+      const next = prev.slice()
+      const last = next[next.length - 1]
+      if (!last || last.role !== 'assistant') {
+        next.push({ id: genId(), role: 'assistant' as const, content: '', subagentProgress: [] })
+      }
+      const current = next[next.length - 1]
+      const entries = current.subagentProgress ? [...current.subagentProgress] : []
+      entries.push({ phase, detail })
+      next[next.length - 1] = { ...current, subagentProgress: entries }
+      return next
+    }, [])
+
   const appendUsage = useCallback((usage: { input: number; output: number }) =>
     (prev: ChatMessage[]) => {
       const next = prev.slice()
@@ -181,6 +197,9 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         },
         onTrace: (kind, tool, content) => {
           if (!ctrl.signal.aborted) apply(appendTrace(kind, tool, content))
+        },
+        onSubagentProgress: (phase, detail) => {
+          if (!ctrl.signal.aborted) apply(appendSubagentProgress(phase, detail))
         },
         onError: (msg) => {
           if (ctrl.signal.aborted) return

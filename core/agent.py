@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,7 +12,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
-from core.config import get_settings
+from core.config import get_settings, load_user_config
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +39,7 @@ class LumenDeps:
     trace_sink: list[dict] = field(default_factory=list, repr=False, compare=False)
     workspace_root: Any = field(default=None, repr=False, compare=False)
     source_platform: str = "web"
+    progress_emitter: Callable[[str, str], None] | None = field(default=None, repr=False, compare=False)
 
 
 # ════════════════════════════
@@ -49,25 +53,52 @@ class LumenAgent:
     def __init__(self) -> None:
         self._agents: dict[str, Agent[LumenDeps, str]] = {}
         self._generation: int = 0
+        self._config_fingerprint: str = ""
 
     # ────────────────────────
     #  公开接口
     # ────────────────────────
 
-    def get(
-        self,
-        provider: str | None = None,
-        model: str | None = None,
-    ) -> Agent[LumenDeps, str]:
-        """返回对应 (provider, model) 的缓存 Agent；工具变化时清旧缓存。"""
+    def _get_config_fingerprint(self) -> str:
+        """计算配置指纹，变更时自动失效缓存
+
+        包含：
+        - Settings 中的顶层 key（兼容 .env）
+        - config.json 中的 providers 配置（供应商页面配置）
+        """
+        settings = get_settings()
+        user_cfg = load_user_config()
+
+        # 注意：dashscope_api_key 已从 Settings 移除，只在迁移逻辑中使用
+        parts = [
+            settings.llm_api_key,
+            settings.llm_base_url,
+            # 关键：包含 providers 配置，否则供应商页面改 key 不会触发缓存失效
+            json.dumps(user_cfg.get("providers") or {}, sort_keys=True),
+        ]
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+    def get(self) -> Agent[LumenDeps, str]:
+        """返回当前 config 对应的缓存 Agent；config/工具变化时清旧缓存。
+
+        模型选择的唯一真相源是 config（get_settings），不接受任何请求级覆盖。
+        """
         s = get_settings()
-        eff_provider = provider or s.llm_provider
-        eff_model = model or s.llm_model
+        eff_provider = s.llm_provider
+        eff_model = s.llm_model
         tools_fp = self._tool_fingerprint()
         key = f"{eff_provider}|{eff_model}|{tools_fp}"
 
+        # 配置变更时清空所有缓存
+        current_fp = self._get_config_fingerprint()
+        if current_fp != self._config_fingerprint:
+            logger.info("配置变更，清空 Agent 缓存")
+            self._agents.clear()
+            self._config_fingerprint = current_fp
+
         if key not in self._agents:
             from lib.tools.factory import register_all_tools
+
             register_all_tools()
             self._agents = {k: v for k, v in self._agents.items() if k.endswith(tools_fp)}
             self._agents[key] = self.create(eff_provider, eff_model)
@@ -105,6 +136,10 @@ class LumenAgent:
                 "长时间运行的命令可设 run_in_background=true，之后用 task_output 查看结果。\n"
                 "如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载，"
                 "加载后的工具在当前对话的下一步即可直接调用。\n"
+                "遇到深度调研、多步搜索、需要大量工具调用的任务（如「帮我调研 X」「搜集 Y 的资料」），"
+                "优先用 `delegate` 委派给子 Agent：把明确的 goal 和必要 context 传过去，"
+                "子任务在隔离上下文里跑、不占用主对话，完成后只把结果摘要交回。"
+                "不要自己在主对话里一步步搜索、读网页地堆调用。\n"
                 "**工具发现与加载是内部行为，禁止向用户提及。** "
                 "不要出现'工具不在列表''需要先加载''已解锁''下一轮才能用'等状态描述，"
                 "用户只需要结果，不需要知道你是怎么获得工具的。",
@@ -203,14 +238,19 @@ class LumenAgent:
         settings = get_settings()
         provider = provider or settings.llm_provider
         model_name = model or settings.llm_model
-        api_key = settings.llm_api_key or settings.dashscope_api_key
-        base_url = settings.llm_base_url
+
+        # 优先从 providers 配置读取 key 和 base_url
+        user_cfg = load_user_config()
+        provider_cfg = (user_cfg.get("providers") or {}).get(provider, {})
+        provider_key = provider_cfg.get("api_key", "")
+        provider_base_url = provider_cfg.get("base_url", "")
+
+        # 解析优先级：providers 配置 > Settings
+        api_key = provider_key or settings.llm_api_key or ""
+        base_url = provider_base_url or settings.llm_base_url or ""
 
         if not api_key:
-            raise ValueError(
-                "未配置 LLM API Key。请在设置页面配置 API Key，"
-                "或在 .env 文件中设置 DASHSCOPE_API_KEY 或 LLM_API_KEY。"
-            )
+            raise ValueError("未配置 LLM API Key。请在设置页面配置 API Key，" "或在 .env 文件中设置 LLM_API_KEY。")
         if not base_url:
             raise ValueError(
                 f"未配置 LLM Base URL。请在设置页面配置 Base URL，"
@@ -245,12 +285,48 @@ class LumenAgent:
 _lumen_agent = LumenAgent()
 
 
-def get_agent(
-    provider: str | None = None,
-    model: str | None = None,
-) -> Agent[LumenDeps, str]:
-    return _lumen_agent.get(provider, model)
+def get_agent() -> Agent[LumenDeps, str]:
+    return _lumen_agent.get()
 
 
 def get_agent_generation() -> int:
     return _lumen_agent.generation
+
+
+def build_worker_agent(
+    tool_names: list[str],
+    system_prompt: str,
+) -> Agent[LumenDeps, str]:
+    """构建一个无状态 worker Agent，用于 delegate 子任务。
+
+    - 复用全局模型配置（同一套 provider/model）
+    - 固定受限 toolset（不走 conversation 动态发现）
+    - 不注入 Lumen 人格、记忆快照、技能目录
+    """
+    from pydantic_ai.capabilities.reinject_system_prompt import ReinjectSystemPrompt
+
+    model = _lumen_agent._create_model()
+
+    from lib.tools._registry import get_tool_registry
+    from lib.tools.factory import build_pydantic_toolset
+
+    registry = get_tool_registry()
+    tools = [registry.get_tool(n) for n in tool_names]
+    tools = [t for t in tools if t is not None]
+    fixed_toolset = build_pydantic_toolset(tools)
+
+    agent = Agent(
+        model=model,
+        deps_type=LumenDeps,
+        output_type=str,
+        system_prompt=system_prompt,
+        retries=2,
+        end_strategy="graceful",
+        capabilities=[ReinjectSystemPrompt()],
+    )
+
+    @agent.toolset
+    async def _worker_toolset(ctx):
+        return fixed_toolset
+
+    return agent

@@ -23,7 +23,6 @@ import { useRoute } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
 import { useEvent } from "@tui/context/event"
-import { editorSelectionKey, useEditorContext, type EditorSelection } from "@tui/context/editor"
 import { MessageID, PartID } from "@/session/schema"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "./history"
@@ -108,32 +107,6 @@ function fadeColor(color: RGBA, alpha: number) {
   return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
 }
 
-function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
-  return (
-    selection.selection.start.line !== selection.selection.end.line ||
-    selection.selection.start.character !== selection.selection.end.character
-  )
-}
-
-function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
-  if (!hasEditorRangeSelection(selection)) return
-  if (selection.selection.start.line === selection.selection.end.line) return `#${selection.selection.start.line}`
-  return `#${selection.selection.start.line}-${selection.selection.end.line}`
-}
-
-function formatEditorContext(selection: EditorSelection) {
-  const selected = selection.ranges.filter(hasEditorRangeSelection)
-  if (selected.length === 0)
-    return `<system-reminder>Note: The user opened the file "${selection.filePath}". This may or may not be relevant to the current task.</system-reminder>\n`
-
-  const ranges = selected.map((range, index) => {
-    const prefix = selected.length > 1 ? `Selection ${index + 1}: ` : ""
-    return `Note: The user selected ${prefix}${getEditorRangeLabel(range)} from "${selection.filePath}". \`\`\`${range.text}\`\`\`\n\n`
-  })
-
-  return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
-}
-
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
 
 export function Prompt(props: PromptProps) {
@@ -145,7 +118,6 @@ export function Prompt(props: PromptProps) {
   const local = useLocal()
   const args = useArgs()
   const sdk = useSDK()
-  const editor = useEditorContext()
   const route = useRoute()
   const project = useProject()
   const sync = useSync()
@@ -166,38 +138,6 @@ export function Prompt(props: PromptProps) {
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
-  const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
-  const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
-  const editorContext = createMemo(() => {
-    const selection = fileContextEnabled() ? editor.selection() : undefined
-    if (!selection) return
-    return editorSelectionKey(selection) === dismissedEditorSelectionKey() ? undefined : selection
-  })
-  const editorPath = createMemo(() => editorContext()?.filePath)
-  const editorSelectionLabel = createMemo(() => {
-    const ranges = editorContext()?.ranges
-    if (!ranges) return
-    const first = ranges.find(hasEditorRangeSelection) ?? ranges[0]
-    if (!first) return
-    return [getEditorRangeLabel(first), ranges.length > 1 ? `+${ranges.length - 1}` : undefined]
-      .filter(Boolean)
-      .join(" ")
-  })
-  const editorFileLabel = createMemo(() => {
-    const value = editorPath()
-    if (!value) return
-    const filename = path.basename(value)
-    const file = /^index\.[^./]+$/.test(filename)
-      ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
-      : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
-  })
-  const editorFileLabelDisplay = createMemo(() => {
-    const file = editorFileLabel()
-    if (!file) return
-    return Locale.truncateMiddle(file, Math.max(12, Math.min(48, Math.floor(dimensions().width / 3))))
-  })
-  const editorContextLabelState = createMemo(() => editor.labelState())
   const [auto, setAuto] = createSignal<AutocompleteRef>()
   const [workspaceSelection, setWorkspaceSelection] = createSignal<WorkspaceSelection>()
   const [workspaceCreating, setWorkspaceCreating] = createSignal(false)
@@ -303,10 +243,6 @@ export function Prompt(props: PromptProps) {
     }
   }
 
-  function dismissEditorContext() {
-    setDismissedEditorSelectionKey(editorSelectionKey(editorContext()))
-    editor.clearSelection()
-  }
   const fileStyleId = syntax().getStyleId("extmark.file")!
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
@@ -448,16 +384,6 @@ export function Prompt(props: PromptProps) {
           const handled = await submit()
           if (!handled) return
 
-          dialog.clear()
-        },
-      },
-      {
-        title: "Remove editor context",
-        name: "prompt.editor_context.clear",
-        category: "Prompt",
-        enabled: Boolean(editorContext()),
-        run: () => {
-          dismissEditorContext()
           dialog.clear()
         },
       },
@@ -1049,6 +975,7 @@ export function Prompt(props: PromptProps) {
       return true
     }
     const selectedModel = local.model.current()
+    console.log("[Prompt] Selected model:", selectedModel)
     if (!selectedModel) {
       void promptModelWarning()
       return false
@@ -1137,24 +1064,6 @@ export function Prompt(props: PromptProps) {
 
     // Capture mode before it gets reset
     const currentMode = store.mode
-    const editorSelection = editorContext()
-    const editorParts =
-      editorSelection && editor.labelState() === "pending"
-        ? [
-            {
-              id: PartID.ascending(),
-              type: "text" as const,
-              text: formatEditorContext(editorSelection),
-              synthetic: true,
-              metadata: {
-                kind: "editor_context",
-                source: editorSelection.source ?? "editor",
-                filePath: editorSelection.filePath,
-                ranges: editorSelection.ranges,
-              },
-            },
-          ]
-        : []
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1188,7 +1097,6 @@ export function Prompt(props: PromptProps) {
             model: selectedModel,
             variant,
             parts: [
-              ...editorParts,
               {
                 id: PartID.ascending(),
                 type: "text",
@@ -1198,7 +1106,6 @@ export function Prompt(props: PromptProps) {
             ],
           })
           .catch(() => {})
-        if (editorParts.length > 0) editor.markSelectionSent()
       } else {
         // 纯客户端命令：不走后端，直接打开对应 dialog
         if (!args.trim()) {
@@ -1257,7 +1164,6 @@ export function Prompt(props: PromptProps) {
                     variant,
                     parts: [
                       { id: PartID.ascending(), type: "text", text: result.text },
-                      ...editorParts,
                       ...nonTextParts.map(assign),
                     ],
                   })
@@ -1275,11 +1181,24 @@ export function Prompt(props: PromptProps) {
               dialog.replace(() => <DialogModel />)
               break
             case "model_set":
-              // 直接设置模型
+              // 设置模型并持久化到 config.json
               if (result.model) {
-                local.model.set({
-                  providerID: result.provider ?? local.model.current().providerID,
-                  modelID: result.model,
+                const providerID = result.provider ?? local.model.current().providerID
+                const modelID = result.model
+                
+                // 1. 更新内存状态
+                local.model.set({ providerID, modelID })
+                
+                // 2. 持久化到 config.json
+                LumenApi.updateConfig({
+                  llm_provider: providerID,
+                  llm_model: modelID,
+                }).catch((err) => {
+                  toast.show({ 
+                    message: `配置保存失败: ${err.message}`, 
+                    variant: "error",
+                    duration: 3000,
+                  })
                 })
               }
               break
@@ -1309,7 +1228,6 @@ export function Prompt(props: PromptProps) {
           model: selectedModel,
           variant,
           parts: [
-            ...editorParts,
             {
               id: PartID.ascending(),
               type: "text",
@@ -1319,7 +1237,6 @@ export function Prompt(props: PromptProps) {
           ],
         })
         .catch(() => {})
-      if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
       ...store.prompt,
@@ -1335,7 +1252,6 @@ export function Prompt(props: PromptProps) {
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
-      if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
       setTimeout(() => {
         route.navigate({
           type: "session",
@@ -1872,11 +1788,6 @@ export function Prompt(props: PromptProps) {
           </Switch>
           <Show when={status().type !== "retry"}>
             <box gap={2} flexDirection="row">
-              <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
-                {(file) => (
-                  <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
-                )}
-              </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <Switch>

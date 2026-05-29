@@ -1,12 +1,13 @@
 import { createEffect, createMemo, For, Match, on, onMount, Show, Switch } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
-import { TextAttributes } from "@opentui/core"
+import { useTerminalDimensions, useRenderer } from "@opentui/solid"
+import { MouseButton, TextAttributes } from "@opentui/core"
+import * as Selection from "@tui/util/selection"
 import { useRoute } from "@tui/context/route"
 import { useSync } from "@tui/context/sync"
 import { useSDK } from "@tui/context/sdk"
 import { useTheme } from "@tui/context/theme"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
-import { Toast } from "@tui/ui/toast"
+import { Toast, useToast } from "@tui/ui/toast"
 import { usePromptRef } from "@tui/context/prompt"
 import { useBindings } from "@tui/keymap"
 import { useTuiConfig } from "@tui/context/tui-config"
@@ -136,6 +137,8 @@ export function Session() {
   const dimensions = useTerminalDimensions()
   const promptRef = usePromptRef()
   const tuiConfig = useTuiConfig()
+  const renderer = useRenderer()
+  const toast = useToast()
 
   const sessionID = createMemo(() => {
     if (route.data.type !== "session") return ""
@@ -201,7 +204,17 @@ export function Session() {
   }))
 
   return (
-    <box flexDirection="row" height={dimensions().height} width={dimensions().width}>
+    <box
+      flexDirection="row"
+      height={dimensions().height}
+      width={dimensions().width}
+      onMouseDown={(evt: { button: number; preventDefault(): void; stopPropagation(): void }) => {
+        if (evt.button !== MouseButton.RIGHT) return
+        if (!Selection.copy(renderer, toast)) return
+        evt.preventDefault()
+        evt.stopPropagation()
+      }}
+    >
       {/* Main column */}
       <box flexDirection="column" flexGrow={1}>
         {/* Message list */}

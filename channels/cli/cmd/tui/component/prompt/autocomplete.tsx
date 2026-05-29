@@ -5,7 +5,6 @@ import path from "path"
 import { firstBy } from "remeda"
 import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
-import { useEditorContext } from "@tui/context/editor"
 import { useProject } from "@tui/context/project"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
@@ -83,7 +82,6 @@ export function Autocomplete(props: {
   agentStyleId: number
   promptPartTypeId: () => number
 }) {
-  const editor = useEditorContext()
   const sdk = useSDK()
   const sync = useSync()
   const project = useProject()
@@ -345,33 +343,6 @@ export function Autocomplete(props: {
       lineRange,
     }
   })
-
-  function normalizeMentionPath(filePath: string) {
-    const baseDir = sync.path.directory || process.cwd()
-    const absolute = path.resolve(filePath)
-    const relative = path.relative(baseDir, absolute)
-
-    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-      return relative.split(path.sep).join("/")
-    }
-
-    return absolute.split(path.sep).join("/")
-  }
-
-  function insertFileMention(input: { filePath: string; lineStart: number; lineEnd: number }) {
-    const item = normalizeMentionPath(input.filePath)
-    const lineRange = {
-      startLine: input.lineStart,
-      endLine: input.lineEnd > input.lineStart ? input.lineEnd : undefined,
-    }
-    const { filename, part } = createFilePart(item, lineRange)
-    const index = store.visible === "@" ? store.index : props.input().cursorOffset
-
-    command.suspend(false)
-    setStore("visible", false)
-    setStore("index", index)
-    insertPart(filename, part)
-  }
 
   const [files] = createResource(
     () => search(),
@@ -752,14 +723,6 @@ export function Autocomplete(props: {
   }
 
   onMount(() => {
-    const unsubscribeMention = editor.onMention((mention) => {
-      insertFileMention(mention)
-    })
-
-    onCleanup(() => {
-      unsubscribeMention()
-    })
-
     props.ref({
       get visible() {
         return store.visible

@@ -86,6 +86,7 @@ def _resolve_context_window(provider: str, model: str, user_override: int | None
     # Try litellm first
     try:
         import litellm
+
         candidates = [f"{provider}/{model}", model]
         for name in candidates:
             try:
@@ -119,17 +120,16 @@ async def get_config() -> ConfigResponse:
         or user_config.get("llm_api_key")
         or settings.llm_api_key
     )
-    has_api_key = bool(user_config.get("dashscope_api_key") or settings.dashscope_api_key)
+    # has_api_key 保留向后兼容，但实际只检查 llm_api_key
+    has_api_key = has_llm_key
 
     def mask_key(value: str) -> str:
         return "***" if value else ""
 
     provider = user_config.get("llm_provider") or settings.llm_provider
     model = user_config.get("llm_model") or settings.llm_model
-    user_ctx = user_config.get("llm_context_window")
-    context_window = _resolve_context_window(
-        provider, model, int(user_ctx) if user_ctx else None
-    )
+    user_ctx = user_config.get("llm_context_limit")
+    context_window = _resolve_context_window(provider, model, int(user_ctx) if user_ctx else None)
 
     return ConfigResponse(
         llm_provider=provider,
@@ -143,7 +143,7 @@ async def get_config() -> ConfigResponse:
         embedding_api_key=mask_key(user_config.get("embedding_api_key") or settings.embedding_api_key),
         embedding_base_url=user_config.get("embedding_base_url") or settings.embedding_base_url,
         has_embedding_key=has_embedding_key,
-        dashscope_api_key=mask_key(user_config.get("dashscope_api_key") or settings.dashscope_api_key),
+        dashscope_api_key="",  # 已废弃，保留字段向后兼容
         has_api_key=has_api_key,
     )
 

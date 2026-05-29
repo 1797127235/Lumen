@@ -64,6 +64,17 @@ class TraceReady:
     content: str
 
 
+@dataclass
+class SubagentProgress:
+    """子 Agent 进度事件，delegate 工具运行时实时发回。"""
+
+    channel: str
+    session_key: str
+    chat_id: str
+    phase: str  # "started" | "step" | "done" | "error"
+    detail: str  # 给用户看的进度文本
+
+
 # ═══════════════════════════════════════════════════════════════
 #  EventBus 实现
 # ═══════════════════════════════════════════════════════════════

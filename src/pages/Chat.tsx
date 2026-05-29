@@ -58,6 +58,7 @@ export default function Chat() {
               streaming={streaming && index === messages.length - 1}
               usage={message.usage}
               traces={message.traces}
+              subagentProgress={message.subagentProgress}
               tokens_used={message.tokens_used}
             />
           ) : (
@@ -147,12 +148,14 @@ function AssistantBubble({
   streaming,
   usage,
   traces,
+  subagentProgress,
   tokens_used,
 }: {
   text: string
   streaming: boolean
   usage?: { input: number; output: number }
   traces?: import('../lib/chatSession').TraceEntry[]
+  subagentProgress?: import('../lib/chatSession').SubagentProgress[]
   tokens_used?: number
 }) {
   const segments = parseThinkSegments(text)
@@ -161,6 +164,10 @@ function AssistantBubble({
     <div className="ink-fade-in">
       <div className="mb-2xs text-xs text-text-subtle">Lumen</div>
       <div className="mb-sm h-px w-12 bg-border" />
+
+      {subagentProgress && subagentProgress.length > 0 ? (
+        <SubagentProgressPanel entries={subagentProgress} streaming={streaming} />
+      ) : null}
 
       {traces && traces.length > 0 ? (
         <TracePanel traces={traces} streaming={streaming} />
@@ -435,6 +442,45 @@ function ThinkingCard({ content, closed }: { content: string; closed: boolean })
         </div>
       )}
     </div>
+  )
+}
+
+function SubagentProgressPanel({
+  entries,
+  streaming,
+}: {
+  entries: import('../lib/chatSession').SubagentProgress[]
+  streaming: boolean
+}) {
+  const done = entries.some((e) => e.phase === 'done')
+  const active = streaming && !done
+
+  return (
+    <details open={active} className="group/sub mb-sm overflow-hidden rounded-lg border border-border-soft bg-surface/40">
+      <summary className="flex cursor-pointer list-none items-center gap-xs px-sm py-[5px] text-xs text-text-subtle hover:text-text-muted [&::-webkit-details-marker]:hidden">
+        <svg
+          className="h-3 w-3 shrink-0 transition-transform group-open/sub:rotate-180"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+        <span>{done ? '子任务完成' : '子任务进行中'}</span>
+        {active && <span className="ml-xs animate-pulse text-text-subtle">···</span>}
+      </summary>
+      <div className="border-t border-border-soft px-sm py-xs space-y-2xs">
+        {entries.map((entry, i) => (
+          <div key={i} className="flex items-start gap-xs text-xs text-text-subtle">
+            <span className="shrink-0 text-text-subtle/40">
+              {entry.phase === 'error' ? '×' : entry.phase === 'done' ? '✓' : '·'}
+            </span>
+            <span className={entry.phase === 'error' ? 'text-danger' : ''}>{entry.detail}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 

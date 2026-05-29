@@ -40,6 +40,22 @@ export async function getConfig(): Promise<LumenConfig> {
   return res.json()
 }
 
+export async function updateConfig(data: {
+  llm_provider?: string
+  llm_model?: string
+  llm_api_key?: string
+  llm_base_url?: string
+  llm_context_limit?: number
+}): Promise<LumenConfig> {
+  const res = await fetch(`${BASE_URL}/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export async function listConversations(userId = "demo_user", limit = 50): Promise<LumenConversation[]> {
   const res = await fetch(`${BASE_URL}/chat/history?user_id=${userId}&limit=${limit}`)
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.status}`)
@@ -77,8 +93,6 @@ export interface SendOptions {
   message: string
   conversationId?: string
   userId?: string
-  model?: string
-  provider?: string
   onToken(token: string): void
   onThinking(delta: string): void
   onTrace(kind: string, tool: string, content: string): void
@@ -88,7 +102,7 @@ export interface SendOptions {
 }
 
 export async function sendMessage(opts: SendOptions): Promise<void> {
-  const { message, conversationId, userId = "demo_user", model, provider, signal } = opts
+  const { message, conversationId, userId = "demo_user", signal } = opts
 
   const res = await fetch(`${BASE_URL}/chat`, {
     method: "POST",
@@ -97,8 +111,6 @@ export async function sendMessage(opts: SendOptions): Promise<void> {
       message,
       conversation_id: conversationId ?? null,
       user_id: userId,
-      model: model ?? null,
-      provider: provider ?? null,
     }),
     signal,
   })

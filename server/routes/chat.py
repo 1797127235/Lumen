@@ -10,9 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy import func, select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
+from channels.web.formatters import SSEFormatter
 from core.db import get_db
 from lib.chat.models import Conversation, Message
-from channels.web.formatters import SSEFormatter
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,8 +30,6 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     user_id: str = "demo_user"
     attachments: list[str] = []
-    model: str | None = None
-    provider: str | None = None
 
 
 class ConversationUpdate(BaseModel):
@@ -77,8 +75,6 @@ async def send_message(req: ChatRequest, request: Request):
                 user_id=req.user_id,
                 conversation_id=req.conversation_id,
                 message=req.message,
-                model=req.model,
-                provider=req.provider,
             ):
                 yield event
         except asyncio.CancelledError:

@@ -14,6 +14,7 @@ from lib.tools._discovery import get_tool_discovery_state
 from lib.tools._middleware import wrap_with_budget, wrap_with_logging
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
+from lib.tools.delegate import create_delegate_tools
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
@@ -42,10 +43,11 @@ def register_all_tools() -> ToolRegistry:
         *create_file_tools(),
         *create_memory_tools(),
         *create_profile_tools(),
-        *create_web_tools(),        # 新增：多后端搜索 + 提取 + 爬取
+        *create_web_tools(),  # 新增：多后端搜索 + 提取 + 爬取
         *create_web_search_tools(),  # 保留：原有搜索工具
         *create_shell_tools(),
         *create_skill_tools(),
+        *create_delegate_tools(),  # 新增：delegate 子 Agent 工具
         create_tool_search(),
     ]
 

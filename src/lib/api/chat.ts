@@ -43,6 +43,7 @@ export type SSEChatHandlers = {
   onToken: (delta: string, conversationId: string) => void;
   onDone: (conversationId: string, usage?: { input: number; output: number }) => void;
   onTrace: (kind: "call" | "result", tool: string, content: string) => void;
+  onSubagentProgress: (phase: string, detail: string) => void;
   onError: (message: string) => void;
   signal?: AbortSignal;
 };
@@ -124,6 +125,12 @@ export async function chatStream(
             String(ev.kind ?? "call") as "call" | "result",
             String(ev.tool ?? ""),
             String(ev.content ?? ""),
+          );
+          break;
+        case "subagent_progress":
+          h.onSubagentProgress(
+            String(ev.phase ?? ""),
+            String(ev.detail ?? ""),
           );
           break;
         case "done": {

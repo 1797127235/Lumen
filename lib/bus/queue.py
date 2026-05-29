@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -19,8 +20,6 @@ class InboundMessage:
     content: str
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    model: str | None = None
-    provider: str | None = None
 
     @property
     def session_key(self) -> str:
@@ -97,7 +96,5 @@ class MessageBus:
     def stop(self) -> None:
         self._running = False
         # 放入 None 唤醒 consume_inbound
-        try:
+        with contextlib.suppress(asyncio.QueueFull):
             self._inbound.put_nowait(None)
-        except asyncio.QueueFull:
-            pass

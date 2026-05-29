@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 from channels.base import BaseChannel
 from channels.web.formatters import SSEFormatter
-from lib.bus.event_bus import EventBus, StreamDeltaReady, TraceReady
+from lib.bus.event_bus import EventBus, StreamDeltaReady, SubagentProgress, TraceReady
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ class WebChannel(BaseChannel):
         self._bus.subscribe_outbound("web", self._on_response)
         self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
         self._event_bus.on(TraceReady, self._on_trace)
+        self._event_bus.on(SubagentProgress, self._on_subagent_progress)
         logger.info("WebChannel started")
 
     async def stop(self) -> None:
@@ -45,8 +46,6 @@ class WebChannel(BaseChannel):
         user_id: str,
         conversation_id: str | None,
         message: str,
-        model: str | None = None,
-        provider: str | None = None,
     ) -> AsyncIterator[str]:
         """处理 HTTP 请求，产出 SSE 事件流"""
         if not conversation_id:
@@ -62,8 +61,6 @@ class WebChannel(BaseChannel):
                 sender=user_id,
                 chat_id=conversation_id,
                 content=message,
-                model=model,
-                provider=provider,
             )
         )
 
@@ -102,3 +99,9 @@ class WebChannel(BaseChannel):
         queue = self._streams.get(event.session_key)
         if queue:
             await queue.put(self._formatter.format_trace(event.kind, event.tool, event.content))
+
+    async def _on_subagent_progress(self, event: SubagentProgress) -> None:
+        """接收子 Agent 进度事件"""
+        queue = self._streams.get(event.session_key)
+        if queue:
+            await queue.put(self._formatter.format_subagent_progress(event.phase, event.detail))
