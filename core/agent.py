@@ -9,6 +9,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.openai import OpenAIChatModel
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
@@ -19,10 +28,85 @@ logger = get_logger(__name__)
 
 
 # ════════════════════════════
+#  消息历史处理器
+# ════════════════════════════
+def _clean_orphaned_tool_parts(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """清理孤立的工具消息，确保每个 tool-return / retry-prompt 都有对应的 tool-call。
+
+    DeepSeek 等严格 API 要求 role='tool' 的消息必须紧跟在含 tool_calls 的 assistant 消息之后。
+    压缩、序列化/反序列化、PydanticAI 内部消息合并都可能产生孤立。
+
+    策略：
+    1. 收集所有 ModelResponse 中 ToolCallPart 的 tool_call_id
+    2. 从 ModelRequest 中移除没有对应 tool-call 的 ToolReturnPart / RetryPromptPart
+    3. 移除只含 ToolCallPart 但后续无 ToolReturnPart 的尾部 ModelResponse
+    """
+    # --- Pass 1: 收集所有有效的 tool_call_id ---
+    valid_call_ids: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart) and part.tool_call_id:
+                    valid_call_ids.add(part.tool_call_id)
+
+    # --- Pass 2: 过滤 ModelRequest 中的孤立 tool-return / retry-prompt ---
+    result: list[ModelMessage] = []
+    for msg in messages:
+        if not isinstance(msg, ModelRequest):
+            result.append(msg)
+            continue
+
+        has_tool_parts = any(isinstance(p, ToolReturnPart | RetryPromptPart) for p in msg.parts)
+        if not has_tool_parts:
+            result.append(msg)
+            continue
+
+        # 保留非 tool-return 的 parts + 有匹配 tool_call_id 的 parts
+        kept: list = []
+        for p in msg.parts:
+            if isinstance(p, ToolReturnPart | RetryPromptPart):
+                if p.tool_call_id and p.tool_call_id in valid_call_ids:
+                    kept.append(p)
+                # 无匹配的 → 丢弃（这就是孤立的部分）
+            else:
+                kept.append(p)
+
+        if kept:
+            from dataclasses import replace
+
+            result.append(replace(msg, parts=kept))
+        # 全部被过滤 → 跳过整条消息
+
+    # --- Pass 3: 移除末尾只有 ToolCallPart 但无后续 ToolReturnPart 的 ModelResponse ---
+    while result:
+        last = result[-1]
+        if not isinstance(last, ModelResponse):
+            break
+        parts = last.parts
+        # 如果这条 Response 只有 ToolCallPart（无 TextPart），且后续没有对应的 Return
+        has_text = any(type(p).__name__ == "TextPart" for p in parts)
+        has_calls = any(isinstance(p, ToolCallPart) for p in parts)
+        if has_calls and not has_text:
+            # 纯工具调用响应，但无后续返回 → 移除
+            result.pop()
+        else:
+            break
+
+    removed_count = len(messages) - len(result)
+    if removed_count > 0:
+        logger.debug(
+            "ProcessHistory 清理了孤立工具消息",
+            original=len(messages),
+            cleaned=len(result),
+            removed=removed_count,
+        )
+
+    return result
+
+
+# ════════════════════════════
 #  依赖注入类型
 # ════════════════════════════
-
-
 @dataclass
 class LumenDeps:
     """PydanticAI RunContext 依赖，贯穿整个 agent run。"""
@@ -45,8 +129,6 @@ class LumenDeps:
 # ════════════════════════════
 #  Agent 类
 # ════════════════════════════
-
-
 class LumenAgent:
     """Lumen agent 实例，按 (provider, model, tools) 缓存多个 Agent。"""
 
@@ -58,7 +140,6 @@ class LumenAgent:
     # ────────────────────────
     #  公开接口
     # ────────────────────────
-
     def _get_config_fingerprint(self) -> str:
         """计算配置指纹，变更时自动失效缓存
 
@@ -131,7 +212,10 @@ class LumenAgent:
                 "用户不需要知道你要调用什么工具、为什么调用、工具是否可见。"
                 "如果某个操作需要用户等待，最多说一句'稍等'。\n\n"
                 "当用户消息中包含 `[attached_file: {path}]` 标记时，如果你需要了解该文件内容，"
-                "请调用 `file_read` 工具，传入 `file_path` 参数。\n"
+                "请根据文件类型选择合适的工具：\n"
+                "- 图片文件（.png/.jpg/.jpeg/.gif/.bmp/.webp）：使用 `image_read` 工具\n"
+                "- 其他文件：使用 `file_read` 工具\n"
+                "传入 `file_path` 参数。\n"
                 "如需执行系统命令（如安装依赖、运行测试、查看进程等），使用 `shell` 工具；"
                 "长时间运行的命令可设 run_in_background=true，之后用 task_output 查看结果。\n"
                 "如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载，"
@@ -193,7 +277,10 @@ class LumenAgent:
             system_prompt=self.build_system_prompt(),
             retries=2,
             end_strategy="graceful",
-            capabilities=[ReinjectSystemPrompt()],
+            capabilities=[
+                ReinjectSystemPrompt(),
+                ProcessHistory(_clean_orphaned_tool_parts),
+            ],
         )
 
         # 每个 run step 前重新评估，tool_search 更新缓存后下一步立即生效
@@ -322,7 +409,10 @@ def build_worker_agent(
         system_prompt=system_prompt,
         retries=2,
         end_strategy="graceful",
-        capabilities=[ReinjectSystemPrompt()],
+        capabilities=[
+            ReinjectSystemPrompt(),
+            ProcessHistory(_clean_orphaned_tool_parts),
+        ],
     )
 
     @agent.toolset

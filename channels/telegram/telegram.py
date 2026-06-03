@@ -17,13 +17,14 @@ from channels.telegram.telegram_utils import (
 from lib.bus.event_bus import (
     EventBus,
     StreamDeltaReady,
-    ToolCallCompleted,
-    ToolCallStarted,
     TurnStarted,
 )
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 
 logger = logging.getLogger(__name__)
+
+# typing 指示器间隔（秒）— Telegram 要求至少每 5 秒刷新一次
+_TYPING_INTERVAL = 4.0
 
 
 class TelegramChannel(BaseChannel):
@@ -32,6 +33,7 @@ class TelegramChannel(BaseChannel):
     行为对标 akashic-agent：
     - 流式阶段只内部收集，不操作 Telegram API
     - Agent 完成后一次性发送：思考过程（可选）→ 最终回复
+    - 工作期间持续发 typing 指示器，用户不会觉得卡死
     """
 
     def __init__(self, token: str, bus: MessageBus, event_bus: EventBus) -> None:
@@ -46,6 +48,8 @@ class TelegramChannel(BaseChannel):
         self._reply_buffers: dict[int, str] = {}
         self._thinking_buffers: dict[int, str] = {}
         self._polling_task: asyncio.Task | None = None
+        # typing 指示器管理
+        self._typing_tasks: dict[int, asyncio.Task] = {}
 
     async def start(self) -> None:
         """启动 Telegram Polling 并订阅事件"""
@@ -54,8 +58,6 @@ class TelegramChannel(BaseChannel):
         self._bus.subscribe_outbound("telegram", self._on_response)
 
         self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
-        self._event_bus.on(ToolCallStarted, self._on_tool_started)
-        self._event_bus.on(ToolCallCompleted, self._on_tool_completed)
         self._event_bus.on(TurnStarted, self._on_turn_started)
 
         await self._app.initialize()
@@ -66,6 +68,11 @@ class TelegramChannel(BaseChannel):
 
     async def stop(self) -> None:
         """停止 Telegram Polling"""
+        # 取消所有 typing 任务
+        for task in self._typing_tasks.values():
+            task.cancel()
+        self._typing_tasks.clear()
+
         try:
             if self._polling_task:
                 self._polling_task.cancel()
@@ -98,6 +105,36 @@ class TelegramChannel(BaseChannel):
         )
 
     # ═══════════════════════════════════════════════════════════════
+    #  Typing 指示器
+    # ═══════════════════════════════════════════════════════════════
+
+    def _start_typing(self, chat_id: int) -> None:
+        """启动 typing 指示器循环。"""
+        if chat_id in self._typing_tasks:
+            return
+        self._typing_tasks[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
+
+    def _stop_typing(self, chat_id: int) -> None:
+        """停止 typing 指示器循环。"""
+        task = self._typing_tasks.pop(chat_id, None)
+        if task:
+            task.cancel()
+
+    async def _typing_loop(self, chat_id: int) -> None:
+        """每 N 秒发一次 typing action，让用户看到「正在输入...」。"""
+        from telegram.constants import ChatAction
+
+        try:
+            while True:
+                try:
+                    await self._app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                except Exception as e:
+                    logger.debug("[telegram] typing action failed: %s", e)
+                await asyncio.sleep(_TYPING_INTERVAL)
+        except asyncio.CancelledError:
+            pass
+
+    # ═══════════════════════════════════════════════════════════════
     #  入站消息
     # ═══════════════════════════════════════════════════════════════
 
@@ -111,6 +148,15 @@ class TelegramChannel(BaseChannel):
 
         logger.info("[telegram] Received from %s: %s", user_id, text[:60])
 
+        # 自动填充 telegram_chat_id（RSS 推送需要）
+        from core.config import get_settings, save_user_config
+
+        try:
+            if not get_settings().telegram_chat_id:
+                save_user_config({"telegram_chat_id": chat_id})
+        except Exception:
+            pass
+
         await self._bus.publish_inbound(
             InboundMessage(
                 channel="telegram",
@@ -121,7 +167,7 @@ class TelegramChannel(BaseChannel):
         )
 
     # ═══════════════════════════════════════════════════════════════
-    #  EventBus 事件处理 — 只内部收集，不操作 Telegram
+    #  EventBus 事件处理
     # ═══════════════════════════════════════════════════════════════
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
@@ -130,6 +176,8 @@ class TelegramChannel(BaseChannel):
         chat_id = int(event.chat_id)
         self._reply_buffers.pop(chat_id, None)
         self._thinking_buffers.pop(chat_id, None)
+        # 启动 typing 指示器
+        self._start_typing(chat_id)
         logger.debug("[telegram] Turn started for chat_id=%s", chat_id)
 
     async def _on_stream_delta(self, event: StreamDeltaReady) -> None:
@@ -141,40 +189,6 @@ class TelegramChannel(BaseChannel):
         if event.thinking_delta:
             self._thinking_buffers[chat_id] = self._thinking_buffers.get(chat_id, "") + event.thinking_delta
 
-    async def _on_tool_started(self, event: ToolCallStarted) -> None:
-        if event.channel != "telegram":
-            return
-        args_preview = str(event.arguments)[:80] if event.arguments else ""
-        text = f"🟡 调用 `{event.tool_name}`…"
-        if args_preview:
-            text += f"\n<code>{args_preview}</code>"
-        await self._send_tool_status(int(event.chat_id), "tool_status(start)", text)
-
-    async def _on_tool_completed(self, event: ToolCallCompleted) -> None:
-        if event.channel != "telegram":
-            return
-        status_icon = "✅" if event.status == "done" else "❌"
-        result_preview = event.result_preview[:200] if event.result_preview else ""
-        text = f"{status_icon} `{event.tool_name}`"
-        if result_preview:
-            text += f"\n<pre>{result_preview}</pre>"
-        await self._send_tool_status(int(event.chat_id), "tool_status(end)", text)
-
-    async def _send_tool_status(self, chat_id: int, label: str, text: str) -> None:
-        try:
-            await self._limiter.run(
-                chat_id,
-                kind="send",
-                label=label,
-                action=lambda: self._app.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                ),
-            )
-        except Exception as e:
-            logger.warning("[telegram] Failed to send %s: %s", label, e)
-
     # ═══════════════════════════════════════════════════════════════
     #  出站消息 — 一次性发送思考 + 回复
     # ═══════════════════════════════════════════════════════════════
@@ -182,17 +196,25 @@ class TelegramChannel(BaseChannel):
     async def _on_response(self, msg: OutboundMessage) -> None:
         chat_id = int(msg.chat_id)
 
+        # 停止 typing 指示器
+        self._stop_typing(chat_id)
+
         final_reply = msg.content or self._reply_buffers.pop(chat_id, "")
         final_thinking = msg.thinking or self._thinking_buffers.pop(chat_id, "")
 
-        try:
-            if final_thinking:
-                await send_thinking_block(self._app.bot, chat_id, final_thinking, self._limiter)
-            if final_reply:
-                await send_markdown(self._app.bot, chat_id, final_reply, self._limiter)
-        except Exception as e:
-            logger.error("[telegram] Failed to send response: %s", e)
+        # 思考块和正文分开 try，思考失败不连累正文渲染
+        if final_thinking:
             try:
-                await self.send_message(msg.chat_id, msg.content)
-            except Exception as e2:
-                logger.error("[telegram] Fallback send also failed: %s", e2)
+                await send_thinking_block(self._app.bot, chat_id, final_thinking, self._limiter)
+            except Exception as e:
+                logger.warning("[telegram] Thinking block send failed: %s", e)
+
+        if final_reply:
+            try:
+                await send_markdown(self._app.bot, chat_id, final_reply, self._limiter)
+            except Exception as e:
+                logger.error("[telegram] Markdown send failed, fallback to plain: %s", e)
+                try:
+                    await self.send_message(msg.chat_id, msg.content)
+                except Exception as e2:
+                    logger.error("[telegram] Fallback send also failed: %s", e2)

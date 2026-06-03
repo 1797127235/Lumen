@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart  # pyright: ignore[reportMissingImports]
+from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+)
 
 from lib.chat.models import Conversation
 from shared.logging import get_logger
@@ -38,6 +44,54 @@ def _has_summary_marker(msg: ModelMessage) -> bool:
     return False
 
 
+def _has_tool_return(msg: ModelMessage) -> bool:
+    """检查消息是否包含 ToolReturnPart（工具执行结果）。"""
+    from pydantic_ai.messages import ToolReturnPart  # pyright: ignore[reportMissingImports]
+
+    return any(isinstance(p, ToolReturnPart) for p in msg.parts)
+
+
+def _has_tool_call(msg: ModelMessage) -> bool:
+    """检查消息是否包含 ToolCallPart（模型发起的工具调用）。"""
+    from pydantic_ai.messages import ToolCallPart  # pyright: ignore[reportMissingImports]
+
+    return any(isinstance(p, ToolCallPart) for p in msg.parts)
+
+
+def _safe_tail(messages: list, tail_size: int) -> list:
+    """从 messages 末尾取 tail_size 条，确保不以孤立的 ToolReturnPart 开头。
+
+    如果 tail 的第一条包含 ToolReturnPart，往前扩展直到包含对应的 ToolCallPart。
+    这避免 DeepSeek 等严格校验的 API 报错：tool role 消息没有对应的 tool_calls。
+    """
+    tail = messages[-tail_size:]
+    if not tail:
+        return tail
+
+    # 如果 tail 第一条不是工具结果，直接返回
+    if not _has_tool_return(tail[0]):
+        return tail
+
+    # 向前找到对应的 ToolCall（ModelResponse with ToolCallPart）
+    cutoff = len(messages) - tail_size
+    for i in range(cutoff - 1, -1, -1):
+        msg = messages[i]
+        if isinstance(msg, ModelResponse) and _has_tool_call(msg):
+            # 找到了，把从这条开始到末尾都算 tail
+            return messages[i:]
+        if isinstance(msg, ModelRequest) and _has_tool_return(msg):
+            # 连续多条工具结果，继续往前找
+            continue
+        # 遇到非工具消息，停止（不应发生，但安全起见）
+        break
+
+    # 没找到对应的 ToolCall，丢弃开头的孤立工具结果
+    for idx, m in enumerate(tail):
+        if not _has_tool_return(m):
+            return tail[idx:]
+    return []
+
+
 async def ensure_conversation(db, user_id: str, conversation_id: str | None, user_input: str) -> Conversation | str:
     """确保会话存在。返回 Conversation 实例或错误信息字符串"""
     if conversation_id:
@@ -61,13 +115,13 @@ async def ensure_conversation(db, user_id: str, conversation_id: str | None, use
 
 
 def load_pydantic_history(conv) -> list:
-    """从 Conversation.pydantic_messages 加载消息历史"""
-    from pydantic_ai import ModelMessagesTypeAdapter  # pyright: ignore[reportMissingImports]
+    """从 Conversation.pydantic_messages 加载消息历史，并修复孤立工具消息。"""
+    from pydantic_core import to_json
 
     if not conv.pydantic_messages:
         return []
     try:
-        return ModelMessagesTypeAdapter.validate_json(conv.pydantic_messages.encode())
+        messages = ModelMessagesTypeAdapter.validate_json(conv.pydantic_messages.encode())
     except Exception as exc:
         logger.warning(
             "消息历史反序列化失败，重置为空",
@@ -75,6 +129,67 @@ def load_pydantic_history(conv) -> list:
             conversation_id=getattr(conv, "conversation_id", None),
         )
         return []
+
+    # 修复孤立工具消息：确保每个 tool-return 前面都有对应的 tool-call
+    cleaned = _fix_orphaned_tool_messages(messages)
+    if len(cleaned) < len(messages):
+        # 修复了问题，回写
+        conv.pydantic_messages = to_json(cleaned).decode()
+        logger.info(
+            "修复了孤立工具消息",
+            original=len(messages),
+            cleaned=len(cleaned),
+            conversation_id=getattr(conv, "conversation_id", None),
+        )
+
+    return cleaned
+
+
+def _fix_orphaned_tool_messages(messages: list) -> list:
+    """移除没有对应 tool-call 的 tool-return，以及没有对应 tool-return 的 tool-call。
+
+    DeepSeek 等严格 API 要求 tool role 消息必须有前置 tool_calls。
+    PydanticAI 在工具失败重试时可能产生 retry-prompt 而非 tool-return，
+    导致 tool-call 孤立。
+    """
+    from pydantic_ai.messages import ToolCallPart, ToolReturnPart  # pyright: ignore[reportMissingImports]
+
+    result = []
+    for msg in messages:
+        parts = msg.parts if hasattr(msg, "parts") else []
+
+        # 检查是否包含 ToolReturnPart
+        has_tool_return = any(isinstance(p, ToolReturnPart) for p in parts)
+        has_tool_call = any(isinstance(p, ToolCallPart) for p in parts)
+
+        if has_tool_return:
+            # 检查前一条是否是包含 tool-call 的 response
+            # 如果 result 为空或最后一条不是含 tool-call 的 response，则跳过
+            if not result:
+                continue
+            last = result[-1]
+            last_parts = last.parts if hasattr(last, "parts") else []
+            last_has_tool_call = any(isinstance(p, ToolCallPart) for p in last_parts)
+            if not last_has_tool_call:
+                continue  # 跳过孤立的 tool-return
+
+        if has_tool_call:
+            # tool-call 暂时保留，但如果下一条不是 tool-return 则需要清理
+            # 这里无法前瞻，先保留，由上面的逻辑在遇到孤立 tool-return 时跳过
+            pass
+
+        result.append(msg)
+
+    # 反向扫描：移除末尾没有 tool-return 的 tool-call
+    while result:
+        last = result[-1]
+        last_parts = last.parts if hasattr(last, "parts") else []
+        if any(isinstance(p, ToolCallPart) for p in last_parts):
+            result.pop()
+        else:
+            break
+
+    return result
 
 
 def save_pydantic_history(conv, new_msgs: list, summary: str | None = None) -> None:
@@ -102,7 +217,7 @@ def save_pydantic_history(conv, new_msgs: list, summary: str | None = None) -> N
     cleaned = [m for m in updated if not _has_summary_marker(m)]
 
     head = cleaned[:_HEAD_KEEP]
-    tail = cleaned[-_TAIL_KEEP:]
+    tail = _safe_tail(cleaned, _TAIL_KEEP)
 
     parts = list(head)
 

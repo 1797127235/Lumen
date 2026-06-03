@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-import openai
-from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
@@ -13,7 +12,6 @@ from core.db import get_async_session_maker
 from lib.bus.event_bus import (
     EventBus,
     StreamDeltaReady,
-    SubagentProgress,
     ToolCallCompleted,
     ToolCallStarted,
     TraceReady,
@@ -33,12 +31,12 @@ logger = get_logger(__name__)
 class _TurnState:
     full_content: str = ""
     thinking_content: str = ""
+    in_think_tag: bool = False  # 内联 <think> 标签跨 delta 状态（_split_think_text 依赖）
     usage_data: dict | None = None
     cancelled: bool = False
     new_msgs: list = field(default_factory=list)
     trace_records: list[dict] = field(default_factory=list)
     step: int = 0
-    in_think_tag: bool = False
 
 
 class AgentRunner:
@@ -134,22 +132,9 @@ class AgentRunner:
                 async with ConversationLock(conv.conversation_id):
                     await db.refresh(conv)
 
-                    # 构建 Agent：模型唯一来自 config（get_settings），不接受请求级覆盖
+                    # 构建 Agent
                     agent = get_agent()
                     agent_generation = get_agent_generation()
-
-                    # delegate 进度回调闭包：绑定渠道坐标
-                    def _emit_subagent_progress(phase: str, detail: str) -> None:
-                        self._event_bus.emit(
-                            SubagentProgress(
-                                channel=msg.channel,
-                                session_key=session_key,
-                                chat_id=msg.chat_id,
-                                phase=phase,
-                                detail=detail,
-                            )
-                        )
-
                     deps = LumenDeps(
                         user_id=user_id,
                         db=db,
@@ -158,7 +143,6 @@ class AgentRunner:
                         agent_generation=agent_generation,
                         workspace_root=find_project_root(),
                         source_platform=msg.channel,
-                        progress_emitter=_emit_subagent_progress,
                     )
 
                     # 确保工具已注册
@@ -180,7 +164,7 @@ class AgentRunner:
                         deps=deps,
                         model_settings=ModelSettings(max_tokens=4096),
                         usage_limits=UsageLimits(
-                            request_limit=12,
+                            request_limit=30,
                             tool_calls_limit=20,
                         ),
                     ) as stream:
@@ -308,59 +292,21 @@ class AgentRunner:
                         content="服务繁忙，请稍后重试",
                     )
                 )
-
-            except UsageLimitExceeded:
-                partial = state.full_content
-                if partial:
-                    logger.info("Agent 超出请求限制，返回已有内容", len=len(partial))
-                    await self._bus.publish_outbound(
-                        OutboundMessage(
-                            channel=msg.channel,
-                            chat_id=msg.chat_id,
-                            content=partial,
-                        )
-                    )
+            except Exception as exc:
+                if isinstance(exc, UnexpectedModelBehavior):
+                    logger.warning("模型返回异常", error=str(exc))
+                    msg_text = "模型未返回内容，可能触发了内容过滤，请换一种说法重试"
                 else:
-                    logger.warning("Agent 超出请求限制且无内容")
-                    await self._bus.publish_outbound(
-                        OutboundMessage(
-                            channel=msg.channel,
-                            chat_id=msg.chat_id,
-                            content="我想了一会但还没整理好，可以让我继续或换个方式问",
-                        )
-                    )
-
-            except (ModelAPIError, openai.APIConnectionError) as exc:
-                logger.warning("LLM 连接失败", error=str(exc)[:200])
-                await self._bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="网络连接失败，请检查网络后重试",
-                    )
-                )
-
-            except UnexpectedModelBehavior as exc:
-                logger.warning("模型返回异常", error=str(exc))
-                await self._bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="模型未返回内容，可能触发了内容过滤，请换一种说法重试",
-                    )
-                )
-
-            except Exception:
-                logger.exception("生成 AI 回复失败")
+                    logger.exception("生成 AI 回复失败")
+                    msg_text = "生成回复失败，请稍后重试"
                 await db.rollback()
                 await self._bus.publish_outbound(
                     OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content="生成回复失败，请稍后重试",
+                        content=msg_text,
                     )
                 )
-
             finally:
                 unbind_chat_context()
 
@@ -428,4 +374,24 @@ async def _inject_context_frame(
 
     frame_content = "\n\n".join(parts)
     frame_msg = ModelRequest(parts=[UserPromptPart(content=frame_content)])  # type: ignore[call-arg]
-    return [*history, frame_msg]
+    result = [*history, frame_msg]
+
+    # 注入 FOCUS.md（当前关注）作为独立消息
+    try:
+        from lib.memory.markdown import AsyncMarkdownStore
+
+        focus_store = AsyncMarkdownStore()
+        focus_content = await focus_store.read_focus(user_id)
+        if focus_content.strip():
+            focus_msg = ModelRequest(
+                parts=[
+                    UserPromptPart(  # type: ignore[call-arg]
+                        content=f"<current-focus>\n{focus_content}\n</current-focus>"
+                    )
+                ]
+            )
+            result.append(focus_msg)
+    except Exception:
+        logger.debug("FOCUS.md 读取失败", user_id=user_id)
+
+    return result
