@@ -21,9 +21,9 @@ logger = get_logger(__name__)
 _TIMEOUT = 25.0
 _DEFAULT_MAX_RESULTS = 5
 _MAX_CONTENT_SIZE = 2_000_000  # 2MB - 拒绝处理
-_CHUNK_THRESHOLD = 500_000     # 500K - 分块处理
-_CHUNK_SIZE = 100_000          # 每块 100K
-_MAX_OUTPUT_SIZE = 5000        # 最终输出上限
+_CHUNK_THRESHOLD = 500_000  # 500K - 分块处理
+_CHUNK_SIZE = 100_000  # 每块 100K
+_MAX_OUTPUT_SIZE = 5000  # 最终输出上限
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -38,6 +38,7 @@ def _has_env(name: str) -> bool:
 def _get_search_backend() -> str:
     """自动检测可用的搜索后端。"""
     from core.config import get_settings
+
     settings = get_settings()
 
     # 优先用 Lumen 配置
@@ -185,14 +186,11 @@ async def _search_ddgs(query: str, max_results: int) -> list[dict]:
 
     # duckduckgo-search 的异步支持有限，用同步包装
     import asyncio
+
     loop = asyncio.get_event_loop()
-    results = await loop.run_in_executor(
-        None,
-        lambda: list(DDGS().text(query, max_results=max_results))
-    )
+    results = await loop.run_in_executor(None, lambda: list(DDGS().text(query, max_results=max_results)))
     return [
-        {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")[:200]}
-        for r in results
+        {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")[:200]} for r in results
     ]
 
 
@@ -247,6 +245,7 @@ async def _fetch_with_httpx(url: str) -> dict[str, Any]:
     if "text/html" in content_type:
         try:
             from lxml import html as lxml_html
+
             doc = lxml_html.fromstring(text)
             for tag in ("script", "style", "noscript"):
                 for el in doc.xpath(f"//{tag}"):
@@ -255,6 +254,7 @@ async def _fetch_with_httpx(url: str) -> dict[str, Any]:
         except Exception:
             # fallback: 简单去标签
             import re
+
             text = re.sub(r"<[^>]+>", " ", text)
             text = " ".join(text.split())
 
@@ -364,6 +364,7 @@ async def _compress_with_llm(content: str, url: str = "", title: str = "") -> st
 
     try:
         import litellm
+
         from core.config import build_llm_call_params
 
         llm_params = build_llm_call_params()
@@ -397,7 +398,7 @@ async def _process_large_content(content: str, url: str = "", title: str = "") -
         return result or content[:_MAX_OUTPUT_SIZE]
 
     # 分块处理
-    chunks = [content[i:i + _CHUNK_SIZE] for i in range(0, len(content), _CHUNK_SIZE)]
+    chunks = [content[i : i + _CHUNK_SIZE] for i in range(0, len(content), _CHUNK_SIZE)]
     logger.info("chunked processing", chunks=len(chunks), total_chars=len(content))
 
     async def summarize_chunk(idx: int, chunk: str) -> tuple[int, str | None]:
@@ -498,12 +499,14 @@ async def _web_extract(args: dict[str, Any], deps):
             compressed = await _process_large_content(content, url, title)
             content = compressed
 
-        results.append({
-            "url": url,
-            "title": title,
-            "content": content[:_MAX_OUTPUT_SIZE],
-            "original_length": len(data.get("content", "")),
-        })
+        results.append(
+            {
+                "url": url,
+                "title": title,
+                "content": content[:_MAX_OUTPUT_SIZE],
+                "original_length": len(data.get("content", "")),
+            }
+        )
 
     # 格式化输出
     lines = []
@@ -556,6 +559,7 @@ async def _web_crawl(args: dict[str, Any], deps):
 
         try:
             import litellm
+
             from core.config import build_llm_call_params
 
             llm_params = build_llm_call_params()
@@ -613,7 +617,7 @@ def create_web_tools() -> list[ToolDef]:
             execute=_web_search_v2,
             read_only=True,
             meta=ToolMeta(
-                always_on=False,
+                always_on=True,
                 risk="read-only",
                 search_hint="搜索网页、查资料、google、百度、exa、tavily",
                 tags=["web", "search", "internet"],
@@ -644,7 +648,7 @@ def create_web_tools() -> list[ToolDef]:
             execute=_web_extract,
             read_only=True,
             meta=ToolMeta(
-                always_on=False,
+                always_on=True,
                 risk="read-only",
                 search_hint="抓取网页、提取内容、读取文章、fetch",
                 tags=["web", "extract", "fetch", "scrape"],

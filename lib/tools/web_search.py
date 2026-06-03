@@ -102,10 +102,18 @@ async def _web_search(args: dict[str, Any], deps):
     except TimeoutError:
         return tool_error("搜索超时，请稍后重试")
     except httpx.HTTPStatusError as e:
-        return tool_error(f"搜索 API 返回错误：{e.response.status_code}")
+        status_code = e.response.status_code
+        if status_code == 401:
+            return tool_error(
+                f"搜索服务认证失败（{status_code}）：API key 无效或已过期，请检查 SEARCH_API_KEY 配置。"
+                "不要重复尝试搜索，直接告知用户当前搜索不可用。"
+            )
+        if status_code == 429:
+            return tool_error(f"搜索服务限流（{status_code}）：API 调用配额已耗尽，请稍后再试。" "不要重复尝试搜索。")
+        return tool_error(f"搜索 API 返回错误（{status_code}）。不要重复尝试。")
     except Exception as e:
         logger.warning("web_search failed", provider=provider, error=str(e))
-        return tool_error(f"搜索失败：{e}")
+        return tool_error(f"搜索失败（{provider}）：{e}。不要重复尝试相同查询，换个关键词或跳过搜索。")
 
     if not results:
         return tool_ok(f"未找到关于「{query}」的相关结果。")
@@ -144,6 +152,6 @@ def create_web_search_tools() -> list[ToolDef]:
             },
             execute=_web_search,
             read_only=True,
-            meta=ToolMeta(always_on=False, risk="read-only", search_hint="搜索网页、查资料、google、百度"),
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="搜索网页、查资料、google、百度"),
         )
     ]
