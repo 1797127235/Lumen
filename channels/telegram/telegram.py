@@ -17,6 +17,7 @@ from channels.telegram.telegram_utils import (
 from lib.bus.event_bus import (
     EventBus,
     StreamDeltaReady,
+    SubagentProgress,
     TurnStarted,
 )
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
@@ -59,6 +60,7 @@ class TelegramChannel(BaseChannel):
 
         self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
         self._event_bus.on(TurnStarted, self._on_turn_started)
+        self._event_bus.on(SubagentProgress, self._on_subagent_progress)
 
         await self._app.initialize()
         await self._app.start()
@@ -188,6 +190,24 @@ class TelegramChannel(BaseChannel):
             self._reply_buffers[chat_id] = self._reply_buffers.get(chat_id, "") + event.content_delta
         if event.thinking_delta:
             self._thinking_buffers[chat_id] = self._thinking_buffers.get(chat_id, "") + event.thinking_delta
+
+    async def _on_subagent_progress(self, event: SubagentProgress) -> None:
+        """处理 delegate 子 Agent 进度事件 — 在 Telegram 显示为轻量状态消息。"""
+        if event.channel != "telegram":
+            return
+        # 仅对 "step" 类型的进度做轻量提示，started/done/error 太频繁
+        if event.phase != "step":
+            return
+        chat_id = int(event.chat_id)
+        try:
+            # 用静默消息（disable_notification=True）避免打扰用户
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔍 {event.detail}",
+                disable_notification=True,
+            )
+        except Exception as e:
+            logger.debug("[telegram] SubagentProgress send failed: %s", e)
 
     # ═══════════════════════════════════════════════════════════════
     #  出站消息 — 一次性发送思考 + 回复

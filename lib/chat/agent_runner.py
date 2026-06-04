@@ -12,6 +12,7 @@ from core.db import get_async_session_maker
 from lib.bus.event_bus import (
     EventBus,
     StreamDeltaReady,
+    SubagentProgress,
     ToolCallCompleted,
     ToolCallStarted,
     TraceReady,
@@ -135,6 +136,21 @@ class AgentRunner:
                     # 构建 Agent
                     agent = get_agent()
                     agent_generation = get_agent_generation()
+
+                    # delegate 工具的进度回调：通过 EventBus 发送 SubagentProgress
+                    event_bus = self._event_bus
+
+                    def _delegate_emitter(phase: str, detail: str) -> None:
+                        event_bus.emit(
+                            SubagentProgress(
+                                channel=msg.channel,
+                                session_key=session_key,
+                                chat_id=msg.chat_id,
+                                phase=phase,
+                                detail=detail,
+                            )
+                        )
+
                     deps = LumenDeps(
                         user_id=user_id,
                         db=db,
@@ -143,6 +159,7 @@ class AgentRunner:
                         agent_generation=agent_generation,
                         workspace_root=find_project_root(),
                         source_platform=msg.channel,
+                        progress_emitter=_delegate_emitter,
                     )
 
                     # 确保工具已注册

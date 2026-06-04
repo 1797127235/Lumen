@@ -1,7 +1,7 @@
 """delegate 子 Agent 工具 — 主 Agent 可起一个独立 child Agent 执行子任务。
 
-child 在隔离上下文里跑、有独立高 UsageLimits、进度实时流回，
-跑完只把结果摘要交还主 Agent。
+child 在隔离上下文里跑、有独立 UsageLimits、进度实时流回，
+跑完只把结果摘要交还主 Agent。超限时做一次无工具的 LLM 调用生成进度总结。
 """
 
 from __future__ import annotations
@@ -41,11 +41,22 @@ _BLOCKLIST: set[str] = {
 
 _DEFAULT_BUNDLES = ["web", "files"]
 
-# child UsageLimits（决策 #2）
-_CHILD_REQUEST_LIMIT = 40
-_CHILD_TOOL_CALLS_LIMIT = 60
+# child UsageLimits — 限制步骤防止无限循环
+_CHILD_REQUEST_LIMIT = 15
+_CHILD_TOOL_CALLS_LIMIT = 20
 
-# 报告目录（决策 #3）
+# 工具结果截断上限（约 ~25K tokens）
+_MAX_TOOL_RESULT_CHARS = 100_000
+
+# 收尾总结 prompt
+_FORCE_SUMMARY_PROMPT = (
+    "你已用完任务执行预算，禁止再调用工具。\n"
+    "现在必须直接输出中文最终总结。\n"
+    "必须覆盖：1) 已完成内容；2) 当前未完成内容；3) 下一步建议。\n"
+    "禁止：继续规划工具调用；说'需要继续调用工具'；输出模板句。"
+)
+
+# 报告目录
 _REPORTS_DIR = Path.home() / ".lumen" / "reports"
 
 # Worker system prompt 模板
@@ -104,6 +115,8 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
     emit = getattr(ctx, "progress_emitter", None)
 
     try:
+        from pydantic_ai.exceptions import UsageLimitExceeded
+
         from core.agent import LumenDeps, build_worker_agent
         from core.db import get_async_session_maker
         from lib.tools._registry import get_tool_registry
@@ -129,29 +142,45 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
             if emit:
                 emit("started", f"开始子任务：{goal[:60]}")
 
+            # 收集中间步骤文本，用于超限后的收尾总结
+            step_log: list[str] = []
+
             # 运行 child agent，从 stream 事件中捕获最终输出
             child_output = ""
-            async with worker.run_stream_events(
-                goal,
-                message_history=[],
-                deps=child_deps,
-                model_settings=ModelSettings(max_tokens=4096),
-                usage_limits=UsageLimits(
-                    request_limit=_CHILD_REQUEST_LIMIT,
-                    tool_calls_limit=_CHILD_TOOL_CALLS_LIMIT,
-                ),
-            ) as stream:
-                async for event in stream:
-                    _emit_progress_from_event(event, emit)
+            try:
+                async with worker.run_stream_events(
+                    goal,
+                    message_history=[],
+                    deps=child_deps,
+                    model_settings=ModelSettings(max_tokens=4096),
+                    usage_limits=UsageLimits(
+                        request_limit=_CHILD_REQUEST_LIMIT,
+                        tool_calls_limit=_CHILD_TOOL_CALLS_LIMIT,
+                    ),
+                ) as stream:
+                    async for event in stream:
+                        _emit_progress_from_event(event, emit, step_log)
 
-                    # 最终输出在 agent_run_result 事件里（event.result.output）
-                    kind = getattr(event, "event_kind", "")
-                    if kind == "agent_run_result":
-                        result_obj = getattr(event, "result", None)
-                        if result_obj is not None:
-                            child_output = getattr(result_obj, "output", "") or ""
+                        # 最终输出在 agent_run_result 事件里（event.result.output）
+                        kind = getattr(event, "event_kind", "")
+                        if kind == "agent_run_result":
+                            result_obj = getattr(event, "result", None)
+                            if result_obj is not None:
+                                child_output = getattr(result_obj, "output", "") or ""
 
-            result = child_output
+                result = child_output
+
+            except UsageLimitExceeded as exc:
+                # 超限：做一次无工具的 LLM 调用生成进度总结
+                logger.warning(
+                    "delegate 步骤预算耗尽，执行收尾总结",
+                    error=str(exc)[:200],
+                    steps=len(step_log),
+                )
+                if emit:
+                    emit("step", "步骤预算耗尽，正在生成进度总结...")
+
+                result = await _force_summary(worker, child_deps, step_log, reason=str(exc))
 
             await child_db.commit()
 
@@ -171,6 +200,36 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
         return tool_error(f"子任务执行失败：{str(exc)[:200]}")
 
 
+async def _force_summary(
+    worker: Any,
+    child_deps: Any,
+    step_log: list[str],
+    *,
+    reason: str,
+) -> str:
+    """UsageLimitExceeded 后，做一次无工具 LLM 调用生成进度总结。
+
+    参照 akashic-agent 的 _force_final_summary 模式：
+    带上已有的步骤记录，让 LLM 总结已完成的和未完成的内容。
+    """
+    steps_text = "\n".join(f"- {s}" for s in step_log[-20:])  # 最近 20 步
+    prompt = f"[收尾原因] {reason}\n" f"[已执行步骤]\n{steps_text}\n\n" f"{_FORCE_SUMMARY_PROMPT}"
+    try:
+        summary_result = await worker.run(
+            prompt,
+            message_history=[],
+            deps=child_deps,
+            model_settings=ModelSettings(max_tokens=1024),
+            usage_limits=UsageLimits(request_limit=1),  # 仅 1 次请求，禁止工具调用
+        )
+        text = summary_result.output.strip() if summary_result.output else ""
+        if text:
+            return text
+    except Exception as e:
+        logger.warning("delegate 收尾总结失败", error=str(e)[:200])
+    return "步骤预算已耗尽：已完成部分关键步骤，但仍有未完成项。"
+
+
 def _parse_args(raw: Any) -> dict[str, Any]:
     """把 tool call 的 raw args（可能是 JSON 字符串/None）规整成 dict。"""
     if isinstance(raw, str):
@@ -182,13 +241,16 @@ def _parse_args(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _emit_progress_from_event(event: Any, emit: Any) -> None:
+def _emit_progress_from_event(event: Any, emit: Any, step_log: list[str] | None = None) -> None:
     """从 child 的 stream event 提取进度文本并通过 emit 发出。
 
     PydanticAI event_kind 值：function_tool_call / function_tool_result / part_start /
     part_delta / agent_run_result（见 event_handlers.py EVENT_HANDLERS 映射）。
+
+    Args:
+        step_log: 可选的步骤日志列表，用于收集中间步骤供收尾总结使用。
     """
-    if emit is None:
+    if emit is None and step_log is None:
         return
 
     kind = getattr(event, "event_kind", "")
@@ -198,7 +260,7 @@ def _emit_progress_from_event(event: Any, emit: Any) -> None:
         raw_args = getattr(event, "args", None) or getattr(getattr(event, "part", None), "args", None)
         # PydanticAI 的 function_tool_call args 可能是 JSON 字符串，先规整成 dict
         args = raw_args if isinstance(raw_args, dict) else _parse_args(raw_args)
-        # 粗粒度：工具名 + 简短参数（决策 #4）
+        # 粗粒度：工具名 + 简短参数
         if tool_name == "web_search":
             detail = f"搜索：{args.get('query', '')[:50]}"
         elif tool_name == "web_extract":
@@ -212,15 +274,22 @@ def _emit_progress_from_event(event: Any, emit: Any) -> None:
             detail = f"写入文件：{args.get('file_path', '')[:50]}"
         else:
             detail = f"调用 {tool_name}"
-        emit("step", detail)
+        if emit:
+            emit("step", detail)
+        if step_log is not None:
+            step_log.append(detail)
     elif kind == "function_tool_result":
         tool_name = getattr(event, "tool_name", "") or getattr(getattr(event, "part", None), "tool_name", "")
         # tool_error 的规范输出以 ❌ 开头（见 _base.py），据此区分成功/失败
         content = getattr(event, "content", None) or getattr(getattr(event, "result", None), "content", None) or ""
         if isinstance(content, str) and content.lstrip().startswith("❌"):
-            emit("step", f"{tool_name} 失败")
+            detail = f"{tool_name} 失败"
         else:
-            emit("step", f"{tool_name} 完成")
+            detail = f"{tool_name} 完成"
+        if emit:
+            emit("step", detail)
+        if step_log is not None:
+            step_log.append(detail)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -234,7 +303,7 @@ def create_delegate_tools() -> list[ToolDef]:
             name="delegate",
             description=(
                 "委派一个独立子 Agent 去执行任务。子 Agent 在隔离上下文中运行，"
-                "有独立的工具集和高预算，完成后只返回结果摘要。\n\n"
+                "有独立的工具集和步骤预算（最多 15 轮 LLM 调用），完成后只返回结果摘要。\n\n"
                 "适用场景：深度调研、多步骤搜索、需要大量工具调用但不应占用主对话上下文的任务。\n\n"
                 "使用方式：传入明确的 goal 和可选的背景 context。"
                 "toolsets 指定子 Agent 可用的工具类别（默认 web+files）。"
