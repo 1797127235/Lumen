@@ -3,7 +3,7 @@
 ## 定位
 
 Lumen — 一个真正认识你的 AI 伙伴。FastAPI + SQLAlchemy + PydanticAI + LiteLLM + SQLite。前端 React 19 + Vite + Tailwind CSS 4。
-
+单用户！！！！！
 ---
 
 ## Tutorial: 第一次跑起来

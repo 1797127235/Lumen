@@ -15,6 +15,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# 启动时加载 .env，确保 TELEGRAM_BOT_TOKEN 等变量可用
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lumen — 你的长期个人 AI 伙伴")

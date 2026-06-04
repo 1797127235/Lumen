@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # ── 多平台通道 ──
     enable_web: bool = True
     telegram_bot_token: str = ""
+    # ── Telegram push target ──
+    telegram_chat_id: str = ""  # 首次 Telegram 对话时自动填充
+    # ── RSS ──
+    rss_enabled: bool = True
+    rss_fetch_interval: int = 300  # 拉取间隔（秒）
+    rss_filter_model: str = ""  # 空 = 使用 llm_model
     # ── 语义去重 ──
     semantic_dedup_enabled: bool = False
     semantic_dedup_default_threshold: float = 0.85
@@ -179,6 +185,10 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "embedding_model",
         "embedding_api_key",
         "embedding_base_url",
+        "telegram_chat_id",
+        "rss_enabled",
+        "rss_fetch_interval",
+        "rss_filter_model",
     )
 
     for key in _CONFIG_KEYS:
@@ -190,6 +200,14 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
                 applied[key] = "***"
             else:
                 applied[key] = val
+
+    # 一次性迁移：旧用户 dashscope_api_key → llm_api_key
+    # 条件：llm_provider 是 dashscope（或未设置）且 llm_api_key 为空且 dashscope_api_key 非空
+    if settings.llm_provider in ("dashscope", "") and not settings.llm_api_key and settings.dashscope_api_key:
+        settings.llm_api_key = settings.dashscope_api_key
+        # 同步写入 config.json，避免下次重启重复迁移
+        save_user_config({"llm_api_key": settings.dashscope_api_key})
+        applied["llm_api_key"] = "***（从 dashscope_api_key 迁移）"
 
     return applied
 
@@ -220,7 +238,7 @@ def build_llm_call_params(
 
     return {
         "model": model_id,
-        "api_key": api_key or settings.llm_api_key or provider_key or "",
+        "api_key": api_key or settings.llm_api_key or provider_key or settings.dashscope_api_key or "",
         "base_url": base_url or settings.llm_base_url or provider_base_url,
     }
 

@@ -18,8 +18,10 @@ from lib.tools.delegate import create_delegate_tools
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
+from lib.tools.rss import create_rss_tools
 from lib.tools.shell import create_shell_tools
 from lib.tools.skill_load import create_skill_tools
+from lib.tools.vision import create_vision_tools
 from lib.tools.web_search import create_web_search_tools
 from lib.tools.web_tools import create_web_tools
 from shared.logging import get_logger
@@ -45,9 +47,11 @@ def register_all_tools() -> ToolRegistry:
         *create_profile_tools(),
         *create_web_tools(),  # 新增：多后端搜索 + 提取 + 爬取
         *create_web_search_tools(),  # 保留：原有搜索工具
+        *create_rss_tools(),  # 新增：RSS 订阅管理
         *create_shell_tools(),
         *create_skill_tools(),
         *create_delegate_tools(),  # 新增：delegate 子 Agent 工具
+        *create_vision_tools(),  # 新增：Vision 图片分析工具
         create_tool_search(),
     ]
 

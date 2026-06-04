@@ -32,6 +32,10 @@ class ConfigResponse(BaseModel):
     has_embedding_key: bool = False
     dashscope_api_key: str = ""
     has_api_key: bool = False
+    # VL 模型配置
+    vl_provider: str = ""
+    vl_model: str = ""
+    has_vl_key: bool = False
 
 
 class ConfigUpdate(BaseModel):
@@ -45,6 +49,11 @@ class ConfigUpdate(BaseModel):
     embedding_base_url: str | None = None
     dashscope_api_key: str | None = None
     providers: dict[str, Any] | None = None
+    # VL 模型配置
+    vl_provider: str | None = None
+    vl_model: str | None = None
+    vl_api_key: str | None = None
+    vl_base_url: str | None = None
 
 
 class ConfigTestRequest(BaseModel):
@@ -145,6 +154,10 @@ async def get_config() -> ConfigResponse:
         has_embedding_key=has_embedding_key,
         dashscope_api_key="",  # 已废弃，保留字段向后兼容
         has_api_key=has_api_key,
+        # VL 模型配置
+        vl_provider=user_config.get("vl_provider") or "",
+        vl_model=user_config.get("vl_model") or "",
+        has_vl_key=bool(user_config.get("vl_api_key") or user_config.get("llm_api_key") or settings.llm_api_key),
     )
 
 

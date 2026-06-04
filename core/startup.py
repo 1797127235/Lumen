@@ -114,11 +114,37 @@ async def lifespan(app: FastAPI):
     # 启动出站消息分发
     dispatch_task = asyncio.create_task(bus.dispatch_outbound())
 
+    # 启动 RSS Scheduler（需要 TelegramChannel）
+    rss_scheduler = None
+    if getattr(settings, "rss_enabled", False):
+        from channels.telegram.telegram import TelegramChannel
+
+        tg_ch = next((ch for ch in channels if isinstance(ch, TelegramChannel)), None)
+        if tg_ch:
+            from lib.rss.scheduler import RSSScheduler
+
+            rss_scheduler = RSSScheduler(telegram_channel=tg_ch)
+            rss_scheduler.start()
+            logger.info("RSSScheduler enabled (interval=%ds)", settings.rss_fetch_interval)
+        else:
+            logger.warning("RSS enabled but no TelegramChannel — scheduler not started")
+
+    # 启动记忆定期整理（过期 transient / stale intent）
+    from lib.memory.housekeeping import MemoryHousekeeper
+
+    housekeeper = MemoryHousekeeper()
+    housekeeper.start()
+
     yield
 
     # ═══════════════════════════════════════════════════════════
     #  清理
     # ═══════════════════════════════════════════════════════════
+    if rss_scheduler:
+        await rss_scheduler.stop()
+
+    await housekeeper.stop()
+
     await runner.stop()
     dispatch_task.cancel()
 
