@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -228,6 +229,95 @@ def _utf16_cut(text: str, max_utf16: int) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  表格预处理 — 把 Markdown 表格转为列表，保留链接等富文本
+# ═══════════════════════════════════════════════════════════════════════
+
+# 匹配 Markdown 表格行：至少两个 | 分隔
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
+# 匹配分隔行：|---|---| 或 | :---: | --- |
+_TABLE_SEP_RE = re.compile(r"^\|[\s:\-]+\|[\s:\-|]*$")
+
+
+def _flatten_tables(text: str) -> str:
+    """将 Markdown 表格转为列表，保留链接等内联格式。
+
+    telegramify_markdown 会把整个表格渲染为 ``pre`` 代码块，
+    导致其中的链接、加粗等富文本全部丢失。
+    转为列表后 telegramify_markdown 能正确生成 text_link 等实体。
+
+    示例::
+
+        | Date | Article | Link |
+        |------|---------|------|
+        | 6/3  | Title   | [Read](url) |
+
+    转为::
+
+        - **Date** | Article | Link
+        - **6/3** | Title | [Read](url)
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        # 尝试识别表格块：表头行 + 分隔行 + 至少一行数据
+        if _is_table_header(lines, i):
+            header_cells = _parse_table_row(lines[i])
+            # 跳过分隔行
+            data_start = i + 2
+            # 收集数据行
+            data_rows: list[list[str]] = []
+            j = data_start
+            while j < len(lines) and _TABLE_ROW_RE.match(lines[j].strip()):
+                data_rows.append(_parse_table_row(lines[j]))
+                j += 1
+
+            if data_rows:
+                # 转为列表格式
+                for row in data_rows:
+                    # 找到有链接的列索引（优先展示）
+                    parts = [c.strip() for c in row if c.strip()]
+                    if header_cells:
+                        # 给第一列加粗（通常是日期/名称）
+                        bold_part = parts[0] if parts else ""
+                        rest = " - ".join(parts[1:]) if len(parts) > 1 else ""
+                        if rest:
+                            result.append(f"- **{bold_part}** {rest}")
+                        else:
+                            result.append(f"- **{bold_part}**")
+                    else:
+                        result.append("- " + " | ".join(parts))
+                i = j
+                continue
+
+        result.append(lines[i])
+        i += 1
+
+    return "\n".join(result)
+
+
+def _is_table_header(lines: list[str], idx: int) -> bool:
+    """检查 idx 位置是否是表格的表头行（需要紧跟分隔行）。"""
+    if idx + 1 >= len(lines):
+        return False
+    current = lines[idx].strip()
+    next_line = lines[idx + 1].strip()
+    return bool(_TABLE_ROW_RE.match(current) and _TABLE_SEP_RE.match(next_line))
+
+
+def _parse_table_row(line: str) -> list[str]:
+    """解析 ``| a | b | c |`` 为 ``['a', 'b', 'c']``。"""
+    stripped = line.strip()
+    # 去掉首尾 |
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  最终消息发送
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -240,6 +330,8 @@ async def send_markdown(
 ) -> None:
     """发送 Markdown 文本（最终消息）。"""
     cid = int(chat_id)
+    # 预处理：表格→列表，避免 telegramify_markdown 把表格渲染为 pre 丢失链接
+    text = _flatten_tables(text)
     try:
         from telegramify_markdown.converter import convert_with_segments
         from telegramify_markdown.entity import split_entities
