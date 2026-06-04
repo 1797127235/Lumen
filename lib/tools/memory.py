@@ -93,11 +93,15 @@ async def _memory_add(args: dict[str, Any], deps, user_id: str, target: str, con
         logger.warning("记忆写入被拒绝", user_id=user_id, reason=reason)
         return tool_error(f"写入被拒绝: {reason}", "SAFETY")
 
+    # 记忆分类标签
+    category = args.get("category", "fact")
+    valid_categories = {"fact", "preference", "intent", "transient", "correction"}
+    if category not in valid_categories:
+        category = "fact"
+
     if target == "memory":
-        # 写入 MEMORY.md（带日期和 category 标签）
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        entry = f"- {date_str} — [memory] {content}"
-        await _store.append_memory_entry(user_id, "memory", content)
+        # 写入 MEMORY.md，category 作为条目标签
+        await _store.append_memory_entry(user_id, category, content)
     else:
         # target == "user"：写入 USER.md
         date_str = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -245,6 +249,36 @@ async def _memory_replace_remove(
 _MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2} — \[[^\]]+\] ")
 
 
+async def _focus_update(args: dict[str, Any], deps):
+    """更新 FOCUS.md 的当前关注列表。"""
+    topics = args.get("topics", [])
+    if not topics:
+        return tool_error("请提供关注点列表 (topics)")
+
+    if not isinstance(topics, list):
+        return tool_error("topics 必须是字符串列表")
+
+    # 过滤空字符串
+    topics = [t.strip() for t in topics if t and isinstance(t, str) and t.strip()]
+    if not topics:
+        return tool_error("关注点列表为空")
+
+    user_id = deps.user_id
+
+    # 构建 FOCUS.md 内容
+    lines = ["## 当前关注", ""]
+    for topic in topics:
+        lines.append(f"- {topic}")
+    lines.append("")  # 末尾换行
+    content = "\n".join(lines)
+
+    # 写入
+    await _store.write_focus(user_id, content)
+
+    logger.info("FOCUS.md 已更新", user_id=user_id, topics=topics)
+    return tool_ok(f"已更新当前关注: {', '.join(topics)}", topics=topics)
+
+
 def create_memory_tools() -> list[ToolDef]:
     return [
         ToolDef(
@@ -272,6 +306,13 @@ def create_memory_tools() -> list[ToolDef]:
                 "TWO TARGETS:\n"
                 "- 'memory': 环境事实、项目约定、工具 quirks、学到的教训（写入 MEMORY.md）\n"
                 "- 'user': 用户偏好、沟通风格、习惯、关系（写入 USER.md）\n\n"
+                "CATEGORIES (target='memory' 时):\n"
+                "- 'fact': 稳定事实（名字、职业、已订阅的服务、拥有的设备）→ 永不过期\n"
+                "- 'preference': 长期偏好（喜欢的风格、沟通方式、价值观）→ 永不过期\n"
+                "- 'intent': 意图/计划（想订阅、打算学、准备做）→ 30天后标记待确认\n"
+                "- 'transient': 临时状态（最近加班、这周在赶项目）→ 7天后删除\n"
+                "- 'correction': 纠正旧记忆 → 自动替换对应的旧条目\n"
+                "不传则默认 'fact'。\n\n"
                 "ACTIONS: add (新增), replace (替换), remove (删除)"
             ),
             input_schema={
@@ -287,6 +328,15 @@ def create_memory_tools() -> list[ToolDef]:
                         "enum": ["memory", "user"],
                         "description": "目标: 'memory' 写入 MEMORY.md (环境/事实), 'user' 写入 USER.md (用户画像)",
                     },
+                    "category": {
+                        "type": "string",
+                        "enum": ["fact", "preference", "intent", "transient", "correction"],
+                        "description": (
+                            "记忆分类（target='memory' 时生效）: "
+                            "fact=稳定事实, preference=长期偏好, intent=意图/计划(30天), "
+                            "transient=临时状态(7天), correction=纠正旧记忆。默认 fact"
+                        ),
+                    },
                     "content": {
                         "type": "string",
                         "description": "内容。add/replace 时必填。",
@@ -301,5 +351,30 @@ def create_memory_tools() -> list[ToolDef]:
             execute=_memory,
             read_only=False,
             meta=ToolMeta(always_on=True, risk="write", search_hint="保存记忆、记录、记住"),
+        ),
+        ToolDef(
+            name="focus_update",
+            description=(
+                "更新当前关注的话题列表。覆盖写入，之前的关注点会被替换。\n\n"
+                "WHEN TO USE:\n"
+                "- 用户说'我在关注 X''我在研究 Y''我在学 Z'\n"
+                "- 用户提到正在做的项目、学习方向\n"
+                "- 对话中发现用户当前的兴趣点\n\n"
+                "INPUT: topics 是字符串列表，每个元素是一个关注点。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "当前关注点列表，如 ['Agent 记忆系统', 'PydanticAI', 'RSSHub']",
+                    },
+                },
+                "required": ["topics"],
+            },
+            execute=_focus_update,
+            read_only=False,
+            meta=ToolMeta(always_on=True, risk="write", search_hint="关注点、兴趣、研究方向、学习"),
         ),
     ]
