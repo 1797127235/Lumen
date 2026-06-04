@@ -10,10 +10,10 @@ import subprocess
 import time
 from collections.abc import Generator
 from difflib import unified_diff
-from pathlib import Path
 from typing import Any
 
 from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
+from lib.tools._path_safety import is_read_denied, is_write_denied
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,8 +46,6 @@ _BINARY_EXTS = {
     ".lib",
 }
 
-_SESSION_FILES_DIR = Path.home() / ".lumen" / "session-files"
-
 _DOCLING_EXTS = {
     ".pdf",
     ".docx",
@@ -63,22 +61,29 @@ _DOCLING_EXTS = {
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
-def _resolve(raw_path: str, workspace_root: str, *, allow_session_files: bool = False) -> tuple[str, str | None]:
-    # 仅 file_read 允许 session-files（只读附件副本）：命中即放行，
-    # 否则继续走 workspace 沙箱校验（允许工作区内的绝对路径）
-    if allow_session_files and os.path.isabs(raw_path):
-        resolved = os.path.realpath(raw_path)
-        real_session = os.path.realpath(str(_SESSION_FILES_DIR))
-        if resolved == real_session or resolved.startswith(real_session + os.sep):
-            return resolved, None
-
-    # file_write / file_grep / 工作区内路径：workspace_root 沙箱
+def _resolve_read(raw_path: str, workspace_root: str) -> tuple[str, str | None]:
+    """解析读路径：相对路径以 workspace_root 为基准，realpath 后检查读黑名单。"""
     if not os.path.isabs(raw_path):
         raw_path = os.path.join(workspace_root, raw_path)
     resolved = os.path.realpath(raw_path)
-    real_root = os.path.realpath(workspace_root)
-    if resolved != real_root and not resolved.startswith(real_root + os.sep):
-        return resolved, f"路径超出工作区范围：{resolved}"
+    if os.path.islink(raw_path):
+        return resolved, f"拒绝符号链接：{raw_path}"
+    err = is_read_denied(resolved)
+    if err:
+        return resolved, err
+    return resolved, None
+
+
+def _resolve_write(raw_path: str, workspace_root: str) -> tuple[str, str | None]:
+    """解析写路径：相对路径以 workspace_root 为基准，realpath 后检查写黑名单。"""
+    if not os.path.isabs(raw_path):
+        raw_path = os.path.join(workspace_root, raw_path)
+    resolved = os.path.realpath(raw_path)
+    if os.path.islink(raw_path):
+        return resolved, f"拒绝符号链接：{raw_path}"
+    err = is_write_denied(resolved)
+    if err:
+        return resolved, err
     return resolved, None
 
 
@@ -172,7 +177,7 @@ async def _file_read(args: dict[str, Any], deps):
     if not raw:
         return tool_error("请提供 file_path")
 
-    resolved, err = _resolve(raw, str(deps.workspace_root), allow_session_files=True)
+    resolved, err = _resolve_read(raw, str(deps.workspace_root))
     if err:
         return tool_error(err)
     if not os.path.exists(resolved):
@@ -264,7 +269,7 @@ async def _file_write(args: dict[str, Any], deps):
     if not raw:
         return tool_error("请提供 file_path")
 
-    resolved, err = _resolve(raw, str(deps.workspace_root))
+    resolved, err = _resolve_write(raw, str(deps.workspace_root))
     if err:
         return tool_error(err)
 
@@ -307,7 +312,7 @@ async def _file_write(args: dict[str, Any], deps):
 
 async def _file_ls(args: dict[str, Any], deps):
     raw = args.get("path", "").strip() or str(deps.workspace_root)
-    resolved, err = _resolve(raw, str(deps.workspace_root))
+    resolved, err = _resolve_read(raw, str(deps.workspace_root))
     if err:
         return tool_error(err)
     if not os.path.exists(resolved):
@@ -332,7 +337,7 @@ async def _file_grep(args: dict[str, Any], deps):
     if not pattern:
         return tool_error("请提供搜索 pattern")
 
-    resolved, err = _resolve(search_path, str(deps.workspace_root))
+    resolved, err = _resolve_read(search_path, str(deps.workspace_root))
     if err:
         return tool_error(err)
 
@@ -779,7 +784,7 @@ async def _file_edit(args: dict[str, Any], deps):
     if old_string == new_string:
         return tool_error("old_string 和 new_string 相同，无需修改")
 
-    resolved, err = _resolve(raw_path, str(deps.workspace_root))
+    resolved, err = _resolve_write(raw_path, str(deps.workspace_root))
     if err:
         return tool_error(err)
 

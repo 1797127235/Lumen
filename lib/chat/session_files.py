@@ -15,6 +15,7 @@ import shutil
 import time
 from pathlib import Path
 
+from lib.tools._path_safety import is_read_denied
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,16 +24,6 @@ MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
 MAX_ATTACHMENTS = 5
 MAX_FILENAME_BYTES = 255
 SESSION_FILES_DIR = Path.home() / ".lumen" / "session-files"
-
-# ── 敏感路径黑名单 ──
-_SENSITIVE_PATHS = [
-    Path.home() / ".ssh",
-    Path.home() / ".gnupg",
-    Path.home() / ".aws",
-    Path.home() / ".config" / "gcloud",
-    Path.home() / ".kube",
-    Path.home() / ".lumen",  # 防止循环复制到自身
-]
 
 _WINDOWS_RESERVED_NAMES = {
     "con",
@@ -64,8 +55,8 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
 def _is_sensitive_path(file_path: str) -> bool:
-    p = Path(file_path).resolve()
-    return any(p == sp or p.is_relative_to(sp) for sp in _SENSITIVE_PATHS)
+    """使用统一的凭据集黑名单判断敏感路径。"""
+    return is_read_denied(file_path) is not None
 
 
 def _sanitize_filename(name: str) -> str:
