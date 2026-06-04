@@ -32,6 +32,10 @@ export type LumenConfig = {
   llm_base_url: string
   has_llm_key: boolean
   context_window?: number
+  // VL 模型配置
+  vl_provider: string
+  vl_model: string
+  has_vl_key: boolean
 }
 
 export async function getConfig(): Promise<LumenConfig> {
