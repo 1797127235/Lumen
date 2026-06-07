@@ -63,7 +63,7 @@ async def persist_turn(
     conv.message_count = (conv.message_count or 0) + 1
     conv.last_message_at = datetime.now(UTC)
     msgs_to_save = [context_frame_msg, *state.new_msgs] if context_frame_msg is not None else state.new_msgs
-    save_pydantic_history(conv, msgs_to_save, summary=conv.summary)
+    save_pydantic_history(conv, msgs_to_save)
 
     try:
         await db.commit()

@@ -20,8 +20,8 @@ from lib.bus.event_bus import (
 )
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 from lib.chat.event_handlers import EVENT_HANDLERS
-from lib.chat.persistence import _log_task_error, persist_turn, save_user_message
-from lib.chat.session import ensure_conversation, load_pydantic_history
+from lib.chat.persistence import persist_turn, save_user_message
+from lib.chat.session import ensure_conversation, load_pydantic_history, sanitize_history
 from shared.logging import bind_chat_context, get_logger, unbind_chat_context
 from shared.path_utils import find_project_root
 
@@ -114,6 +114,16 @@ class AgentRunner:
                     )
                     return
 
+                # 处理文件附件 — 校验、存储到 session-files、生成 Agent 描述
+                if msg.media:
+                    from lib.chat.attachment import get_attachment_service
+
+                    att_svc = get_attachment_service()
+                    attachments = await att_svc.process(conv.conversation_id, msg.media)
+                    media_hint = att_svc.build_content_hint(attachments)
+                    if media_hint:
+                        user_input = f"{media_hint}\n\n{user_input}"
+
                 # 保存用户消息
                 user_msg = await save_user_message(db, conv, user_input)
                 if not user_msg:
@@ -172,6 +182,10 @@ class AgentRunner:
                     history_with_frame = await _inject_context_frame(
                         history, conv, user_id, user_input, session_key=session_key
                     )
+
+                    # Layer 4: 发送 API 前最后一次 sanitize，运行时兜底
+                    history_with_frame = sanitize_history(history_with_frame)
+
                     context_frame_msg = history_with_frame[-1] if history_with_frame else None
 
                     # 运行 Agent
@@ -294,13 +308,6 @@ class AgentRunner:
                     )
                 )
 
-                # 触发摘要（每 10 条消息）
-                if conv.message_count >= 10 and conv.message_count % 10 == 0:
-                    from lib.chat.summary import summarize_background
-
-                    task = asyncio.create_task(summarize_background(conv.conversation_id))
-                    task.add_done_callback(_log_task_error)
-
             except LockCapacityError:
                 await self._bus.publish_outbound(
                     OutboundMessage(
@@ -371,7 +378,6 @@ async def _inject_context_frame(
             user_id,
             user_input=user_input,
             session_key=session_key,
-            conversation_summary=conv.summary or "",
         )
     except Exception:
         logger.debug("MemoryManager.build_context failed", user_id=user_id)

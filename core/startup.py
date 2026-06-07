@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
     # TelegramChannel（TELEGRAM_BOT_TOKEN 存在时启用）
     telegram_token = getattr(settings, "telegram_bot_token", None) or os.getenv("TELEGRAM_BOT_TOKEN")
     if telegram_token:
-        from channels.telegram.telegram import TelegramChannel
+        from channels.telegram import TelegramChannel
 
         tg_channel = TelegramChannel(telegram_token, bus, event_bus)
         try:
@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
     # 启动 RSS Scheduler（需要 TelegramChannel）
     rss_scheduler = None
     if getattr(settings, "rss_enabled", False):
-        from channels.telegram.telegram import TelegramChannel
+        from channels.telegram import TelegramChannel
 
         tg_ch = next((ch for ch in channels if isinstance(ch, TelegramChannel)), None)
         if tg_ch:

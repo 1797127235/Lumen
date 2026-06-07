@@ -636,12 +636,17 @@ def create_shell_tools() -> list[ToolDef]:
         ToolDef(
             name="shell",
             description=(
-                "在系统 shell 中执行命令并返回输出。\n"
+                "在系统 shell 中执行命令并返回输出。\n\n"
+                "适用场景：安装依赖、运行测试、启动服务、查看进程、git 操作、系统管理。\n\n"
+                "⚠️ 不适用场景（有专用工具，不要用 shell 替代）：\n"
+                "- 查询 RSS 内容 → 用 rss_list_items\n"
+                "- 搜索文件内容 → 用 file_grep\n"
+                "- 读取文件 → 用 file_read\n"
+                "- 查询数据库 → 如果有专用工具就用专用工具\n\n"
                 "注意：\n"
                 "- 默认工作目录为项目根目录，可用 cwd 指定相对路径\n"
                 "- 输出超过 30000 字符时自动截断保留尾部\n"
                 "- 前台命令默认超时 60 秒，超过 15 秒未完成会自动转为后台任务\n"
-                "- 服务进程或长时间任务请设 run_in_background=true 直接后台启动\n"
                 "- 后台任务返回 background_task_id，用 task_output 查看、task_stop 终止"
             ),
             input_schema={
@@ -678,7 +683,7 @@ def create_shell_tools() -> list[ToolDef]:
             },
             execute=_shell,
             read_only=False,
-            meta=ToolMeta(always_on=False, risk="destructive", search_hint="执行命令、运行脚本、cmd、bash"),
+            meta=ToolMeta(always_on=True, risk="destructive", search_hint="执行命令、运行脚本、cmd、bash"),
         ),
         ToolDef(
             name="task_output",

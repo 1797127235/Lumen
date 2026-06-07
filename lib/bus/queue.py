@@ -11,6 +11,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class RawFile:
+    """Channel 提取的原始文件引用 — 平台无关。
+
+    Channel 负责从平台 API 下载文件到本地暂存目录，
+    然后用此结构将文件路径和元数据传递给 AttachmentService。
+    """
+
+    path: str
+    original_name: str = ""
+    mime_type: str | None = None
+    size: int = 0
+
+
+@dataclass
 class InboundMessage:
     """从 Channel 传入的消息"""
 
@@ -18,7 +32,7 @@ class InboundMessage:
     sender: str
     chat_id: str
     content: str
-    media: list[str] = field(default_factory=list)
+    media: list[RawFile] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

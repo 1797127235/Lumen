@@ -881,11 +881,15 @@ def create_file_tools() -> list[ToolDef]:
     return [
         ToolDef(
             name="file_read",
-            description="读取文件内容或列出目录。支持分页（offset/limit）。对 PDF/DOCX 等文档使用 max_length 截断。",
+            description=(
+                "读取文件内容。支持文本文件分页（offset/limit）、PDF/DOCX 等文档提取。\n\n"
+                "适用场景：查看代码文件、配置文件、文档内容。\n"
+                "不适用：读取 RSS 新闻（用 rss_list_items）、搜索记忆（用 memory_search）、搜索网页内容（用 web_search）。"
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "文件或目录路径（绝对路径或相对于工作区）"},
+                    "file_path": {"type": "string", "description": "文件路径（绝对路径或相对于工作区）"},
                     "offset": {"type": "integer", "description": "起始行号（1 开始，默认 1），仅对文本文件生效"},
                     "limit": {"type": "integer", "description": "最多读取行数（默认 2000），仅对文本文件生效"},
                     "max_length": {
@@ -916,7 +920,11 @@ def create_file_tools() -> list[ToolDef]:
         ),
         ToolDef(
             name="file_ls",
-            description="列出目录内容。",
+            description=(
+                "列出目录内容。\n\n"
+                "适用场景：浏览项目结构、查看某个目录下有哪些文件。\n"
+                "不适用：查看 RSS 内容（用 rss_list_items）、搜索用户数据（用 memory_search）。"
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -929,7 +937,11 @@ def create_file_tools() -> list[ToolDef]:
         ),
         ToolDef(
             name="file_grep",
-            description="在工作区内用正则搜索文件内容（需要 ripgrep）。",
+            description=(
+                "在工作区内用正则搜索文件内容（需要 ripgrep）。\n\n"
+                "适用场景：在代码/配置中搜索关键词、查找函数定义、搜索日志模式。\n"
+                "不适用：搜索 RSS 内容（用 rss_list_items）、搜索记忆（用 memory_search）、搜索网页（用 web_search）。"
+            ),
             input_schema={
                 "type": "object",
                 "properties": {

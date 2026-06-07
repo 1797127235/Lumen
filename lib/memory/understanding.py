@@ -30,16 +30,30 @@ class AboutYouData:
 
 
 async def _get_profile_text(user_id: str) -> tuple[str, int]:
-    """读取 MEMORY.md 作为 LLM 画像生成的输入。
+    """读取 MEMORY.md + USER.md 作为 LLM 画像生成的输入。
 
     Returns:
-        (memory_md_content, char_count)
+        (combined_content, char_count)
     """
     store = AsyncMarkdownStore()
-    content = await store.read_memory(user_id)
-    if not content.strip():
+    memory_content = await store.read_memory(user_id)
+    user_content = await store.read_about_you(user_id)
+
+    # 合并两个文件的内容
+    parts = []
+    if memory_content.strip():
+        parts.append(f"## 记忆 (MEMORY.md)\n\n{memory_content}")
+    if user_content.strip():
+        # 过滤掉 frontmatter 和 AI 生成的画像文本，只保留原始条目
+        lines = user_content.splitlines()
+        entry_lines = [line for line in lines if line.strip().startswith("- ")]
+        if entry_lines:
+            parts.append("## 用户记录 (USER.md)\n\n" + "\n".join(entry_lines))
+
+    combined = "\n\n".join(parts)
+    if not combined.strip():
         return "", 0
-    return content, len(content)
+    return combined, len(combined)
 
 
 def _is_debounced(user_id: str) -> bool:

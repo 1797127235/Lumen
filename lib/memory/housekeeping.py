@@ -150,7 +150,7 @@ class MemoryHousekeeper:
             await asyncio.sleep(_RUN_INTERVAL_SECONDS)
 
     async def _run_once(self) -> None:
-        """扫描所有用户目录，整理过期记忆。"""
+        """扫描所有用户目录，整理过期记忆（MEMORY.md + USER.md）。"""
         from lib.memory.markdown import _BASE_MEMORY_DIR, AsyncMarkdownStore
 
         store = AsyncMarkdownStore()
@@ -166,30 +166,33 @@ class MemoryHousekeeper:
         for user_path in memory_dir.iterdir():
             if not user_path.is_dir():
                 continue
-            memory_file = user_path / "MEMORY.md"
-            if not memory_file.exists():
-                continue
 
             user_id = user_path.name
-            try:
-                content = await store.read_memory(user_id)
-                if not content.strip():
+
+            for label, filename, read_fn, write_fn in [
+                ("MEMORY.md", "MEMORY.md", store.read_memory, store.write_memory),
+                ("USER.md", "USER.md", store.read_about_you, store.write_about_you),
+            ]:
+                if not (user_path / filename).exists():
                     continue
-
-                new_content, removed, stale = housekeep_memory(content)
-
-                if removed > 0 or stale > 0:
-                    await store.write_memory(user_id, new_content)
-                    total_removed += removed
-                    total_stale += stale
-                    logger.info(
-                        "housekeep: user=%s removed=%d stale=%d",
-                        user_id,
-                        removed,
-                        stale,
-                    )
-            except Exception as e:
-                logger.warning("housekeep: user=%s failed: %s", user_id, e)
+                try:
+                    content = await read_fn(user_id)
+                    if not content.strip():
+                        continue
+                    new_content, removed, stale = housekeep_memory(content)
+                    if removed > 0 or stale > 0:
+                        await write_fn(user_id, new_content)
+                        total_removed += removed
+                        total_stale += stale
+                        logger.info(
+                            "housekeep: %s user=%s removed=%d stale=%d",
+                            label,
+                            user_id,
+                            removed,
+                            stale,
+                        )
+                except Exception as e:
+                    logger.warning("housekeep: %s user=%s failed: %s", label, user_id, e)
 
         if total_removed or total_stale:
             logger.info(

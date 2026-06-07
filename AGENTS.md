@@ -2,88 +2,24 @@
 
 ## 定位
 
-Lumen — 一个真正认识你的 AI 伙伴。FastAPI + SQLAlchemy + PydanticAI + LiteLLM + SQLite。前端 React 19 + Vite + Tailwind CSS 4。
-单用户！！！！！
----
+Lumen — 一个真正认识你的 AI 伙伴。单用户长期记忆 AI 产品。
 
-## Tutorial: 第一次跑起来
-
-### 1. 环境准备
-
-- Python 3.11+
-- Node.js 18+
-- Bun 1.x+（CLI TUI 需要）
-- Rust + cargo（仅桌面开发需要）
-- Windows PowerShell 或 cmd
-
-### 2. 安装依赖
-
-```bash
-# Python
-pip install -r requirements.txt
-
-# Web 前端
-npm install
-
-# CLI TUI（单独安装）
-cd channels/cli && bun install
-```
-
-### 3. 配置 .env
-
-复制 `.env.example` 为 `.env`，填入至少一项：
-
-```
-LLM_API_KEY=sk-xxx          # 或 DASHSCOPE_API_KEY
-LLM_BASE_URL=https://...    # 对应 provider 的 base url
-LLM_MODEL=gpt-4o            # 或 qwen-max 等
-```
-
-### 4. 启动并验证
-
-**Web 开发模式：**
-```powershell
-.\start.ps1    # PowerShell
-# 或双击 start.bat
-```
-打开 http://localhost:5173
-
-**CLI TUI 模式：**
-```bash
-# 先启动后端
-python lumen.py --mode web
-
-# 再启动 TUI（新终端窗口）
-cd channels/cli && bun run dev
-```
-
-**统一启动入口（lumen.py）：**
-```bash
-python lumen.py --mode web        # 仅 Web 模式（默认）
-python lumen.py --mode cli        # 提示手动启动 TUI
-python lumen.py --mode all        # Web + Telegram + Web
-python lumen.py --port 8080       # 指定端口（默认 8000）
-```
-
-**桌面模式（推荐）：**
-```bash
-cargo tauri dev
-```
-Python 后端作为 sidecar 子进程由 Rust 管理生命周期。
-
-**验证后端健康：**
-```bash
-curl http://localhost:8000/api/health
-```
-
-### 5. 发第一条消息
-
-打开前端页面 → 在输入框发送任意消息 → 观察 SSE 流式输出。
-如果 Agent 回复正常，说明 LLM 配置正确。
+**技术栈**: FastAPI + SQLAlchemy + PydanticAI + SQLite | React 19 + Vite + Tailwind CSS 4 | Tauri v2 (Rust)
 
 ---
 
-## How-to: 常见开发任务
+## Quick Start
+
+```bash
+pip install -r requirements.txt && npm install
+# 配置 .env: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+.\start.ps1          # Web 开发模式
+cargo tauri dev      # 桌面模式（推荐）
+```
+
+---
+
+## 核心架构
 
 ### 添加一个新的 Agent 工具
 

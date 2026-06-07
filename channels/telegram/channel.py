@@ -1,3 +1,10 @@
+"""Telegram Bot Channel — Polling 模式。
+
+职责：Channel 生命周期编排（start/stop）、EventBus 订阅、
+流式缓冲、typing 指示器、出站消息发送。
+入站消息处理委托给 handlers.py，出站格式化委托给 telegram_utils.py。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,10 +12,11 @@ import contextlib
 import logging
 
 from telegram import Update
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
 from channels.base import BaseChannel
+from channels.telegram.handlers import TelegramHandlers
 from channels.telegram.telegram_utils import (
     TelegramOutboundLimiter,
     send_markdown,
@@ -20,7 +28,7 @@ from lib.bus.event_bus import (
     SubagentProgress,
     TurnStarted,
 )
-from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
+from lib.bus.queue import MessageBus, OutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -31,33 +39,37 @@ _TYPING_INTERVAL = 4.0
 class TelegramChannel(BaseChannel):
     """Telegram Bot Channel — Polling 模式。
 
-    行为对标 akashic-agent：
     - 流式阶段只内部收集，不操作 Telegram API
     - Agent 完成后一次性发送：思考过程（可选）→ 最终回复
-    - 工作期间持续发 typing 指示器，用户不会觉得卡死
+    - 工作期间持续发 typing 指示器
     """
 
     def __init__(self, token: str, bus: MessageBus, event_bus: EventBus) -> None:
         self._token = token
         self._bus = bus
         self._event_bus = event_bus
+
         request = HTTPXRequest(connection_pool_size=20)
         self._app = Application.builder().token(token).request(request).build()
 
+        self._handlers = TelegramHandlers(bus)
         self._limiter = TelegramOutboundLimiter()
+
         # chat_id -> 累积内容（流式阶段只内部收集）
         self._reply_buffers: dict[int, str] = {}
         self._thinking_buffers: dict[int, str] = {}
         self._polling_task: asyncio.Task | None = None
-        # typing 指示器管理
         self._typing_tasks: dict[int, asyncio.Task] = {}
 
     async def start(self) -> None:
         """启动 Telegram Polling 并订阅事件"""
-        self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_message))
+        # 注册入站消息 handler
+        self._handlers.register(self._app)
 
+        # 订阅出站
         self._bus.subscribe_outbound("telegram", self._on_response)
 
+        # 订阅 EventBus
         self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
         self._event_bus.on(TurnStarted, self._on_turn_started)
         self._event_bus.on(SubagentProgress, self._on_subagent_progress)
@@ -70,7 +82,6 @@ class TelegramChannel(BaseChannel):
 
     async def stop(self) -> None:
         """停止 Telegram Polling"""
-        # 取消所有 typing 任务
         for task in self._typing_tasks.values():
             task.cancel()
         self._typing_tasks.clear()
@@ -111,19 +122,16 @@ class TelegramChannel(BaseChannel):
     # ═══════════════════════════════════════════════════════════════
 
     def _start_typing(self, chat_id: int) -> None:
-        """启动 typing 指示器循环。"""
         if chat_id in self._typing_tasks:
             return
         self._typing_tasks[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
 
     def _stop_typing(self, chat_id: int) -> None:
-        """停止 typing 指示器循环。"""
         task = self._typing_tasks.pop(chat_id, None)
         if task:
             task.cancel()
 
     async def _typing_loop(self, chat_id: int) -> None:
-        """每 N 秒发一次 typing action，让用户看到「正在输入...」。"""
         from telegram.constants import ChatAction
 
         try:
@@ -137,38 +145,6 @@ class TelegramChannel(BaseChannel):
             pass
 
     # ═══════════════════════════════════════════════════════════════
-    #  入站消息
-    # ═══════════════════════════════════════════════════════════════
-
-    async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_message or not update.effective_message.text:
-            return
-
-        chat_id = str(update.effective_chat.id)
-        user_id = str(update.effective_user.id)
-        text = update.effective_message.text
-
-        logger.info("[telegram] Received from %s: %s", user_id, text[:60])
-
-        # 自动填充 telegram_chat_id（RSS 推送需要）
-        from core.config import get_settings, save_user_config
-
-        try:
-            if not get_settings().telegram_chat_id:
-                save_user_config({"telegram_chat_id": chat_id})
-        except Exception:
-            pass
-
-        await self._bus.publish_inbound(
-            InboundMessage(
-                channel="telegram",
-                sender=user_id,
-                chat_id=chat_id,
-                content=text,
-            )
-        )
-
-    # ═══════════════════════════════════════════════════════════════
     #  EventBus 事件处理
     # ═══════════════════════════════════════════════════════════════
 
@@ -178,7 +154,6 @@ class TelegramChannel(BaseChannel):
         chat_id = int(event.chat_id)
         self._reply_buffers.pop(chat_id, None)
         self._thinking_buffers.pop(chat_id, None)
-        # 启动 typing 指示器
         self._start_typing(chat_id)
         logger.debug("[telegram] Turn started for chat_id=%s", chat_id)
 
@@ -192,15 +167,12 @@ class TelegramChannel(BaseChannel):
             self._thinking_buffers[chat_id] = self._thinking_buffers.get(chat_id, "") + event.thinking_delta
 
     async def _on_subagent_progress(self, event: SubagentProgress) -> None:
-        """处理 delegate 子 Agent 进度事件 — 在 Telegram 显示为轻量状态消息。"""
         if event.channel != "telegram":
             return
-        # 仅对 "step" 类型的进度做轻量提示，started/done/error 太频繁
         if event.phase != "step":
             return
         chat_id = int(event.chat_id)
         try:
-            # 用静默消息（disable_notification=True）避免打扰用户
             await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=f"🔍 {event.detail}",
@@ -216,13 +188,11 @@ class TelegramChannel(BaseChannel):
     async def _on_response(self, msg: OutboundMessage) -> None:
         chat_id = int(msg.chat_id)
 
-        # 停止 typing 指示器
         self._stop_typing(chat_id)
 
         final_reply = msg.content or self._reply_buffers.pop(chat_id, "")
         final_thinking = msg.thinking or self._thinking_buffers.pop(chat_id, "")
 
-        # 思考块和正文分开 try，思考失败不连累正文渲染
         if final_thinking:
             try:
                 await send_thinking_block(self._app.bot, chat_id, final_thinking, self._limiter)

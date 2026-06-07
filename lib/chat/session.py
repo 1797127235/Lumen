@@ -1,4 +1,11 @@
-"""对话会话管理：创建/获取会话、消息历史序列化与压缩"""
+"""对话会话管理：创建/获取会话、消息历史序列化与压缩
+
+消息历史安全机制（4 层防御）：
+1. _safe_tail() — 按 turn 边界截断，保证原子性
+2. sanitize_history() — 保存时清洗，修复结构问题
+3. load_pydantic_history() — 加载时再次清洗，防止 DB 中存了脏数据
+4. agent_runner.py — 发送 API 前最后一次 sanitize，运行时兜底
+"""
 
 from __future__ import annotations
 
@@ -7,7 +14,6 @@ from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
 )
 
 from lib.chat.models import Conversation
@@ -17,9 +23,6 @@ logger = get_logger(__name__)
 
 # ── 历史压缩常量 ──────────────────────────────────────
 _MAX_HISTORY_MESSAGES = 40  # 硬上限（之前是 30）
-_HEAD_KEEP = 4  # 保护头部消息数（system prompt 建立上下文）
-_TAIL_KEEP = 16  # 保护尾部消息数（最近对话）
-_SUMMARY_MARKER = "__lumen_summary__"  # 摘要消息的标记
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -28,27 +31,14 @@ def _truncate(text: str, max_len: int) -> str:
     return text[: max_len - 3] + "..."
 
 
-def _build_summary_message(summary_text: str) -> ModelMessage:
-    """将摘要文本包装为一条 ModelMessage（request/system 角色），用于注入历史。"""
-    # pylint: disable=unexpected-keyword-arg
-    return ModelRequest(  # type: ignore[return-value]
-        parts=[SystemPromptPart(content=f"[对话历史摘要] 以下是之前对话的压缩摘要，作为背景信息参考：\n{summary_text}")]
-    )
-
-
-def _has_summary_marker(msg: ModelMessage) -> bool:
-    """检查消息是否为摘要注入消息。"""
-    for part in msg.parts:
-        if isinstance(part, SystemPromptPart) and _SUMMARY_MARKER in getattr(part, "content", ""):
-            return True
-    return False
+# ── Part 类型检查辅助 ─────────────────────────────────
 
 
 def _has_tool_return(msg: ModelMessage) -> bool:
-    """检查消息是否包含 ToolReturnPart（工具执行结果）。"""
-    from pydantic_ai.messages import ToolReturnPart  # pyright: ignore[reportMissingImports]
+    """检查消息是否包含 ToolReturnPart 或 RetryPromptPart（工具执行结果）。"""
+    from pydantic_ai.messages import RetryPromptPart, ToolReturnPart  # pyright: ignore[reportMissingImports]
 
-    return any(isinstance(p, ToolReturnPart) for p in msg.parts)
+    return any(isinstance(p, ToolReturnPart | RetryPromptPart) for p in msg.parts)
 
 
 def _has_tool_call(msg: ModelMessage) -> bool:
@@ -58,38 +48,299 @@ def _has_tool_call(msg: ModelMessage) -> bool:
     return any(isinstance(p, ToolCallPart) for p in msg.parts)
 
 
-def _safe_tail(messages: list, tail_size: int) -> list:
-    """从 messages 末尾取 tail_size 条，确保不以孤立的 ToolReturnPart 开头。
+def _get_tool_call_ids(msg: ModelMessage) -> set[str]:
+    """收集消息中所有 ToolCallPart 的 tool_call_id。"""
+    from pydantic_ai.messages import ToolCallPart  # pyright: ignore[reportMissingImports]
 
-    如果 tail 的第一条包含 ToolReturnPart，往前扩展直到包含对应的 ToolCallPart。
-    这避免 DeepSeek 等严格校验的 API 报错：tool role 消息没有对应的 tool_calls。
+    return {
+        p.tool_call_id
+        for p in (msg.parts if hasattr(msg, "parts") else [])
+        if isinstance(p, ToolCallPart) and p.tool_call_id
+    }
+
+
+def _get_tool_response_ids(msg: ModelMessage) -> set[str]:
+    """收集消息中所有 ToolReturnPart/RetryPromptPart 关联的 tool_call_id。"""
+    from pydantic_ai.messages import RetryPromptPart, ToolReturnPart  # pyright: ignore[reportMissingImports]
+
+    return {
+        p.tool_call_id
+        for p in (msg.parts if hasattr(msg, "parts") else [])
+        if isinstance(p, ToolReturnPart | RetryPromptPart) and hasattr(p, "tool_call_id") and p.tool_call_id
+    }
+
+
+# ── Layer 1: Turn 感知截断 ─────────────────────────────
+
+
+def _find_turn_boundaries(messages: list[ModelMessage]) -> list[tuple[int, int]]:
+    """识别消息历史中的 turn 边界。
+
+    一个 turn = ModelRequest(user) + 后续的 ModelResponse(tool_calls) + ModelRequest(tool_returns)
+    直到下一个 ModelRequest(user) 开始新 turn。
+
+    返回 [(start_idx, end_idx_inclusive), ...] 列表。
     """
-    tail = messages[-tail_size:]
-    if not tail:
-        return tail
+    if not messages:
+        return []
 
-    # 如果 tail 第一条不是工具结果，直接返回
-    if not _has_tool_return(tail[0]):
-        return tail
+    turns: list[tuple[int, int]] = []
+    turn_start = 0
 
-    # 向前找到对应的 ToolCall（ModelResponse with ToolCallPart）
-    cutoff = len(messages) - tail_size
-    for i in range(cutoff - 1, -1, -1):
-        msg = messages[i]
-        if isinstance(msg, ModelResponse) and _has_tool_call(msg):
-            # 找到了，把从这条开始到末尾都算 tail
-            return messages[i:]
-        if isinstance(msg, ModelRequest) and _has_tool_return(msg):
-            # 连续多条工具结果，继续往前找
+    for i, msg in enumerate(messages):
+        # 新 turn 开始于非首条的 ModelRequest（首条是第一个 turn 的起点）
+        if i > 0 and isinstance(msg, ModelRequest):
+            # 只有当这条 ModelRequest 包含 user parts（不是纯 tool-return）时才算新 turn
+            # 但为安全起见，任何 ModelRequest 都视为 turn 起点
+            turns.append((turn_start, i - 1))
+            turn_start = i
+
+    # 最后一个 turn
+    turns.append((turn_start, len(messages) - 1))
+    return turns
+
+
+def _safe_tail(messages: list, tail_size: int) -> list:
+    """从 messages 末尾取最多 tail_size 条，按 turn 边界截断。
+
+    Turn 是原子单元：ModelRequest(user) → ModelResponse(tool_calls) → ModelRequest(tool_returns)。
+    截断永远不会在 turn 中间切开。
+    """
+    if tail_size <= 0 or not messages:
+        return []
+
+    # 如果总条数已在限额内，直接返回（但仍然 sanitize）
+    if len(messages) <= tail_size:
+        return sanitize_history(messages)
+
+    # 按 turn 边界找到合适的截断点
+    turns = _find_turn_boundaries(messages)
+
+    # 从后往前累加 turn 大小，直到超过 tail_size
+    selected_turns: list[tuple[int, int]] = []
+    accumulated = 0
+
+    for start, end in reversed(turns):
+        turn_size = end - start + 1
+        if accumulated + turn_size > tail_size and selected_turns:
+            # 加入这个 turn 会超限，且已有更近的 turn，停止
+            break
+        selected_turns.append((start, end))
+        accumulated += turn_size
+
+    if not selected_turns:
+        # 至少保留最后一个 turn
+        selected_turns.append(turns[-1])
+
+    selected_turns.reverse()
+
+    # 拼接选中的 turns
+    result: list[ModelMessage] = []
+    for start, end in selected_turns:
+        result.extend(messages[start : end + 1])
+
+    # 截断后再做一次 sanitize 确保干净
+    return sanitize_history(result)
+
+
+# ── Layer 2/3: sanitize_history — 顺序验证器 ──────────────
+
+
+def sanitize_history(messages: list) -> list:
+    """修复消息历史中的结构问题，确保符合 OpenAI Chat API 消息顺序合约。
+
+    修复规则（顺序扫描）：
+    1. 历史必须以 ModelRequest 开头（不是 assistant/tool）
+    2. 每个 assistant(tool_calls) 后面必须紧跟对应数量的 tool(response) 消息
+    3. tool(response) 消息前面必须有对应的 assistant(tool_calls)
+    4. 孤立的 tool_call 在末尾会被移除
+    5. RetryPromptPart 视为 tool-return 的等价物
+
+    这是唯一的历史清洗函数，替代旧的 _fix_orphaned_tool_messages。
+    """
+    if not messages:
+        return []
+
+    from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
+        RetryPromptPart,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+
+    # ── Phase 1: 跳过开头的非 ModelRequest 消息 ──
+    start_idx = 0
+    while start_idx < len(messages) and not isinstance(messages[start_idx], ModelRequest):
+        start_idx += 1
+
+    if start_idx >= len(messages):
+        logger.warning("sanitize: 消息历史中没有任何 ModelRequest，清空历史")
+        return []
+
+    if start_idx > 0:
+        logger.info(
+            "sanitize: 跳过开头的非 ModelRequest 消息",
+            skipped=start_idx,
+        )
+
+    result: list[ModelMessage] = list(messages[start_idx:])
+
+    # ── Phase 2: 顺序验证 — tool_call ↔ tool_response 配对 ──
+    cleaned: list[ModelMessage] = []
+    i = 0
+
+    while i < len(result):
+        msg = result[i]
+
+        if isinstance(msg, ModelRequest):
+            # 检查这条 ModelRequest 是否包含 tool-return parts
+            tool_response_ids = _get_tool_response_ids(msg)
+
+            if tool_response_ids:
+                # 这是 tool response 消息，需要验证前面有对应的 tool_calls
+                # 找到最近一条 assistant(tool_call)
+                pending_call_ids: set[str] = set()
+                for j in range(len(cleaned) - 1, -1, -1):
+                    if isinstance(cleaned[j], ModelResponse):
+                        pending_call_ids = _get_tool_call_ids(cleaned[j])
+                        break
+
+                # 只保留有对应 tool_call 的 response parts
+                if not pending_call_ids:
+                    # 没有对应的 tool_call → 孤立 tool response，跳过这条消息
+                    logger.debug(
+                        "sanitize: 移除孤立的 tool response (无前置 tool_call)",
+                        tool_call_ids=tool_response_ids,
+                    )
+                    i += 1
+                    continue
+
+                # 过滤消息中的 parts，只保留有匹配 tool_call 的
+                valid_parts = [
+                    p
+                    for p in (msg.parts if hasattr(msg, "parts") else [])
+                    if not isinstance(p, ToolReturnPart | RetryPromptPart)
+                    or (hasattr(p, "tool_call_id") and p.tool_call_id in pending_call_ids)
+                ]
+
+                if not any(isinstance(p, ToolReturnPart | RetryPromptPart) for p in valid_parts):
+                    # 所有 tool-return 都不匹配，跳过
+                    logger.debug(
+                        "sanitize: 移除不匹配的 tool response",
+                        expected_ids=pending_call_ids,
+                        got_ids=tool_response_ids,
+                    )
+                    i += 1
+                    continue
+
+                if len(valid_parts) < len(msg.parts):
+                    # 部分匹配，重建消息
+                    new_msg = ModelRequest(parts=valid_parts)  # type: ignore[call-arg]
+                    cleaned.append(new_msg)
+                else:
+                    cleaned.append(msg)
+                i += 1
+                continue
+            else:
+                # 纯 user 消息，直接保留
+                cleaned.append(msg)
+                i += 1
+                continue
+
+        elif isinstance(msg, ModelResponse):
+            tool_call_ids = _get_tool_call_ids(msg)
+
+            if tool_call_ids:
+                # assistant(tool_calls) — 检查后续是否有对应的 tool responses
+                # 向前看：收集紧跟的 tool response 消息中的 response ids
+                responded_ids: set[str] = set()
+                response_msgs: list[int] = []  # index in result
+                j = i + 1
+                while j < len(result):
+                    next_msg = result[j]
+                    if isinstance(next_msg, ModelRequest):
+                        rids = _get_tool_response_ids(next_msg)
+                        if rids:
+                            responded_ids.update(rids)
+                            response_msgs.append(j)
+                            j += 1
+                            continue
+                    # 不是 tool response → 停止扫描
+                    break
+
+                # 判断哪些 tool_calls 有对应 response
+                satisfied_ids = tool_call_ids & responded_ids
+                unsatisfied_ids = tool_call_ids - satisfied_ids
+
+                if unsatisfied_ids:
+                    # 有未满足的 tool_call
+                    if not satisfied_ids:
+                        # 全部未满足 → 整个 assistant(tool_calls) + 预期 response 都跳过
+                        logger.debug(
+                            "sanitize: 移除无 response 的 tool_call 消息",
+                            tool_call_ids=tool_call_ids,
+                        )
+                        i += 1
+                        continue
+                    else:
+                        # 部分满足 → 过滤掉未满足的 tool_call parts
+                        valid_parts = [
+                            p
+                            for p in (msg.parts if hasattr(msg, "parts") else [])
+                            if not isinstance(p, ToolCallPart) or (p.tool_call_id in satisfied_ids)
+                        ]
+                        # 如果只剩 TextPart 没有 ToolCallPart 了，仍保留
+                        new_msg = ModelResponse(parts=valid_parts)  # type: ignore[call-arg]
+                        cleaned.append(new_msg)
+                        # 只添加匹配的 response 消息
+                        for ridx in response_msgs:
+                            rmsg = result[ridx]
+                            rids = _get_tool_response_ids(rmsg)
+                            if rids & satisfied_ids:
+                                cleaned.append(rmsg)
+                        i = j
+                        continue
+                else:
+                    # 全部满足 → 正常添加 assistant + responses
+                    cleaned.append(msg)
+                    for ridx in response_msgs:
+                        cleaned.append(result[ridx])
+                    i = j
+                    continue
+            else:
+                # 纯 assistant 文本响应，直接保留
+                cleaned.append(msg)
+                i += 1
+                continue
+        else:
+            # 未知消息类型，保守保留
+            cleaned.append(msg)
+            i += 1
             continue
-        # 遇到非工具消息，停止（不应发生，但安全起见）
-        break
 
-    # 没找到对应的 ToolCall，丢弃开头的孤立工具结果
-    for idx, m in enumerate(tail):
-        if not _has_tool_return(m):
-            return tail[idx:]
-    return []
+    # ── Phase 3: 反向清理末尾孤立的 tool_call ──
+    while cleaned:
+        last = cleaned[-1]
+        if isinstance(last, ModelResponse) and _has_tool_call(last) and not _has_tool_return(last):
+            cleaned.pop()
+        else:
+            break
+
+    # ── Phase 4: 再次确保开头是 ModelRequest ──
+    while cleaned and not isinstance(cleaned[0], ModelRequest):
+        cleaned.pop(0)
+
+    if len(cleaned) < len(messages):
+        logger.info(
+            "sanitize: 清理了消息历史",
+            original=len(messages),
+            cleaned=len(cleaned),
+            removed=len(messages) - len(cleaned),
+        )
+
+    return cleaned
+
+
+# ── 会话管理 ────────────────────────────────────────
 
 
 async def ensure_conversation(db, user_id: str, conversation_id: str | None, user_input: str) -> Conversation | str:
@@ -115,7 +366,7 @@ async def ensure_conversation(db, user_id: str, conversation_id: str | None, use
 
 
 def load_pydantic_history(conv) -> list:
-    """从 Conversation.pydantic_messages 加载消息历史，并修复孤立工具消息。"""
+    """从 Conversation.pydantic_messages 加载消息历史，并 sanitize 修复结构问题。"""
     from pydantic_core import to_json
 
     if not conv.pydantic_messages:
@@ -130,13 +381,13 @@ def load_pydantic_history(conv) -> list:
         )
         return []
 
-    # 修复孤立工具消息：确保每个 tool-return 前面都有对应的 tool-call
-    cleaned = _fix_orphaned_tool_messages(messages)
+    # Layer 3: 加载时 sanitize
+    cleaned = sanitize_history(messages)
     if len(cleaned) < len(messages):
-        # 修复了问题，回写
+        # 修复了问题，回写干净的历史
         conv.pydantic_messages = to_json(cleaned).decode()
         logger.info(
-            "修复了孤立工具消息",
+            "加载时修复了消息历史",
             original=len(messages),
             cleaned=len(cleaned),
             conversation_id=getattr(conv, "conversation_id", None),
@@ -145,60 +396,11 @@ def load_pydantic_history(conv) -> list:
     return cleaned
 
 
-def _fix_orphaned_tool_messages(messages: list) -> list:
-    """移除没有对应 tool-call 的 tool-return，以及没有对应 tool-return 的 tool-call。
-
-    DeepSeek 等严格 API 要求 tool role 消息必须有前置 tool_calls。
-    PydanticAI 在工具失败重试时可能产生 retry-prompt 而非 tool-return，
-    导致 tool-call 孤立。
-    """
-    from pydantic_ai.messages import ToolCallPart, ToolReturnPart  # pyright: ignore[reportMissingImports]
-
-    result = []
-    for msg in messages:
-        parts = msg.parts if hasattr(msg, "parts") else []
-
-        # 检查是否包含 ToolReturnPart
-        has_tool_return = any(isinstance(p, ToolReturnPart) for p in parts)
-        has_tool_call = any(isinstance(p, ToolCallPart) for p in parts)
-
-        if has_tool_return:
-            # 检查前一条是否是包含 tool-call 的 response
-            # 如果 result 为空或最后一条不是含 tool-call 的 response，则跳过
-            if not result:
-                continue
-            last = result[-1]
-            last_parts = last.parts if hasattr(last, "parts") else []
-            last_has_tool_call = any(isinstance(p, ToolCallPart) for p in last_parts)
-            if not last_has_tool_call:
-                continue  # 跳过孤立的 tool-return
-
-        if has_tool_call:
-            # tool-call 暂时保留，但如果下一条不是 tool-return 则需要清理
-            # 这里无法前瞻，先保留，由上面的逻辑在遇到孤立 tool-return 时跳过
-            pass
-
-        result.append(msg)
-
-    # 反向扫描：移除末尾没有 tool-return 的 tool-call
-    while result:
-        last = result[-1]
-        last_parts = last.parts if hasattr(last, "parts") else []
-        if any(isinstance(p, ToolCallPart) for p in last_parts):
-            result.pop()
-        else:
-            break
-
-    return result
-
-
-def save_pydantic_history(conv, new_msgs: list, summary: str | None = None) -> None:
+def save_pydantic_history(conv, new_msgs: list) -> None:
     """保存消息历史到 Conversation.pydantic_messages。
 
-    压缩策略（替代硬截断）：
-    1. 不超过上限时直接追加
-    2. 超过上限时：头部保留 + 摘要注入 + 尾部保留
-    3. 摘要来自 Conversation.summary（由 summary.py 后台生成）
+    策略：不超过上限时直接追加，超过时按 turn 边界截断。
+    跨轮上下文由 about_you.md / memory.md 提供，不再注入对话摘要。
     """
     from pydantic_core import to_json
 
@@ -208,36 +410,19 @@ def save_pydantic_history(conv, new_msgs: list, summary: str | None = None) -> N
     existing = load_pydantic_history(conv)
     updated = existing + new_msgs
 
+    # Layer 2: 保存时 sanitize
+    updated = sanitize_history(updated)
+
     if len(updated) <= _MAX_HISTORY_MESSAGES:
         conv.pydantic_messages = to_json(updated).decode()
         return
 
-    # ── 压缩：头部 + 摘要 + 尾部 ──
-    # 先清除旧的摘要注入消息
-    cleaned = [m for m in updated if not _has_summary_marker(m)]
-
-    head = cleaned[:_HEAD_KEEP]
-    tail = _safe_tail(cleaned, _TAIL_KEEP)
-
-    parts = list(head)
-
-    # 注入摘要（如有）
-    summary_text = summary or conv.summary
-    if summary_text and summary_text.strip() and summary_text.strip() != "无重要内容":
-        summary_msg = _build_summary_message(summary_text)
-        # 标记以便后续清理
-        for part in summary_msg.parts:
-            if isinstance(part, SystemPromptPart):
-                part.content = f"{_SUMMARY_MARKER}\n{part.content}"  # type: ignore[assignment]
-                break
-        parts.append(summary_msg)
-
-    parts.extend(tail)
-    conv.pydantic_messages = to_json(parts).decode()
+    # ── 按 turn 边界截断 ──
+    tail = _safe_tail(updated, _MAX_HISTORY_MESSAGES)
+    conv.pydantic_messages = to_json(tail).decode()
     logger.info(
-        "历史已压缩",
+        "历史已截断",
         original=len(updated),
-        compressed=len(parts),
-        has_summary=bool(summary_text),
+        truncated=len(tail),
         conversation_id=getattr(conv, "conversation_id", None),
     )

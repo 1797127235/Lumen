@@ -76,3 +76,6 @@ src-tauri/gen/
 # Node
 node_modules/
 
+# Session temp files
+session-ses_*.md
+

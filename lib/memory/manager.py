@@ -118,7 +118,6 @@ class MemoryManager:
         user_input: str,
         *,
         session_key: str = "",
-        conversation_summary: str = "",
     ) -> str:
         """每轮动态上下文：外部 provider prefetch（L2）+ 当前时间。
 
@@ -137,9 +136,6 @@ class MemoryManager:
             prefetch_result = await self.prefetch_all(user_input, session_id=session_key, user_id=user_id)
             if prefetch_result and prefetch_result.strip():
                 parts.append(prefetch_result)
-
-        if conversation_summary:
-            parts.append(f"Conversation summary: {conversation_summary}")
 
         raw = "\n\n".join(parts)
         if not raw.strip():

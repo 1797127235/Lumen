@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from lib.tools._base import ToolDef
 from lib.tools._discovery import get_tool_discovery_state
-from lib.tools._middleware import wrap_with_budget, wrap_with_logging
+from lib.tools._middleware import wrap_with_budget, wrap_with_failure_degradation, wrap_with_logging
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
 from lib.tools.delegate import create_delegate_tools
@@ -55,7 +55,9 @@ def register_all_tools() -> ToolRegistry:
         create_tool_search(),
     ]
 
-    # 应用中间件（日志 + 预算）
+    # 应用中间件（连续失败降级 → 日志 → 预算）
+    # 注意：failure_degradation 必须在最内层，这样它检测的是工具的真实返回
+    all_tools = wrap_with_failure_degradation(all_tools)
     all_tools = wrap_with_logging(all_tools)
     all_tools = wrap_with_budget(all_tools, limit=20)
 
@@ -75,8 +77,9 @@ def _register_mcp_tools(registry: ToolRegistry) -> None:
         if not mcp_tools:
             return
 
-        # 和内置工具一样走中间件（日志 + 预算）
+        # 和内置工具一样走中间件（连续失败降级 → 日志 → 预算）
         tools_only = [tool for _, tool in mcp_tools]
+        tools_only = wrap_with_failure_degradation(tools_only)
         tools_only = wrap_with_logging(tools_only)
         tools_only = wrap_with_budget(tools_only, limit=20)
 

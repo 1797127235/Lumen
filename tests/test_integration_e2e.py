@@ -43,9 +43,9 @@ async def test_lifespan_starts_web_channel():
 @pytest.mark.asyncio
 async def test_web_channel_end_to_end():
     """验证 WebChannel 完整流程：请求 -> AgentRunner -> SSE 输出"""
+    from channels.web.web import WebChannel
     from lib.bus.event_bus import EventBus
     from lib.bus.queue import MessageBus
-    from channels.web.web import WebChannel
     from lib.chat.agent_runner import AgentRunner
 
     bus = MessageBus()
@@ -98,9 +98,9 @@ async def test_cli_channel_end_to_end():
 @pytest.mark.asyncio
 async def test_telegram_channel_mocked():
     """验证 TelegramChannel 启动（mock Bot）"""
+    from channels.telegram import TelegramChannel
     from lib.bus.event_bus import EventBus
     from lib.bus.queue import MessageBus
-    from channels.telegram.telegram import TelegramChannel
 
     bus = MessageBus()
     event_bus = EventBus()
