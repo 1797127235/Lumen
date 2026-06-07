@@ -80,8 +80,8 @@ class RSSScheduler:
         if not events:
             return
 
-        # 3. 读 FOCUS.md
-        focus = await _store.read_focus("demo_user")
+        # 3. 读 FOCUS.md（用实际 Telegram user_id）
+        focus = await _store.read_focus(chat_id)
         if not focus.strip():
             return
 
