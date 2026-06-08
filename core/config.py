@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     rss_enabled: bool = True
     rss_fetch_interval: int = 300  # 拉取间隔（秒）
     rss_filter_model: str = ""  # 空 = 使用 llm_model
+    # ── 主动推送 ──
+    proactive_enabled: bool = False  # 总开关（需同时配置 telegram_chat_id）
+    proactive_interval_min: int = 30  # 最短 tick 间隔（分钟）
+    proactive_interval_max: int = 120  # 最长 tick 间隔（分钟）
+    proactive_daily_limit: int = 200  # 每日推送上限
+
     # ── 语义去重 ──
     semantic_dedup_enabled: bool = False
     semantic_dedup_default_threshold: float = 0.85
@@ -189,6 +195,10 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "rss_enabled",
         "rss_fetch_interval",
         "rss_filter_model",
+        "proactive_enabled",
+        "proactive_interval_min",
+        "proactive_interval_max",
+        "proactive_daily_limit",
     )
 
     for key in _CONFIG_KEYS:

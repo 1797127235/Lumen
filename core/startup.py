@@ -17,6 +17,32 @@ from shared.logging import get_logger, setup_logging
 logger = get_logger(__name__)
 
 
+def _register_builtin_mcp_servers() -> None:
+    """自动注册内置 MCP Servers（如尚未配置则写入默认配置）。"""
+    from lib.tools.mcp.config_store import add_mcp_server, get_mcp_server
+    from lib.tools.mcp.models import McpServerConfig
+
+    # RSS MCP Server
+    if get_mcp_server("lumen-rss") is None:
+        import sys
+
+        rss_server_path = str(
+            __import__("pathlib").Path(__file__).resolve().parent.parent / "mcp_servers" / "rss" / "server.py"
+        )
+        add_mcp_server(
+            McpServerConfig(
+                name="lumen-rss",
+                transport="stdio",
+                command=sys.executable,
+                args=[rss_server_path],
+                enabled=True,
+                auto_approve=True,
+                read_only=False,
+            )
+        )
+        logger.info("Registered built-in MCP server: lumen-rss")
+
+
 def _init_logging() -> None:
     settings = get_settings()
     setup_logging(
@@ -59,6 +85,9 @@ async def lifespan(app: FastAPI):
 
     # Hermes-Pure: 语义索引补偿循环已移除（ProjectionManager 已删除）
     pass
+
+    # 自动注册内置 MCP Servers（如 RSS）
+    _register_builtin_mcp_servers()
 
     # 连接已配置的 MCP Servers
     with contextlib.suppress(Exception):
@@ -114,20 +143,17 @@ async def lifespan(app: FastAPI):
     # 启动出站消息分发
     dispatch_task = asyncio.create_task(bus.dispatch_outbound())
 
-    # 启动 RSS Scheduler（需要 TelegramChannel）
-    rss_scheduler = None
-    if getattr(settings, "rss_enabled", False):
-        from channels.telegram import TelegramChannel
+    # RSS Scheduler 已移除 — RSS 功能通过 MCP server (lumen-rss) 提供
 
-        tg_ch = next((ch for ch in channels if isinstance(ch, TelegramChannel)), None)
-        if tg_ch:
-            from lib.rss.scheduler import RSSScheduler
+    # 主动推送调度器（需 proactive_enabled=true + telegram_chat_id）
+    if getattr(settings, "proactive_enabled", False):
+        from lib.partner.proactive_scheduler import ProactiveScheduler
 
-            rss_scheduler = RSSScheduler(telegram_channel=tg_ch)
-            rss_scheduler.start()
-            logger.info("RSSScheduler enabled (interval=%ds)", settings.rss_fetch_interval)
-        else:
-            logger.warning("RSS enabled but no TelegramChannel — scheduler not started")
+        scheduler = ProactiveScheduler(bus)
+        scheduler.start()
+        logger.info("ProactiveScheduler enabled")
+    else:
+        scheduler = None
 
     # 启动记忆定期整理（过期 transient / stale intent）
     from lib.memory.housekeeping import MemoryHousekeeper
@@ -140,10 +166,12 @@ async def lifespan(app: FastAPI):
     # ═══════════════════════════════════════════════════════════
     #  清理
     # ═══════════════════════════════════════════════════════════
-    if rss_scheduler:
-        await rss_scheduler.stop()
+    # RSS Scheduler 已移除
 
     await housekeeper.stop()
+
+    if scheduler:
+        await scheduler.stop()
 
     await runner.stop()
     dispatch_task.cancel()

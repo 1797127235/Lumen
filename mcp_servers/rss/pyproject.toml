@@ -1,0 +1,13 @@
+[project]
+name = "lumen-rss-mcp"
+version = "0.1.0"
+description = "RSS subscription MCP server for Lumen"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "feedparser>=6.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+lumen-rss-mcp = "server:main"

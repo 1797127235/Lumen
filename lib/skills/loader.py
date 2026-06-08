@@ -1,4 +1,4 @@
-"""Skill 加载器 — 基于文件的轻量实现，参考 akashic-agent SkillsLoader。"""
+"""Skill 加载器 — 基于文件的轻量实现"""
 
 from __future__ import annotations
 

@@ -145,6 +145,7 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
         "aiosqlite",
         "telegram",  # python-telegram-bot 内部 polling/API 调试日志
         "httpx_helpers",  # telegram 依赖的 httpx 辅助模块
+        "litellm",  # litellm 调试日志（model_cost、request options 等）
     ):
         logging.getLogger(name).setLevel(logging.WARNING)
 

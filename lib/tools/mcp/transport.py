@@ -11,7 +11,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
 
-async def create_stdio_transport(
+def create_stdio_transport(
     command: str,
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
@@ -33,7 +33,7 @@ async def create_stdio_transport(
     return stdio_client(params)
 
 
-async def create_sse_transport(url: str) -> AbstractAsyncContextManager[tuple[Any, Any]]:
+def create_sse_transport(url: str) -> AbstractAsyncContextManager[tuple[Any, Any]]:
     """创建 SSE transport 的 async context manager。
 
     Returns:
