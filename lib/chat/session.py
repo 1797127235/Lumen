@@ -23,12 +23,53 @@ logger = get_logger(__name__)
 
 # ── 历史压缩常量 ──────────────────────────────────────
 _MAX_HISTORY_MESSAGES = 40  # 硬上限（之前是 30）
+_TOOL_RESULT_CHAR_BUDGET = 2000  # 工具返回截断阈值
 
 
 def _truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+def _truncate_tool_result(content: object) -> str:
+    """截断工具返回内容，防止历史累积膨胀。"""
+    text = content if isinstance(content, str) else str(content)
+    if len(text) <= _TOOL_RESULT_CHAR_BUDGET:
+        return text
+    return text[:_TOOL_RESULT_CHAR_BUDGET] + f"\n...({len(text) - _TOOL_RESULT_CHAR_BUDGET} chars truncated)..."
+
+
+def _truncate_tool_returns_in_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """对消息列表中的所有 ToolReturnPart 进行截断，返回新列表。"""
+    from dataclasses import replace
+
+    from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
+        RetryPromptPart,
+        ToolReturnPart,
+    )
+
+    result: list[ModelMessage] = []
+    for msg in messages:
+        if not isinstance(msg, ModelRequest):
+            result.append(msg)
+            continue
+
+        has_tool = any(isinstance(p, ToolReturnPart | RetryPromptPart) for p in msg.parts)
+        if not has_tool:
+            result.append(msg)
+            continue
+
+        new_parts = []
+        for p in msg.parts:
+            if isinstance(p, ToolReturnPart | RetryPromptPart):
+                truncated = _truncate_tool_result(getattr(p, "content", ""))
+                new_parts.append(replace(p, content=truncated))
+            else:
+                new_parts.append(p)
+
+        result.append(replace(msg, parts=new_parts))
+    return result
 
 
 # ── Part 类型检查辅助 ─────────────────────────────────
@@ -183,6 +224,28 @@ def sanitize_history(messages: list) -> list:
         )
 
     result: list[ModelMessage] = list(messages[start_idx:])
+
+    # ── Phase 1.5: 过滤旧的 context frame / focus 消息 ──
+    # context frame（L0+L1+L2）和 <current-focus> 是每轮运行时注入的，
+    # 不应持久化到历史中。过滤掉历史里残留的 frame/focus 消息。
+    from pydantic_ai.messages import UserPromptPart  # pyright: ignore[reportMissingImports]
+
+    _filtered = []
+    for msg in result:
+        if isinstance(msg, ModelRequest):
+            # 检查是否包含 <current-focus> 标签
+            _is_focus = False
+            for p in msg.parts if hasattr(msg, "parts") else []:
+                if isinstance(p, UserPromptPart):
+                    content = getattr(p, "content", "")
+                    if isinstance(content, str) and ("<current-focus>" in content or "</current-focus>" in content):
+                        _is_focus = True
+                        break
+            if _is_focus:
+                logger.debug("sanitize: 移除残留的 focus 消息")
+                continue
+        _filtered.append(msg)
+    result = _filtered
 
     # ── Phase 2: 顺序验证 — tool_call ↔ tool_response 配对 ──
     cleaned: list[ModelMessage] = []
@@ -393,6 +456,9 @@ def load_pydantic_history(conv) -> list:
             conversation_id=getattr(conv, "conversation_id", None),
         )
 
+    # ── 诊断：统计历史消息构成 ──
+    _log_history_stats(cleaned, getattr(conv, "conversation_id", None))
+
     return cleaned
 
 
@@ -407,8 +473,11 @@ def save_pydantic_history(conv, new_msgs: list) -> None:
     if not new_msgs:
         return
 
+    # 截断新消息中的 tool return，防止历史膨胀
+    truncated_new_msgs = _truncate_tool_returns_in_messages(new_msgs)
+
     existing = load_pydantic_history(conv)
-    updated = existing + new_msgs
+    updated = existing + truncated_new_msgs
 
     # Layer 2: 保存时 sanitize
     updated = sanitize_history(updated)
@@ -425,4 +494,76 @@ def save_pydantic_history(conv, new_msgs: list) -> None:
         original=len(updated),
         truncated=len(tail),
         conversation_id=getattr(conv, "conversation_id", None),
+    )
+
+
+# ── 诊断：历史消息统计 ──────────────────────────────────────────────
+
+
+def _log_history_stats(messages: list, conversation_id: str | None) -> None:
+    """分析消息列表构成，诊断 token 膨胀原因。"""
+    from pydantic_ai.messages import (  # pyright: ignore[reportMissingImports]
+        RetryPromptPart,
+        ToolCallPart,
+        ToolReturnPart,
+        UserPromptPart,
+    )
+
+    total = len(messages)
+    tool_return_count = 0
+    tool_return_chars = 0
+    tool_call_count = 0
+    user_count = 0
+    user_chars = 0
+    assistant_text_count = 0
+    assistant_text_chars = 0
+    context_frame_count = 0
+    context_frame_chars = 0
+
+    for msg in messages:
+        if isinstance(msg, ModelRequest):
+            has_tool = any(isinstance(p, ToolReturnPart | RetryPromptPart) for p in msg.parts)
+            if has_tool:
+                for p in msg.parts:
+                    if isinstance(p, ToolReturnPart | RetryPromptPart):
+                        tool_return_count += 1
+                        content = getattr(p, "content", "")
+                        tool_return_chars += len(str(content))
+            else:
+                for p in msg.parts:
+                    if isinstance(p, UserPromptPart):
+                        content = str(getattr(p, "content", ""))
+                        user_count += 1
+                        user_chars += len(content)
+                        # 检测 context frame（含特定标记）
+                        if "当前时间：" in content or "# 用户记忆" in content or "<current-focus>" in content:
+                            context_frame_count += 1
+                            context_frame_chars += len(content)
+
+        elif isinstance(msg, ModelResponse):
+            has_tool_calls = any(isinstance(p, ToolCallPart) for p in msg.parts)
+            if has_tool_calls:
+                tool_call_count += sum(1 for p in msg.parts if isinstance(p, ToolCallPart))
+            for p in msg.parts:
+                if type(p).__name__ == "TextPart":
+                    content = str(getattr(p, "content", ""))
+                    assistant_text_count += 1
+                    assistant_text_chars += len(content)
+
+    logger.info(
+        "历史消息统计",
+        conversation_id=conversation_id,
+        total_messages=total,
+        tool_return_count=tool_return_count,
+        tool_return_chars=tool_return_chars,
+        tool_call_count=tool_call_count,
+        user_count=user_count,
+        user_chars=user_chars,
+        assistant_text_count=assistant_text_count,
+        assistant_text_chars=assistant_text_chars,
+        context_frame_count=context_frame_count,
+        context_frame_chars=context_frame_chars,
+        tool_return_pct=round(
+            tool_return_chars / max(1, user_chars + assistant_text_chars + tool_return_chars) * 100, 1
+        ),
     )

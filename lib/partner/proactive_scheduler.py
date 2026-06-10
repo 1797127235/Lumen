@@ -1,6 +1,6 @@
 """ProactiveScheduler — RSS 推送调度器
 
-定时轮询 RSS → FOCUS.md LLM 过滤 → 频率控制 → 推送到 Telegram/Web
+定时轮询 RSS → RSS Reader Agent → 频率控制 → 推送到 Telegram/Web
 
 生命周期:
     1. startup.py 调用 start()
@@ -8,29 +8,30 @@
     3. shutdown 调用 stop()
 
 调度流程 (每次 tick):
-    1. rss_poll          → 拉取新内容
-    2. rss_get_unread    → 获取未读条目
-    3. 前置门控           → 频率限制 / 用户活跃检测 / 每日上限
-    4. read_focus        → 读取 FOCUS.md（用户关注点）
-    5. LLM 过滤          → 从未读条目中挑选值得推送的
-    6. publish_outbound  → 推送到 Telegram
-    7. rss_acknowledge   → 标记已推送的条目为已读
-    8. 更新 presence     → 记录 last_proactive_at / proactive_sent_24h
+    1. rss_poll            → 拉取新内容
+    2. rss_get_unread      → 获取未读条目
+    3. 前置门控             → 频率限制 / 用户活跃检测 / 每日上限
+    4. read_focus          → 读取 FOCUS.md（用户关注点）
+    5. RSS Reader Agent    → 浏览 → 读原文 → 生成朋友式推送文案
+    6. rss_acknowledge     → 标记已推送的条目为已读
+    7. publish_outbound    → 推送到 Telegram
+    8. 更新 presence       → 记录 last_proactive_at / proactive_sent_24h
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from pydantic_ai import ToolReturn
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import build_llm_call_params, get_settings
+from core.config import get_settings
 from core.db import get_async_session_maker
 from lib.bus.queue import MessageBus, OutboundMessage
 from lib.memory.markdown import AsyncMarkdownStore
@@ -45,7 +46,7 @@ _MCP_SERVER = "lumen-rss"
 _USER_ID = "demo_user"
 
 # 活跃判定：用户最后消息时间在 COOLDOWN 内视为"正在聊天"
-_ACTIVE_COOLDOWN = timedelta(minutes=10)
+_ACTIVE_COOLDOWN = timedelta(minutes=2)
 
 # 24 小时窗口起始时间
 _DAY_WINDOW = timedelta(hours=24)
@@ -129,7 +130,7 @@ class ProactiveScheduler:
 
         # 连续空轮时逐步拉长间隔
         backoff_factor = min(self._state.consecutive_empty, 5)
-        min_interval = base_min + backoff_factor * 30  # 每次空轮 +30s
+        min_interval = base_min + backoff_factor * 5  # 每次空轮 +5 分钟
 
         return timedelta(seconds=min(base_max, min_interval) * 60)
 
@@ -162,7 +163,7 @@ class ProactiveScheduler:
             logger.warning("rss_get_unread 失败", result=unread_text[:200])
             return
 
-        entries = _parse_entries(unread_text)
+        entries = _parse_entries(unread_text)[:50]  # 最多处理 50 条，防止 token 爆炸
         if not entries:
             self._state.consecutive_empty += 1
             return
@@ -180,14 +181,37 @@ class ProactiveScheduler:
             store = AsyncMarkdownStore()
             focus = await store.read_focus(_USER_ID)
 
-            # 6. LLM 过滤
-            recommended = await self._llm_filter(entries, focus)
-            if not recommended:
-                logger.debug("LLM 过滤后无推荐条目")
+            # 6. 调用 RSS Reader Agent 生成推送文案
+            from lib.partner.rss_reader import get_rss_reader
+
+            reader = get_rss_reader()
+            message = await reader.generate_push(entries, focus, _USER_ID)
+            if not message:
+                logger.debug("RSS Reader Agent 无推荐")
                 return
 
-            # 7. 推送
-            message = self._format_push_message(recommended)
+            # 7. 从文案中提取 URL，匹配条目并 ack
+            urls_in_message = re.findall(r"https?://[^\s)\]]+", message)
+            ack_ids = []
+            for e in entries:
+                url = e.get("url", e.get("link", ""))
+                if url:
+                    url_norm = url.rstrip("/")
+                    for msg_url in urls_in_message:
+                        if url_norm == msg_url.rstrip("/"):
+                            eid = e.get("event_id", e.get("id", ""))
+                            if eid:
+                                ack_ids.append(eid)
+                            break
+
+            if ack_ids:
+                try:
+                    await mcp.call_tool(_MCP_SERVER, "rss_acknowledge", {"event_ids": ack_ids})
+                except Exception:
+                    logger.exception("rss_acknowledge 失败，跳过推送防止重复")
+                    return
+
+            # 8. 推送
             chat_id = settings.telegram_chat_id
             if not chat_id:
                 logger.debug("无 telegram_chat_id，跳过推送")
@@ -201,17 +225,12 @@ class ProactiveScheduler:
                 )
             )
 
-            # 8. 标记已读（MCP rss_acknowledge 接受 event_ids 列表）
-            ack_ids = [eid for e in recommended if (eid := e.get("event_id", e.get("id", "")))]
-            if ack_ids:
-                await mcp.call_tool(_MCP_SERVER, "rss_acknowledge", {"event_ids": ack_ids})
-
             # 9. 更新 presence
-            await self._update_presence(db, now, len(recommended))
+            await self._update_presence(db, now)
             await db.commit()
 
         self._state.last_tick = now
-        logger.info("推送完成", count=len(recommended))
+        logger.info("推送完成", message_len=len(message))
 
     # ── 门控检查 ──────────────────────────────────────
 
@@ -234,7 +253,7 @@ class ProactiveScheduler:
             return self._GateResult(passed=False, reason="用户正在聊天中")
 
         # 检查 2: 每日上限
-        daily_limit = getattr(settings, "proactive_daily_limit", None) or 8
+        daily_limit = getattr(settings, "proactive_daily_limit", None) or 20
         result = await db.execute(
             text("SELECT proactive_sent_24h, last_proactive_at FROM lumen_presence WHERE user_id = :uid"),
             {"uid": _USER_ID},
@@ -244,8 +263,13 @@ class ProactiveScheduler:
         if row:
             sent_24h = row[0] or 0
             last_proactive = _parse_db_datetime(row[1])
-            # 如果上次推送是 24h 前，重置计数
+            # 如果上次推送是 24h 前，重置计数（写回数据库）
             if last_proactive and (now - last_proactive) > _DAY_WINDOW:
+                if sent_24h > 0:
+                    await db.execute(
+                        text("UPDATE lumen_presence SET proactive_sent_24h = 0 WHERE user_id = :uid"),
+                        {"uid": _USER_ID},
+                    )
                 sent_24h = 0
             if sent_24h >= daily_limit:
                 return self._GateResult(passed=False, reason=f"已达每日上限 ({sent_24h}/{daily_limit})")
@@ -256,153 +280,21 @@ class ProactiveScheduler:
 
         return self._GateResult(passed=True)
 
-    # ── LLM 过滤 ─────────────────────────────────────
-
-    async def _llm_filter(self, entries: list[dict], focus: str) -> list[dict]:
-        """调用 LLM 从未读条目中挑选值得推送的
-
-        输入: 未读条目列表 + FOCUS.md（用户关注点）
-        输出: 推荐推送的条目列表（含推荐语）
-        """
-        if not entries:
-            return []
-
-        # 构建条目摘要（兼容 MCP 字段名: url/link, event_id/id）
-        items_text = "\n\n".join(
-            f"[{i}] {e.get('title', '无标题')}\n"
-            f"来源: {e.get('source_name', e.get('feed_title', e.get('feed', '未知')))}\n"
-            f"摘要: {e.get('content', e.get('summary', e.get('description', '无摘要')))[:200]}\n"
-            f"链接: {e.get('url', e.get('link', ''))}\n"
-            f"ID: {e.get('event_id', e.get('id', ''))}"
-            for i, e in enumerate(entries)
-        )
-
-        focus_section = (
-            f"\n## 用户关注点（FOCUS.md）\n{focus}" if focus else "\n## 用户关注点\n（暂无，按通用兴趣推荐）"
-        )
-
-        prompt = f"""你是一个内容筛选助手。下面是一些未读的 RSS 条目，请从中挑选最值得推荐给用户的。
-
-{focus_section}
-
-## 未读条目
-{items_text}
-
-## 要求
-1. 只推荐与用户关注点相关的条目（没有关注点时推荐技术/AI 相关的高质量内容）
-2. 为每条推荐写一句简短的推荐语（20 字以内，说明为什么推荐）
-3. 如果没有值得推荐的，返回空数组
-
-## 输出格式（严格 JSON）
-```json
-[
-  {{
-    "index": 0,
-    "reason": "推荐语"
-  }}
-]
-```"""
-
-        try:
-            import litellm
-
-            # 使用 rss_filter_model 或默认模型
-            settings = get_settings()
-            model_name = getattr(settings, "rss_filter_model", "") or None
-            llm_params = build_llm_call_params(model=model_name)
-
-            kwargs: dict[str, Any] = {
-                "model": llm_params["model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 512,
-                "api_key": llm_params["api_key"],
-                "stream": False,
-                "timeout": 30,
-            }
-            if llm_params["base_url"]:
-                kwargs["base_url"] = llm_params["base_url"]
-
-            response = await litellm.acompletion(**kwargs)
-            response = cast(Any, response)
-            content = response.choices[0].message.content or ""
-
-            # 解析 JSON
-            picks = _extract_json_array(content)
-            if not picks:
-                return []
-
-            # 映射回原始条目，标准化字段名
-            recommended = []
-            for pick in picks:
-                idx = pick.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(entries):
-                    entry = {
-                        **entries[idx],
-                        "_reason": pick.get("reason", ""),
-                        # 标准化字段名，兼容 MCP (url/event_id) 和旧字段 (link/id)
-                        "link": entries[idx].get("url", entries[idx].get("link", "")),
-                        "id": entries[idx].get("event_id", entries[idx].get("id", "")),
-                    }
-                    recommended.append(entry)
-
-            return recommended
-
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("LLM 过滤失败")
-            return []
-
-    # ── 消息格式化 ────────────────────────────────────
-
-    def _format_push_message(self, entries: list[dict]) -> str:
-        """将推荐条目格式化为推送消息"""
-        if len(entries) == 1:
-            e = entries[0]
-            reason = e.get("_reason", "")
-            parts = [f"📰 {e.get('title', '无标题')}"]
-            if reason:
-                parts.append(f"💡 {reason}")
-            link = e.get("link", "")
-            if link:
-                parts.append(f"🔗 {link}")
-            return "\n".join(parts)
-
-        # 多条推荐
-        lines = ["📰 你关注的领域有更新：\n"]
-        for e in entries:
-            title = e.get("title", "无标题")
-            reason = e.get("_reason", "")
-            feed = e.get("feed_title", e.get("feed", ""))
-            link = e.get("link", "")
-            line = f"**{title}**"
-            if feed:
-                line += f" — {feed}"
-            if reason:
-                line += f"\n  💡 {reason}"
-            if link:
-                line += f"\n  🔗 {link}"
-            lines.append(line)
-            lines.append("")
-
-        return "\n".join(lines)
-
     # ── Presence 更新 ─────────────────────────────────
 
-    async def _update_presence(self, db: AsyncSession, now: datetime, count: int) -> None:
+    async def _update_presence(self, db: AsyncSession, now: datetime) -> None:
         """更新推送统计"""
         try:
             await db.execute(
                 text("""
                 INSERT INTO lumen_presence (user_id, last_user_at, last_proactive_at, proactive_sent_24h, updated_at)
-                VALUES (:uid, :now, :now, :count, :now)
+                VALUES (:uid, :now, :now, 1, :now)
                 ON CONFLICT(user_id) DO UPDATE SET
                     last_proactive_at = :now,
-                    proactive_sent_24h = MIN(proactive_sent_24h + :count, 99),
+                    proactive_sent_24h = MIN(proactive_sent_24h + 1, 99),
                     updated_at = :now
             """),
-                {"uid": _USER_ID, "now": now, "count": count},
+                {"uid": _USER_ID, "now": now},
             )
         except Exception as e:
             logger.warning("presence 更新失败", error=str(e))
@@ -418,8 +310,12 @@ def _parse_db_datetime(val: Any) -> datetime | None:
     if isinstance(val, datetime):
         return val if val.tzinfo else val.replace(tzinfo=UTC)
     if isinstance(val, str):
-        dt = datetime.fromisoformat(val)
-        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        try:
+            dt = datetime.fromisoformat(val)
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        except ValueError:
+            logger.warning("无法解析 datetime 字符串", value=val)
+            return None
     return None
 
 
@@ -458,40 +354,3 @@ def _parse_entries(text: str) -> list[dict]:
         return []
     except json.JSONDecodeError:
         return []
-
-
-def _extract_json_array(text: str) -> list[dict]:
-    """从 LLM 响应中提取 JSON 数组"""
-    # 尝试直接解析
-    text = text.strip()
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-
-    # 尝试从 markdown 代码块中提取
-    import re
-
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group(1).strip())
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    # 尝试找到第一个 [ ... ] 块
-    start = text.find("[")
-    end = text.rfind("]")
-    if start >= 0 and end > start:
-        try:
-            data = json.loads(text[start : end + 1])
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    return []

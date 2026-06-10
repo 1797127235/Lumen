@@ -24,7 +24,6 @@ async def persist_turn(
     user_input: str,
     agent_generation: int,
     deps: LumenDeps,
-    context_frame_msg=None,
 ) -> bool:
     """持久化一轮对话：保存 AI 回复、更新消息计数、保存历史、持久化 Trace、触发记忆投影/审查"""
     # 写入 token 用量（PydanticAI 在 agent_run_result 事件中已捕获）
@@ -62,8 +61,7 @@ async def persist_turn(
     )
     conv.message_count = (conv.message_count or 0) + 1
     conv.last_message_at = datetime.now(UTC)
-    msgs_to_save = [context_frame_msg, *state.new_msgs] if context_frame_msg is not None else state.new_msgs
-    save_pydantic_history(conv, msgs_to_save)
+    save_pydantic_history(conv, state.new_msgs)
 
     try:
         await db.commit()

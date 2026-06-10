@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     rss_filter_model: str = ""  # 空 = 使用 llm_model
     # ── 主动推送 ──
     proactive_enabled: bool = False  # 总开关（需同时配置 telegram_chat_id）
-    proactive_interval_min: int = 30  # 最短 tick 间隔（分钟）
+    proactive_interval_min: int = 10  # 最短 tick 间隔（分钟）
     proactive_interval_max: int = 120  # 最长 tick 间隔（分钟）
     proactive_daily_limit: int = 200  # 每日推送上限
 

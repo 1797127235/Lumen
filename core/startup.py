@@ -95,6 +95,19 @@ async def lifespan(app: FastAPI):
 
         await get_mcp_manager().connect_all()
 
+    # 注册 Honcho 外部记忆 Provider
+    with contextlib.suppress(Exception):
+        from lib.memory import get_memory_manager
+        from lib.memory.honcho_provider import HonchoProvider
+
+        honcho_provider = HonchoProvider()
+        if await honcho_provider.is_available():
+            manager = get_memory_manager()
+            manager.add_provider(honcho_provider)
+            logger.info("Honcho Provider 已注册")
+        else:
+            logger.warning("Honcho Provider 不可用，跳过注册")
+
     # ═══════════════════════════════════════════════════════════
     #  新增：MessageBus + EventBus + Channels + AgentRunner
     # ═══════════════════════════════════════════════════════════

@@ -140,6 +140,18 @@ class AgentRunner:
                 state = _TurnState()
                 bind_chat_context(conversation_id=conv.conversation_id, user_id=user_id)
 
+                # 初始化外部记忆 provider
+                try:
+                    from lib.memory import get_memory_manager
+
+                    manager = get_memory_manager()
+                    await manager.initialize_all(
+                        session_key,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logger.debug("initialize_all failed", session_key=session_key)
+
                 async with ConversationLock(conv.conversation_id):
                     await db.refresh(conv)
 
@@ -185,8 +197,6 @@ class AgentRunner:
 
                     # Layer 4: 发送 API 前最后一次 sanitize，运行时兜底
                     history_with_frame = sanitize_history(history_with_frame)
-
-                    context_frame_msg = history_with_frame[-1] if history_with_frame else None
 
                     # 运行 Agent
                     async with agent.run_stream_events(
@@ -280,7 +290,6 @@ class AgentRunner:
                             user_input,
                             agent_generation,
                             deps,
-                            context_frame_msg=context_frame_msg,
                         )
 
                 # 同步到外部记忆 provider

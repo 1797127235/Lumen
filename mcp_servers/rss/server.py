@@ -44,7 +44,7 @@ _FEEDS_FILE = _DATA_DIR / "feeds.json"
 _ACK_FILE = _DATA_DIR / "ack_state.json"
 _ITEMS_FILE = _DATA_DIR / "items.json"
 
-_MAX_ITEMS = 2000
+_MAX_ITEMS = 500
 _ACK_CLEANUP_INTERVAL = 50
 _INSTANCE_COOLDOWN = 3600
 _INSTANCE_MAX_FAILS = 3
@@ -379,11 +379,26 @@ def _list_items_sync(source_name: str = "", limit: int = 20, unread_only: bool =
     return results[:limit]
 
 
-def _get_unread_sync() -> list[dict]:
+def _get_unread_sync(days: int = 7) -> list[dict]:
     acks: dict[str, float] = _load_json(_ACK_FILE, {})
     now = time.time()
+    cutoff = now - days * 86400
     items: dict = _load_json(_ITEMS_FILE, {})
-    return [item for eid, item in items.items() if not (eid in acks and now < acks[eid])]
+    result = []
+    for eid, item in items.items():
+        if eid in acks and now < acks[eid]:
+            continue
+        # 只返回最近 N 天的条目
+        published_at = item.get("published_at", "")
+        if published_at:
+            try:
+                ts = datetime.fromisoformat(published_at).timestamp()
+                if ts < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass  # 解析失败就保留
+        result.append(item)
+    return result
 
 
 def _acknowledge_sync(event_ids: list[str], ttl_hours: int = 168) -> dict:
@@ -517,18 +532,22 @@ def rss_list_items(source_name: str = "", limit: int = 20) -> str:
 
 
 @mcp.tool()
-def rss_get_unread() -> str:
-    """获取所有未读 RSS 事件（供 proactive 系统调用）。
+def rss_get_unread(limit: int = 100, days: int = 7) -> str:
+    """获取未读 RSS 事件（供 proactive 系统调用）。
 
     返回 JSON 格式的事件列表，每个事件包含 event_id, title, content, url, source_name, published_at。
+
+    Args:
+        limit: 最多返回多少条，默认 100
+        days: 只返回最近 N 天的条目，默认 7
     """
-    items = _get_unread_sync()
+    items = _get_unread_sync(days=days)
     if not items:
         return "没有未读事件。"
     # 返回 JSON 供程序化消费
     import json as _json
 
-    return _json.dumps(items[:20], ensure_ascii=False)
+    return _json.dumps(items[:limit], ensure_ascii=False)
 
 
 @mcp.tool()
