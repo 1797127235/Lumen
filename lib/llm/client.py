@@ -1,4 +1,4 @@
-"""LLM 客户端"""
+"""LLM 客户端 — OpenAI 兼容 Chat Completions API 直接调用。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,21 @@ import httpx
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class ContextLengthError(Exception):
+    """LLM 上下文超长。"""
+
+
+_CONTEXT_LENGTH_KEYWORDS = (
+    "maximum context length",
+    "context_length_exceeded",
+    "range of input length",
+    "context window exceeds limit",
+    "string too long",
+    "reduce the length",
+    "too many tokens",
+)
 
 
 @dataclass
@@ -66,8 +81,16 @@ class LLMClient:
                 await on_content_delta({"content_delta": chunk})
             return LLMResponse(content=collected or None)
 
-        resp = await self.client.post("/chat/completions", json=payload)
-        resp.raise_for_status()
+        try:
+            resp = await self.client.post("/chat/completions", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            error_text = exc.response.text
+            lower = error_text.lower()
+            if any(kw in lower for kw in _CONTEXT_LENGTH_KEYWORDS):
+                raise ContextLengthError(error_text) from exc
+            raise
+
         data = resp.json()
 
         choice = data["choices"][0]

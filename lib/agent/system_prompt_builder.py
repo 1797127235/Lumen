@@ -1,6 +1,7 @@
 """System Prompt 构建器
 
-模块化构建 system prompt
+静态前缀（identity + rules + style + memory）始终一致，最大化 KV cache 命中率。
+动态内容（skills）由 build_skills_frame() 产出，注入 context_frame（user message）。
 """
 
 from __future__ import annotations
@@ -10,63 +11,60 @@ from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
+_system_prompt_cache: str | None = None
 
-def build_system_prompt(
-    *,
-    skill_names: list[str] | None = None,
-    user_input: str = "",
-) -> str:
-    """构建完整的 system prompt（含 skills 注入）。
 
-    Args:
-        skill_names: 已检测到的技能名称列表
-        user_input: 当前用户输入（用于日志）
+def build_system_prompt() -> str:
+    """构建 100% 静态的 system prompt。
+
+    不含任何随用户输入变化的内容，保证跨轮次 byte-identical → prefix cache 全命中。
     """
+    global _system_prompt_cache
+    if _system_prompt_cache is not None:
+        return _system_prompt_cache
+
+    parts = [
+        _build_identity_block(),
+        _build_tools_block(),
+        _build_style_block(),
+        _build_memory_block(),
+        _build_skill_requirements_block(),
+    ]
+    _system_prompt_cache = "\n\n---\n\n".join(parts)
+    return _system_prompt_cache
+
+
+def build_skills_frame(skill_names: list[str]) -> str:
+    """构建动态 skills 内容，注入 context_frame（不进 system prompt）。"""
     parts = []
 
-    # 1. 身份定义
-    parts.append(_build_identity_block())
-
-    # 2. 工具使用规则
-    parts.append(_build_tools_block())
-
-    # 3. 对话风格
-    parts.append(_build_style_block())
-
-    # 4. 记忆使用规则
-    parts.append(_build_memory_block())
-
-    # 5. 已加载 Skills
     if skill_names:
-        skills_content = _build_skills_block(skill_names)
-        if skills_content:
-            parts.append(skills_content)
-            logger.info("skills 已注入 system prompt", skills=skill_names, user_input=user_input[:50])
+        block = _build_skills_block(skill_names)
+        if block:
+            parts.append(block)
+            logger.info("skills 已注入 context_frame", skills=skill_names)
 
-    # 6. 技能目录（供模型参考）
-    skills_catalog = _build_skills_catalog()
-    if skills_catalog:
-        parts.append(skills_catalog)
+    catalog = _build_skills_catalog()
+    if catalog:
+        parts.append(catalog)
 
-    # 7. Skill 依赖处理规则
-    parts.append(_build_skill_requirements_block())
-
-    return "\n\n---\n\n".join(parts)
+    return "\n\n---\n\n".join(parts) if parts else ""
 
 
-def detect_and_build_skills(user_input: str) -> tuple[list[str], str]:
-    """检测技能并构建 system prompt。
+def detect_and_build(user_input: str) -> tuple[list[str], str, str]:
+    """检测技能并构建 system prompt + skills frame。
 
     Returns:
-        (skill_names, system_prompt)
+        (skill_names, system_prompt, skills_frame)
     """
     loader = get_skills_loader()
     always_skills = loader.get_always_skills()
     detected_skills = loader.detect_skills(user_input)
     skill_names = list(dict.fromkeys(always_skills + detected_skills))
 
-    system_prompt = build_system_prompt(skill_names=skill_names, user_input=user_input)
-    return skill_names, system_prompt
+    system_prompt = build_system_prompt()
+    skills_frame = build_skills_frame(skill_names)
+    return skill_names, system_prompt, skills_frame
 
 
 # ── Prompt Blocks ──────────────────────────────────────────────────
@@ -174,13 +172,12 @@ def _build_memory_block() -> str:
 
 
 def _build_skills_block(skill_names: list[str]) -> str:
-    """构建已加载 skills 的 system prompt 块。"""
+    """构建已加载 skills 的内容块。"""
     loader = get_skills_loader()
     content = loader.load_skills_for_context(skill_names)
     if not content:
         return ""
 
-    # 检查是否有不可用技能，附加依赖状态提示
     unavailable: list[str] = []
     for name in skill_names:
         if not loader._check_requirements(name):

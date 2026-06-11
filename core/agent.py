@@ -1,6 +1,6 @@
 """Lumen Agent — 核心编排（参照 akashic-agent 设计）
 
-纯函数式 ReAct 循环，无类、无 generator、无 PydanticAI。
+纯函数式 ReAct 循环 + 渐进式上下文裁剪，无类、无 generator、无 PydanticAI。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 from core.config import get_settings, load_user_config
 from lib.agent.types import AgentContext
 from lib.bus.event_bus import ToolCallCompleted, ToolCallStarted
-from lib.llm.client import LLMClient, LLMResponse, ToolCall
+from lib.llm.client import ContextLengthError, LLMClient, LLMResponse, ToolCall
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from shared.logging import get_logger
 
@@ -23,6 +23,9 @@ _TOOL_CALLS_LIMIT = 20
 _MAX_ITERATIONS = 12
 _CONSECUTIVE_TOOL_FAILURE_LIMIT = 2
 
+# 渐进式裁剪比率（参照 akashic-agent _SAFETY_RETRY_RATIOS）
+_SAFETY_RETRY_RATIOS = (1.0, 0.5, 0.0)
+
 
 @dataclass
 class AgentResult:
@@ -30,14 +33,56 @@ class AgentResult:
     tool_chain: list[dict[str, Any]] = field(default_factory=list)
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  渐进式裁剪 + ReAct 循环
+# ═══════════════════════════════════════════════════════════════════
+
+
 async def run_agent(
     messages: list[dict[str, Any]],
     ctx: AgentContext,
 ) -> AgentResult:
-    """运行 ReAct 循环，返回最终结果。
+    """渐进式裁剪外壳：ContextLengthError 时逐步缩减历史重试。
 
-    参照 akashic-agent：纯函数，无 generator，无状态对象。
+    参照 akashic-agent PassiveTurnPipeline.run_turn() 的 attempt plan 机制：
+    1. ratio=1.0 — 完整消息
+    2. ratio=0.5 — 保留 system + 后半段消息
+    3. ratio=0.0 — 仅 system + 最后一条 user message
     """
+    total = len(messages)
+
+    for ratio in _SAFETY_RETRY_RATIOS:
+        window = max(2, int(total * ratio))
+        if window >= total:
+            attempt = list(messages)
+        else:
+            attempt = [messages[0], *messages[-(window - 1) :]]
+
+        try:
+            return await _run_react_loop(attempt, ctx)
+        except ContextLengthError:
+            if ratio == _SAFETY_RETRY_RATIOS[-1]:
+                logger.warning(
+                    "所有裁剪计划均失败",
+                    conversation_id=ctx.conversation_id,
+                    total_messages=total,
+                )
+                return AgentResult(content="上下文过长，请尝试新建对话。")
+            logger.warning(
+                "ContextLengthError，裁剪重试",
+                ratio=ratio,
+                window=window,
+                conversation_id=ctx.conversation_id,
+            )
+
+    return AgentResult(content="上下文过长，请尝试新建对话。")
+
+
+async def _run_react_loop(
+    messages: list[dict[str, Any]],
+    ctx: AgentContext,
+) -> AgentResult:
+    """运行 ReAct 循环（单次 attempt，不处理 ContextLengthError）。"""
     registry = get_tool_registry()
     registry.set_context(
         user_id=ctx.user_id,

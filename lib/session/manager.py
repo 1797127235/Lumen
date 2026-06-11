@@ -159,7 +159,7 @@ class Session:
 
     def get_history(
         self,
-        max_messages: int = 500,
+        max_messages: int = 40,
         *,
         start_index: int | None = None,
     ) -> list[dict[str, Any]]:

@@ -5,7 +5,7 @@ import asyncio
 from core.agent import AgentResult, get_agent_generation, run_agent
 from core.db import get_async_session_maker
 from lib.agent.message_builder import build_messages
-from lib.agent.system_prompt_builder import detect_and_build_skills
+from lib.agent.system_prompt_builder import detect_and_build
 from lib.agent.types import AgentContext
 from lib.bus.event_bus import (
     EventBus,
@@ -170,8 +170,8 @@ class AgentRunner:
 
                     # ── Phase 2: BeforeReasoning ──
                     history = session.get_history()
-                    context_frame = await _build_context_frame(conv, user_id, user_input, session_key)
-                    skill_names, system_prompt = detect_and_build_skills(user_input)
+                    _skill_names, system_prompt, skills_frame = detect_and_build(user_input)
+                    context_frame = await _build_context_frame(conv, user_id, user_input, session_key, skills_frame)
                     messages = build_messages(
                         system_prompt=system_prompt,
                         history=history,
@@ -253,6 +253,7 @@ async def _build_context_frame(
     user_id: str,
     user_input: str,
     session_key: str,
+    skills_frame: str = "",
 ) -> str:
     """构建 context frame（参照 akashic-agent）。
 
@@ -290,6 +291,10 @@ async def _build_context_frame(
             parts.append(dynamic_ctx)
     except Exception:
         logger.debug("MemoryManager.build_context failed", user_id=user_id)
+
+    # Skills 内容（动态，不进 system prompt 以保 prefix cache）
+    if skills_frame.strip():
+        parts.append(skills_frame)
 
     # 延迟工具提示
     deferred_hint = build_deferred_tools_hint(conv.conversation_id)

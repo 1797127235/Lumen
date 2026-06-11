@@ -124,58 +124,9 @@ def wrap_with_loop_guard(tools: list[ToolDef]) -> list[ToolDef]:
                 should_block, reason = guard.check_and_record(conv_id, _name, args)
                 if should_block:
                     return tool_error(reason, "LOOP_GUARD")
-            return await _orig(args)
+            return await _orig(args, ctx)
 
         return dataclasses.replace(t, execute=guarded)
-
-    return [wrap(t) for t in tools]
-
-
-def wrap_with_result_budget(tools: list[ToolDef]) -> list[ToolDef]:
-    """大结果落盘，返回 preview。"""
-    from lib.chat.context_budget import ToolResultStore, generate_call_id
-
-    def _extract_text(result: Any) -> str:
-        if hasattr(result, "return_value"):
-            return str(result.return_value)
-        return str(result)
-
-    def _rebuild_result(result: Any, new_text: str) -> Any:
-        return new_text
-
-    def wrap(t: ToolDef) -> ToolDef:
-        orig = t.execute
-
-        async def budgeted(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
-            result = await _orig(args, ctx)
-            text = _extract_text(result)
-
-            if text.startswith("❌"):
-                return result
-
-            if len(text) <= 6_000:
-                return result
-
-            deps = ctx.deps if hasattr(ctx, "deps") else ctx
-            conv_id = getattr(deps, "conversation_id", None)
-            call_id = getattr(ctx, "tool_call_id", None) or generate_call_id(_name, args)
-
-            if conv_id:
-                store = ToolResultStore(conv_id)
-                store.save(_name, call_id, text)
-                preview = text[:800]
-                replacement = (
-                    f'<persisted-output tool="{_name}" result_id="{call_id}">\n'
-                    f"完整内容过大（{len(text):,} 字符），已保存。"
-                    f"使用 result_read 工具读取完整内容。\n"
-                    f"预览：\n{preview}\n"
-                    f"</persisted-output>"
-                )
-                return _rebuild_result(result, replacement)
-
-            return _rebuild_result(result, text[:4_000] + f"\n...({len(text) - 4_000} chars truncated)...")
-
-        return dataclasses.replace(t, execute=budgeted)
 
     return [wrap(t) for t in tools]
 
