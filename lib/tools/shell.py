@@ -2,7 +2,7 @@
 
 设计参考 akashic-agent 的 ShellTool，适配 Lumen 的 ToolDef 架构：
 - 返回字符串（JSON 序列化）供 Agent 读取
-- 使用 deps.workspace_root 作为默认工作目录沙箱
+- 使用 args.get("workspace_root") 作为默认工作目录沙箱
 - Windows 环境适配（taskkill 进程树终止）
 """
 
@@ -278,7 +278,7 @@ def _shell_env() -> dict[str, str]:
 # ── Tool 实现 ────────────────────────────────────────────────────────
 
 
-async def _shell(args: dict[str, Any], deps):
+async def _shell(args: dict[str, Any], ctx: Any = None, **kwargs):
     command: str = args.get("command", "").strip()
     description: str = args.get("description", "")
     timeout_specified = "timeout" in args and args.get("timeout") is not None
@@ -299,7 +299,7 @@ async def _shell(args: dict[str, Any], deps):
     if cmd_err:
         return tool_error(cmd_err, "SAFETY")
 
-    workspace_root = deps.workspace_root
+    workspace_root = kwargs.get("workspace_root")
     if isinstance(workspace_root, str):
         workspace_root = Path(workspace_root)
 
@@ -538,7 +538,7 @@ async def _finalize_timed_out(
     )
 
 
-async def _task_output(args: dict[str, Any], deps):
+async def _task_output(args: dict[str, Any], ctx: Any = None):
     task_id: str = args.get("task_id", "")
     block: bool = bool(args.get("block", False))
     timeout_ms: int = int(args.get("timeout_ms", 30000))
@@ -603,7 +603,7 @@ async def _task_output(args: dict[str, Any], deps):
     )
 
 
-async def _task_stop(args: dict[str, Any], deps):
+async def _task_stop(args: dict[str, Any], ctx: Any = None):
     task_id: str = args.get("task_id", "")
     if task_id not in _BG_REGISTRY:
         return tool_ok(json.dumps({"task_id": task_id, "status": "not_found"}, ensure_ascii=False))
@@ -643,6 +643,11 @@ def create_shell_tools() -> list[ToolDef]:
                 "- 搜索文件内容 → 用 file_grep\n"
                 "- 读取文件 → 用 file_read\n"
                 "- 查询数据库 → 如果有专用工具就用专用工具\n\n"
+                "后台任务处理（严格执行）：\n"
+                '- 前台命令超过 15 秒会自动转为后台，返回 {"status":"running","background_task_id":"xxx"}\n'
+                "- 收到 background_task_id 后，必须立即用 task_output(block=true,timeout_ms=30000) 等待结果\n"
+                "- 严禁在后台任务 running 时重复执行相同命令\n"
+                "- 如需放弃后台任务，先用 task_stop 终止，再执行新命令\n\n"
                 "注意：\n"
                 "- 默认工作目录为项目根目录，可用 cwd 指定相对路径\n"
                 "- 输出超过 30000 字符时自动截断保留尾部\n"
@@ -683,7 +688,7 @@ def create_shell_tools() -> list[ToolDef]:
             },
             execute=_shell,
             read_only=False,
-            meta=ToolMeta(always_on=True, risk="destructive", search_hint="执行命令、运行脚本、cmd、bash"),
+            meta=ToolMeta(always_on=False, risk="destructive", search_hint="执行命令、运行脚本、cmd、bash"),
         ),
         ToolDef(
             name="task_output",
@@ -713,7 +718,7 @@ def create_shell_tools() -> list[ToolDef]:
             },
             execute=_task_output,
             read_only=True,
-            meta=ToolMeta(always_on=False, risk="read-only", search_hint="查看后台任务输出、task output"),
+            meta=ToolMeta(always_on=True, risk="read-only", search_hint="查看后台任务输出、task output"),
         ),
         ToolDef(
             name="task_stop",

@@ -42,9 +42,9 @@ async def _bg_refresh_understanding(user_id: str) -> None:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
 
-async def _get_profile(args: dict[str, Any], deps):
+async def _get_profile(args: dict[str, Any], ctx: Any = None):
     """返回结构化画像摘要（frontmatter 内容）。"""
-    user_id = deps.user_id
+    user_id = args.get("user_id")
 
     # 读取 USER.md
     raw = await _store.read_about_you(user_id)
@@ -74,9 +74,9 @@ async def _get_profile(args: dict[str, Any], deps):
     return tool_ok("用户画像:\n" + "\n".join(parts), frontmatter=frontmatter)
 
 
-async def _update_profile(args: dict[str, Any], deps):
+async def _update_profile(args: dict[str, Any], ctx: Any = None):
     """更新结构化画像（覆盖 frontmatter 字段）。"""
-    user_id = deps.user_id
+    user_id = args.get("user_id")
 
     # 提取传入的字段（支持 null 清空）
     updates: dict[str, Any] = {}

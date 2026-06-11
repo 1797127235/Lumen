@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     proactive_interval_max: int = 120  # 最长 tick 间隔（分钟）
     proactive_daily_limit: int = 200  # 每日推送上限
 
+    # ── 外部记忆 ──
+    honcho_enabled: bool = True  # Honcho 外部记忆 Provider 开关
+
     # ── 语义去重 ──
     semantic_dedup_enabled: bool = False
     semantic_dedup_default_threshold: float = 0.85
@@ -199,6 +202,7 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "proactive_interval_min",
         "proactive_interval_max",
         "proactive_daily_limit",
+        "honcho_enabled",
     )
 
     for key in _CONFIG_KEYS:

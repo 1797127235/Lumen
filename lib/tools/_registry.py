@@ -101,6 +101,30 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDef] = {}
         self._documents: dict[str, ToolDocument] = {}
+        self._context: dict[str, Any] = {}
+
+    def set_context(self, **kwargs: Any) -> None:
+        """设置当前会话上下文，execute 时自动合并进 kwargs。"""
+        self._context.update(kwargs)
+
+    async def execute(self, name: str, arguments: dict[str, Any], ctx: Any = None) -> str:
+        """执行工具，自动合总会话上下文。"""
+        tool = self._tools.get(name)
+        if tool is None:
+            return f"❌ 工具 '{name}' 不存在"
+        if tool.execute is None:
+            return f"❌ 工具 '{name}' 没有执行函数"
+
+        merged: dict[str, Any] = {**self._context, **arguments}
+        if not _tool_defines_parameter(tool, _PROGRESS_DESCRIPTION_FIELD):
+            merged.pop(_PROGRESS_DESCRIPTION_FIELD, None)
+
+        try:
+            result = await tool.execute(merged, ctx)
+            return str(result)
+        except Exception as exc:
+            logger.exception("工具执行出错", tool=name)
+            return f"❌ 执行失败: {exc}"
 
     def register(
         self,

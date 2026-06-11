@@ -4,8 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_ai import ToolReturn
-
 
 @dataclass
 class ToolMeta:
@@ -13,7 +11,7 @@ class ToolMeta:
 
     risk: str = "read-only"  # "read-only" | "write" | "destructive"
     always_on: bool = False
-    search_hint: str | None = None  # 搜索别名/口语化表达
+    search_hint: str | None = None
     tags: list[str] = field(default_factory=list)
 
 
@@ -28,22 +26,15 @@ class ToolDef:
     meta: ToolMeta = field(default_factory=ToolMeta)
 
 
-def tool_ok(text: str, **metadata: Any) -> ToolReturn:
-    """工具成功返回。
-
-    text 发给 LLM；metadata 仅应用层可见（日志、追踪）。
-    """
-    return ToolReturn(return_value=text, metadata=metadata if metadata else None)
+def tool_ok(text: str, **metadata: Any) -> str:
+    """工具成功返回（纯字符串，兼容新旧代码）。"""
+    return text
 
 
-def tool_error(message: str, code: str = "", **metadata: Any) -> ToolReturn:
+def tool_error(message: str, code: str = "", **metadata: Any) -> str:
     """工具错误返回。
 
-    LLM 看到 ❌ 前缀 + 错误信息；code / metadata 仅应用层可见。
+    LLM 看到 ❌ 前缀 + 错误信息。
     """
     prefix = f"❌[{code}]" if code else "❌"
-    meta: dict[str, Any] = {"error": True}
-    if code:
-        meta["code"] = code
-    meta.update(metadata)
-    return ToolReturn(return_value=f"{prefix} {message}", metadata=meta)
+    return f"{prefix} {message}"

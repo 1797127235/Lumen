@@ -433,7 +433,7 @@ async def _process_large_content(content: str, url: str = "", title: str = "") -
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def _web_search_v2(args: dict[str, Any], deps):
+async def _web_search_v2(args: dict[str, Any], ctx: Any = None):
     """增强版搜索：自动选择后端，支持更多来源。"""
     query = args.get("query", "").strip()
     max_results = min(int(args.get("max_results", _DEFAULT_MAX_RESULTS)), 20)
@@ -466,7 +466,7 @@ async def _web_search_v2(args: dict[str, Any], deps):
     return tool_ok("\n".join(lines), backend=backend, results=len(results))
 
 
-async def _web_extract(args: dict[str, Any], deps):
+async def _web_extract(args: dict[str, Any], ctx: Any = None):
     """提取网页内容，支持 LLM 智能压缩。"""
     urls = args.get("urls", [])
     use_compression = args.get("use_compression", True)
@@ -524,7 +524,7 @@ async def _web_extract(args: dict[str, Any], deps):
     return tool_ok("\n".join(lines), urls_processed=len(results))
 
 
-async def _web_crawl(args: dict[str, Any], deps):
+async def _web_crawl(args: dict[str, Any], ctx: Any = None):
     """爬取网站内容（简化版，仅支持单页）。"""
     url = args.get("url", "").strip()
     instruction = args.get("instruction", "")

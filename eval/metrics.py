@@ -11,10 +11,6 @@ import re
 import string
 from collections import Counter
 
-from pydantic_ai import Agent
-
-from core.agent import _lumen_agent
-
 logger = logging.getLogger(__name__)
 
 _JUDGE_PROMPT = """\
@@ -97,10 +93,21 @@ async def judge_answer(
         predicted=predicted.strip(),
     )
     try:
-        model = _lumen_agent._create_model()
-        agent = Agent(model, output_type=str)
-        result = await agent.run(prompt)
-        verdict = str(result.output).strip().lower()
+        from core.config import get_settings
+        from lib.llm.client import LLMClient
+
+        settings = get_settings()
+        llm = LLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
+        messages = [
+            {"role": "system", "content": "你是一个评判助手。请回答 yes 或 no。"},
+            {"role": "user", "content": prompt},
+        ]
+        response = await llm.chat(messages=messages)
+        verdict = str(response.content or "").strip().lower()
         return verdict.startswith("yes")
     except Exception as e:
         logger.warning("judge_answer failed: %s", e)

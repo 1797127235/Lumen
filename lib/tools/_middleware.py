@@ -54,6 +54,11 @@ def _is_error_result(result: Any) -> bool:
     return text.startswith("❌")
 
 
+# ── 常量 ────────────────────────────────────────────────
+
+TOOL_CALLS_LIMIT = 50
+
+
 # ── 中间件函数 ──────────────────────────────────────────
 
 
@@ -63,10 +68,10 @@ def wrap_with_logging(tools: list[ToolDef]) -> list[ToolDef]:
     def wrap(t: ToolDef) -> ToolDef:
         orig = t.execute
 
-        async def logged(args: dict[str, Any], deps, _orig=orig, _name=t.name):
+        async def logged(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
             start = time.perf_counter()
             try:
-                result = await _orig(args, deps)
+                result = await _orig(args, ctx)
                 ms = round((time.perf_counter() - start) * 1000, 1)
                 logger.info("tool ok", tool=_name, ms=ms)
                 return result
@@ -86,13 +91,89 @@ def wrap_with_budget(tools: list[ToolDef], limit: int = 20) -> list[ToolDef]:
     def wrap(t: ToolDef) -> ToolDef:
         orig = t.execute
 
-        async def budgeted(args: dict[str, Any], deps, _orig=orig, _name=t.name):
+        async def budgeted(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
+            deps = ctx.deps if hasattr(ctx, "deps") else ctx
             used = deps.usage_budget.get("calls", 0)
             if used >= limit:
                 return tool_error(f"工具调用次数已达上限 ({used}/{limit})，请直接回答", "BUDGET")
-            result = await _orig(args, deps)
+            result = await _orig(args, ctx)
             deps.usage_budget["calls"] = used + 1
             return result
+
+        return dataclasses.replace(t, execute=budgeted)
+
+    return [wrap(t) for t in tools]
+
+
+def wrap_with_loop_guard(tools: list[ToolDef]) -> list[ToolDef]:
+    """为每个工具的 execute 加上循环保护。"""
+    from lib.tools._loop_guard import get_loop_guard
+
+    def wrap(t: ToolDef) -> ToolDef:
+        orig = t.execute
+
+        async def guarded(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
+            conv_id = None
+            if ctx is not None:
+                deps = getattr(ctx, "deps", ctx)
+                conv_id = getattr(deps, "conversation_id", None)
+                if conv_id is None and isinstance(ctx, dict):
+                    conv_id = ctx.get("conversation_id")
+            if conv_id:
+                guard = get_loop_guard()
+                should_block, reason = guard.check_and_record(conv_id, _name, args)
+                if should_block:
+                    return tool_error(reason, "LOOP_GUARD")
+            return await _orig(args)
+
+        return dataclasses.replace(t, execute=guarded)
+
+    return [wrap(t) for t in tools]
+
+
+def wrap_with_result_budget(tools: list[ToolDef]) -> list[ToolDef]:
+    """大结果落盘，返回 preview。"""
+    from lib.chat.context_budget import ToolResultStore, generate_call_id
+
+    def _extract_text(result: Any) -> str:
+        if hasattr(result, "return_value"):
+            return str(result.return_value)
+        return str(result)
+
+    def _rebuild_result(result: Any, new_text: str) -> Any:
+        return new_text
+
+    def wrap(t: ToolDef) -> ToolDef:
+        orig = t.execute
+
+        async def budgeted(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
+            result = await _orig(args, ctx)
+            text = _extract_text(result)
+
+            if text.startswith("❌"):
+                return result
+
+            if len(text) <= 6_000:
+                return result
+
+            deps = ctx.deps if hasattr(ctx, "deps") else ctx
+            conv_id = getattr(deps, "conversation_id", None)
+            call_id = getattr(ctx, "tool_call_id", None) or generate_call_id(_name, args)
+
+            if conv_id:
+                store = ToolResultStore(conv_id)
+                store.save(_name, call_id, text)
+                preview = text[:800]
+                replacement = (
+                    f'<persisted-output tool="{_name}" result_id="{call_id}">\n'
+                    f"完整内容过大（{len(text):,} 字符），已保存。"
+                    f"使用 result_read 工具读取完整内容。\n"
+                    f"预览：\n{preview}\n"
+                    f"</persisted-output>"
+                )
+                return _rebuild_result(result, replacement)
+
+            return _rebuild_result(result, text[:4_000] + f"\n...({len(text) - 4_000} chars truncated)...")
 
         return dataclasses.replace(t, execute=budgeted)
 
@@ -116,13 +197,14 @@ def wrap_with_failure_degradation(
     def wrap(t: ToolDef) -> ToolDef:
         orig = t.execute
 
-        async def degraded(args: dict[str, Any], deps, _orig=orig, _name=t.name):
-            result = await _orig(args, deps)
+        async def degraded(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
+            result = await _orig(args, ctx)
 
             # 辅助工具不参与失败计数
             if _name in _UTILITY_TOOLS:
                 return result
 
+            deps = ctx.deps if hasattr(ctx, "deps") else ctx
             budget = deps.usage_budget
             is_fail = _is_error_result(result)
 

@@ -147,11 +147,15 @@ async def _do_update_understanding(user_id: str) -> str:
 
 async def _generate_understanding(profile_text: str, existing: str) -> str:
     """调用 LLM 基于 memory.md 结构化画像生成 about_you 自然语言文本。"""
-    from pydantic_ai import Agent
+    from core.config import get_settings
+    from lib.llm.client import LLMClient
 
-    from core.agent import _lumen_agent
-
-    model = _lumen_agent._create_model()
+    settings = get_settings()
+    llm = LLMClient(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+    )
 
     system_prompt = """你是一个 AI 伙伴的用户画像专家。基于用户的画像数据（Markdown 格式），生成一段关于用户的综合画像 + 模式洞察。
 
@@ -188,9 +192,13 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
 
 请生成/更新用户画像。"""
 
-    agent = Agent(model=model, output_type=str, system_prompt=system_prompt, retries=1)
-    result = await agent.run(prompt)
-    return result.output
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+    response = await llm.chat(messages=messages)
+    return response.content or ""
 
 
 def _parse_understanding_output(raw: str) -> tuple[str, list[dict]]:

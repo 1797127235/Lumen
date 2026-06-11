@@ -1,9 +1,5 @@
-"""Session 附件副本管理 — 轻量复制、安全校验、生命周期清理。
-
-基于 OpenHanako 的设计思路，但大幅简化：
-- 无 SessionFileRegistry（文件系统即真相）
-- 无独立 upload API（复制内联在 stream_chat 中）
-- 仅支持单文件（不支持目录树）
+"""
+Session 附件副本管理 — 轻量复制、安全校验、生命周期清理。
 """
 
 from __future__ import annotations

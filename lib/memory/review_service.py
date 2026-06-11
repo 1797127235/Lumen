@@ -67,43 +67,19 @@ _REVIEW_SYSTEM_PROMPT = (
 )
 
 
-async def _build_review_agent():
-    """构建专用的审查 Agent — 无人格、无记忆、受限工具集。"""
-    from pydantic_ai import Agent
-    from pydantic_ai.capabilities.reinject_system_prompt import ReinjectSystemPrompt
-
-    from core.agent import LumenDeps, ProcessHistory, _clean_orphaned_tool_parts, _lumen_agent
-
-    model = _lumen_agent._create_model()
+async def _run_review_agent(messages, ctx):
+    """运行审查 Agent — 无人格、无记忆、受限工具集。"""
+    from core.agent import run_worker_agent
 
     # 审查 Agent 只需要 memory + focus_update 工具
-    from lib.tools._registry import get_tool_registry
-    from lib.tools.factory import build_pydantic_toolset
-
-    registry = get_tool_registry()
     review_tool_names = ["memory", "focus_update"]
-    tools = [registry.get_tool(n) for n in review_tool_names]
-    tools = [t for t in tools if t is not None]
-    fixed_toolset = build_pydantic_toolset(tools)
 
-    agent = Agent(
-        model=model,
-        deps_type=LumenDeps,
-        output_type=str,
-        system_prompt="你是记忆审查员。严格按照规则判断是否需要保存用户信息。",
-        retries=1,
-        end_strategy="graceful",
-        capabilities=[
-            ReinjectSystemPrompt(),
-            ProcessHistory(_clean_orphaned_tool_parts),
-        ],
+    agent_result = await run_worker_agent(
+        messages=messages,
+        ctx=ctx,
+        tool_names=review_tool_names,
     )
-
-    @agent.toolset
-    async def _review_toolset(ctx):
-        return fixed_toolset
-
-    return agent
+    return agent_result.content
 
 
 async def background_memory_review(
@@ -118,11 +94,9 @@ async def background_memory_review(
     确保审查是客观的事实记录而非情感化的过度解读。
     """
     try:
-        from core.agent import LumenDeps
         from core.db import get_async_session_maker
+        from lib.agent.types import AgentContext
         from lib.memory.markdown import AsyncMarkdownStore
-
-        agent = await _build_review_agent()
 
         # 读取当前记忆内容，供审查 Agent 做矛盾检测
         store = AsyncMarkdownStore()
@@ -131,11 +105,10 @@ async def background_memory_review(
             current_memory = "（无现有记忆）"
 
         async with get_async_session_maker()() as db:
-            deps = LumenDeps(
+            ctx = AgentContext(
                 user_id=user_id,
                 db=db,
                 conversation_id=conversation_id,
-                current_user_input=user_message,
             )
 
             prompt = _REVIEW_SYSTEM_PROMPT.format(
@@ -144,7 +117,12 @@ async def background_memory_review(
                 assistant_response=assistant_response,
             )
 
-            await agent.run(prompt, deps=deps)
+            # 运行审查 Agent
+            await _run_review_agent(
+                messages=[{"role": "user", "content": prompt}],
+                ctx=ctx,
+            )
+
             await db.commit()
 
             logger.info(

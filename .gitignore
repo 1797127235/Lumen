@@ -79,3 +79,24 @@ node_modules/
 # Session temp files
 session-ses_*.md
 
+# Temp media & scripts
+/temp/
+/tmp/
+/tmp_video_analysis/
+/work/
+/models/
+/audio.*
+/transcript.*
+/transcribe*.py
+
+# PowerShell artifacts (accidentally created fragments)
+/$null
+/$uri
+/%TEMP%/
+/None/
+/(New-Object
+yt-dlp
+
+# uv (managed by uv.lock)
+# uv.lock IS committed
+

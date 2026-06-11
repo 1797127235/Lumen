@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_db
-from lib.chat.session import ensure_conversation
+from lib.chat.persistence import ensure_conversation
 from lib.skills.loader import get_skills_loader
 from shared.logging import get_logger
 

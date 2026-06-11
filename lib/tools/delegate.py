@@ -10,9 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai.settings import ModelSettings
-from pydantic_ai.usage import UsageLimits
-
+from lib.agent.types import AgentContext
 from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
 from shared.logging import get_logger
 
@@ -86,10 +84,10 @@ def resolve_tool_names(toolsets: list[str] | None = None) -> list[str]:
 # ═══════════════════════════════════════════════════════════════
 
 
-async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
+async def _handle_delegate(args: dict[str, Any], ctx: Any = None) -> Any:
     """delegate 工具 handler。
 
-    ctx 是 LumenDeps（见 factory.py _to_pydantic_tool: execute(kwargs, ctx.deps)）。
+    ctx 是 LumenDeps（见 factory.py _to_pydantic_tool: execute(kwargs, args.get(\"deps\"))）。
     """
     goal = args.get("goal", "").strip()
     context = args.get("context", "").strip()
@@ -108,16 +106,14 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
     # 确保 reports 目录存在
     _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 构造 worker system prompt
-    system_prompt = _WORKER_PROMPT_TEMPLATE.format(goal=goal, context=context or "无")
+    # 构造 worker system prompt（TODO: 传递给 run_worker_agent）
+    _system_prompt = _WORKER_PROMPT_TEMPLATE.format(goal=goal, context=context or "无")
 
     # 进度回调（progress_emitter 可能为 None，如后台 review agent）
-    emit = getattr(ctx, "progress_emitter", None)
+    emit = args.get("progress_emitter")
 
     try:
-        from pydantic_ai.exceptions import UsageLimitExceeded
-
-        from core.agent import LumenDeps, build_worker_agent
+        from core.agent import run_worker_agent
         from core.db import get_async_session_maker
         from lib.tools._registry import get_tool_registry
 
@@ -128,15 +124,12 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
 
             register_all_tools()
 
-        # 构建 worker agent
-        worker = build_worker_agent(child_tool_names, system_prompt)
-
         # 独立 db session
         async with get_async_session_maker()() as child_db:
-            child_deps = LumenDeps(
-                user_id=ctx.user_id,
+            child_ctx = AgentContext(
+                user_id=args.get("user_id", ""),
                 db=child_db,
-                workspace_root=ctx.workspace_root,
+                workspace_root=args.get("workspace_root", ""),
             )
 
             if emit:
@@ -145,42 +138,26 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
             # 收集中间步骤文本，用于超限后的收尾总结
             step_log: list[str] = []
 
-            # 运行 child agent，从 stream 事件中捕获最终输出
-            child_output = ""
+            # 运行 child agent
             try:
-                async with worker.run_stream_events(
-                    goal,
-                    message_history=[],
-                    deps=child_deps,
-                    model_settings=ModelSettings(max_tokens=4096),
-                    usage_limits=UsageLimits(
-                        request_limit=_CHILD_REQUEST_LIMIT,
-                        tool_calls_limit=_CHILD_TOOL_CALLS_LIMIT,
-                    ),
-                ) as stream:
-                    async for event in stream:
-                        _emit_progress_from_event(event, emit, step_log)
+                agent_result = await run_worker_agent(
+                    messages=[{"role": "user", "content": goal}],
+                    ctx=child_ctx,
+                    tool_names=child_tool_names,
+                )
+                result = agent_result.content
 
-                        # 最终输出在 agent_run_result 事件里（event.result.output）
-                        kind = getattr(event, "event_kind", "")
-                        if kind == "agent_run_result":
-                            result_obj = getattr(event, "result", None)
-                            if result_obj is not None:
-                                child_output = getattr(result_obj, "output", "") or ""
-
-                result = child_output
-
-            except UsageLimitExceeded as exc:
-                # 超限：做一次无工具的 LLM 调用生成进度总结
+            except Exception as exc:
+                # 超限或异常：做收尾总结
                 logger.warning(
-                    "delegate 步骤预算耗尽，执行收尾总结",
+                    "delegate 步骤预算耗尽或异常，执行收尾总结",
                     error=str(exc)[:200],
                     steps=len(step_log),
                 )
                 if emit:
                     emit("step", "步骤预算耗尽，正在生成进度总结...")
 
-                result = await _force_summary(worker, child_deps, step_log, reason=str(exc))
+                result = await _force_summary(child_ctx, step_log, reason=str(exc))
 
             await child_db.commit()
 
@@ -201,30 +178,24 @@ async def _handle_delegate(args: dict[str, Any], ctx: Any) -> Any:
 
 
 async def _force_summary(
-    worker: Any,
-    child_deps: Any,
+    child_ctx: Any,
     step_log: list[str],
     *,
     reason: str,
 ) -> str:
-    """UsageLimitExceeded 后，做一次无工具 LLM 调用生成进度总结。
+    """超限后，做一次无工具 LLM 调用生成进度总结。"""
+    from lib.llm.client import LLMClient
 
-    参照 akashic-agent 的 _force_final_summary 模式：
-    带上已有的步骤记录，让 LLM 总结已完成的和未完成的内容。
-    """
     steps_text = "\n".join(f"- {s}" for s in step_log[-20:])  # 最近 20 步
     prompt = f"[收尾原因] {reason}\n" f"[已执行步骤]\n{steps_text}\n\n" f"{_FORCE_SUMMARY_PROMPT}"
     try:
-        summary_result = await worker.run(
-            prompt,
-            message_history=[],
-            deps=child_deps,
-            model_settings=ModelSettings(max_tokens=1024),
-            usage_limits=UsageLimits(request_limit=1),  # 仅 1 次请求，禁止工具调用
+        client = LLMClient()
+        summary = await client.complete(
+            messages=[{"role": "user", "content": prompt}],
+            system="你是一位任务执行助手。请总结已完成的进度和未完成的事项。",
         )
-        text = summary_result.output.strip() if summary_result.output else ""
-        if text:
-            return text
+        if summary and summary.strip():
+            return summary.strip()
     except Exception as e:
         logger.warning("delegate 收尾总结失败", error=str(e)[:200])
     return "步骤预算已耗尽：已完成部分关键步骤，但仍有未完成项。"

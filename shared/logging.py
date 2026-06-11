@@ -143,11 +143,14 @@ def setup_logging(json_logs: bool = False, log_level: str = "INFO") -> None:
         "httpx",
         "httpcore",
         "aiosqlite",
-        "telegram",  # python-telegram-bot 内部 polling/API 调试日志
-        "httpx_helpers",  # telegram 依赖的 httpx 辅助模块
-        "litellm",  # litellm 调试日志（model_cost、request options 等）
+        "telegram",
+        "httpx_helpers",
     ):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+    for name in logging.Logger.manager.loggerDict:
+        if name.startswith("litellm"):
+            logging.getLogger(name).setLevel(logging.WARNING)
 
     # ── 彻底关闭 SQLAlchemy 噪音 ──
     # 不仅 filter，直接把 sqlalchemy 所有 logger 设为 WARNING

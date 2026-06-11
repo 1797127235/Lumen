@@ -21,11 +21,32 @@ class ToolDiscoveryState:
     capacity: int = 10
     max_conversations: int = 1000
     _cache: OrderedDict[str, OrderedDict[str, None]] = field(default_factory=OrderedDict, repr=False)
+    _skill_scope: dict[str, set[str]] = field(default_factory=dict, repr=False)
+
+    def set_skill_scope(self, conversation_id: str, tool_names: set[str]) -> None:
+        """激活 skill 后，限制该 conversation 只能使用指定的工具 + 核心工具。"""
+        self._skill_scope[conversation_id] = tool_names
+
+    def clear_skill_scope(self, conversation_id: str) -> None:
+        self._skill_scope.pop(conversation_id, None)
 
     def get_visible(self, conversation_id: str | None) -> list[str]:
-        """返回当前 conversation 预加载的工具列表（最近使用的在前）。"""
+        """返回当前 conversation 预加载的工具列表（最近使用的在前）。
+        如果存在 skill_scope，只返回 scope 内的工具 + 核心工具。"""
         if conversation_id is None:
             return []
+
+        # Skill scope 优先：如果激活了 skill，只暴露声明的工具 + 核心工具
+        core_tools = {"tool_search", "skill_load"}
+        if conversation_id in self._skill_scope:
+            scope = self._skill_scope[conversation_id] | core_tools
+            # 过滤预加载缓存，只保留 scope 内的
+            od = self._cache.get(conversation_id)
+            if od:
+                visible = [name for name in reversed(od.keys()) if name in scope]
+                return visible
+            return list(scope)
+
         od = self._cache.get(conversation_id)
         if not od:
             return []

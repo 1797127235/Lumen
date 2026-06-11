@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pydantic_ai import ToolReturn
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -319,11 +318,9 @@ def _parse_db_datetime(val: Any) -> datetime | None:
     return None
 
 
-def _unwrap_tool(result: str | ToolReturn) -> str:
+def _unwrap_tool(result: str) -> str:
     """从 MCP call_tool 结果中提取文本"""
-    if isinstance(result, ToolReturn):
-        return str(result.return_value) if result.return_value else ""
-    return str(result)
+    return str(result) if result else ""
 
 
 def _is_error(text: str) -> bool:

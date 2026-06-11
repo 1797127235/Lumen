@@ -165,7 +165,7 @@ def _get_vl_config() -> dict[str, Any]:
     }
 
 
-async def _image_read(args: dict[str, Any], deps) -> Any:
+async def _image_read(args: dict[str, Any], ctx: Any = None) -> Any:
     """Vision 工具主函数
 
     返回 ToolReturn（通过 tool_ok/tool_error 封装）
@@ -179,7 +179,7 @@ async def _image_read(args: dict[str, Any], deps) -> Any:
     # 解析路径
     from lib.tools.files import _resolve_read
 
-    resolved, err = _resolve_read(file_path_str, str(deps.workspace_root))
+    resolved, err = _resolve_read(file_path_str, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
 

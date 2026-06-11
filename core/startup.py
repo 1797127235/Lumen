@@ -90,23 +90,34 @@ async def lifespan(app: FastAPI):
     _register_builtin_mcp_servers()
 
     # 连接已配置的 MCP Servers
-    with contextlib.suppress(Exception):
+    try:
         from lib.tools.mcp.client_manager import get_mcp_manager
 
         await get_mcp_manager().connect_all()
+    except BaseException:
+        logger.debug("MCP server 连接失败，跳过")
 
     # 注册 Honcho 外部记忆 Provider
-    with contextlib.suppress(Exception):
-        from lib.memory import get_memory_manager
-        from lib.memory.honcho_provider import HonchoProvider
+    if get_settings().honcho_enabled:
+        with contextlib.suppress(Exception):
+            from lib.memory import get_memory_manager
+            from lib.memory.honcho_provider import HonchoProvider
 
-        honcho_provider = HonchoProvider()
-        if await honcho_provider.is_available():
-            manager = get_memory_manager()
-            manager.add_provider(honcho_provider)
-            logger.info("Honcho Provider 已注册")
-        else:
-            logger.warning("Honcho Provider 不可用，跳过注册")
+            honcho_provider = HonchoProvider()
+            if await honcho_provider.is_available():
+                manager = get_memory_manager()
+                manager.add_provider(honcho_provider)
+                logger.info("Honcho Provider 已注册")
+            else:
+                logger.warning("Honcho Provider 不可用，跳过注册")
+    else:
+        logger.info("Honcho Provider 已禁用（settings.honcho_enabled=false）")
+
+    # ── 初始化 SessionManager（Agent 历史层）──
+    from lib.session import init_session_manager
+
+    init_session_manager()
+    logger.info("SessionManager initialized")
 
     # ═══════════════════════════════════════════════════════════
     #  新增：MessageBus + EventBus + Channels + AgentRunner
@@ -182,6 +193,12 @@ async def lifespan(app: FastAPI):
     # RSS Scheduler 已移除
 
     await housekeeper.stop()
+
+    # 关闭 SessionManager
+    with contextlib.suppress(Exception):
+        from lib.session import get_session_manager
+
+        get_session_manager().close()
 
     if scheduler:
         await scheduler.stop()

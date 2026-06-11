@@ -11,8 +11,7 @@ logger = get_logger(__name__)
 
 
 class EventHandlers:
-    """PydanticAI Agent 流事件处理器
-
+    """
     处理 function_tool_call、function_tool_result、part_delta、agent_run_result 四种事件，
     更新对话状态并生成 SSE 事件。
     """
@@ -88,6 +87,14 @@ class EventHandlers:
                 from shared.llm_usage import extract_usage
 
                 state.usage_data = extract_usage(event.result.usage)
+                logger.info(
+                    "LLM usage",
+                    input=state.usage_data["input"],
+                    output=state.usage_data["output"],
+                    cache_read=state.usage_data["cache_read"],
+                    cache_write=state.usage_data["cache_write"],
+                    conversation_id=deps.get("conversation_id"),
+                )
             except Exception:
                 pass
         return []
@@ -110,7 +117,7 @@ def _split_think_text(text: str, state: Any, conversation_id: str) -> list[dict]
                     state.thinking_content += chunk
                     items.append({"type": "thinking", "content": chunk, "conversation_id": conversation_id})
                 state.in_think_tag = False
-                buf = buf[end_idx + len("</think>"):]
+                buf = buf[end_idx + len("</think>") :]
         else:
             start_idx = buf.find("<think>")
             if start_idx == -1:
@@ -124,7 +131,7 @@ def _split_think_text(text: str, state: Any, conversation_id: str) -> list[dict]
                     state.full_content += before
                     items.append({"type": "token", "content": before, "conversation_id": conversation_id})
                 state.in_think_tag = True
-                buf = buf[start_idx + len("<think>"):]
+                buf = buf[start_idx + len("<think>") :]
     return items
 
 

@@ -27,12 +27,12 @@ async def _bg_refresh_understanding(user_id: str) -> None:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
 
-async def _search(args: dict[str, Any], deps):
+async def _search(args: dict[str, Any], ctx: Any = None):
     query = args.get("query", "").strip()
     if not query:
         return tool_error("请提供搜索关键词")
 
-    user_id = deps.user_id
+    user_id = args.get("user_id")
 
     # 1. 本地 MEMORY.md 简单文本匹配
     content = await _store.read_memory(user_id)
@@ -49,14 +49,14 @@ async def _search(args: dict[str, Any], deps):
 
     # 2. 外部 provider prefetch（如果有）
     # 阶段 4 后通过 MemoryManager 注入，阶段 2 仅做本地匹配
-    # 预留：未来可通过 deps.memory_manager 获取外部 provider 召回
+    # 预留：未来可通过 args.get("memory_manager") 获取外部 provider 召回
 
     if results:
         return tool_ok("\n".join(f"- {r}" for r in results))
     return tool_ok("未找到相关内容。")
 
 
-async def _memory(args: dict[str, Any], deps):
+async def _memory(args: dict[str, Any], ctx: Any = None):
     action = args.get("action", "").strip().lower()
     target = args.get("target", "memory").strip().lower()
     content = args.get("content", "")
@@ -67,10 +67,10 @@ async def _memory(args: dict[str, Any], deps):
     if target not in {"memory", "user"}:
         return tool_error("target 必须是 memory 或 user")
 
-    user_id = deps.user_id
+    user_id = args.get("user_id")
 
     if action == "add":
-        return await _memory_add(args, deps, user_id, target, content)
+        return await _memory_add(args)
 
     # action == "replace" or "remove"
     old_text = args.get("old_text", "")
@@ -80,8 +80,12 @@ async def _memory(args: dict[str, Any], deps):
     return await _memory_replace_remove(action, user_id, target, old_text, content)
 
 
-async def _memory_add(args: dict[str, Any], deps, user_id: str, target: str, content: str) -> Any:
+async def _memory_add(args: dict[str, Any], ctx: Any = None) -> Any:
     """处理 add 操作。"""
+    content = args.get("content", "")
+    user_id = args.get("user_id")
+    target = args.get("target", "memory")
+
     if not content or not content.strip():
         return tool_ok("内容为空，跳过保存。")
 
@@ -220,7 +224,7 @@ async def _memory_replace_remove(
             if new_line == matched_line:
                 new_line = new_content + "\n"
 
-        new_lines = lines[:match_idx] + [new_line] + lines[match_idx + 1 :]
+                new_lines = [*lines[:match_idx], new_line, *lines[match_idx + 1 :]]
         result_msg = f"已替换条目: {matched_line.strip()[:80]} → {new_content[:80]}"
 
     # 写回文件
@@ -249,7 +253,7 @@ async def _memory_replace_remove(
 _MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2} — \[[^\]]+\] ")
 
 
-async def _focus_update(args: dict[str, Any], deps):
+async def _focus_update(args: dict[str, Any], ctx: Any = None):
     """更新 FOCUS.md 的当前关注列表。"""
     topics = args.get("topics", [])
     if not topics:
@@ -263,7 +267,7 @@ async def _focus_update(args: dict[str, Any], deps):
     if not topics:
         return tool_error("关注点列表为空")
 
-    user_id = deps.user_id
+    user_id = args.get("user_id")
 
     # 构建 FOCUS.md 内容
     lines = ["## 当前关注", ""]

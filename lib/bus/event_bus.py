@@ -89,7 +89,7 @@ class EventBus:
         self._handlers.setdefault(event_type, []).append(handler)
 
     def emit(self, event: Any) -> None:
-        """广播事件"""
+        """广播事件（同步触发）"""
         event_type = type(event)
         handlers = self._handlers.get(event_type, [])
         for handler in handlers:
@@ -101,3 +101,16 @@ class EventBus:
                     handler(event)
             except Exception as e:
                 logger.error(f"Event handler error for {event_type.__name__}: {e}")
+
+    async def observe(self, event: Any) -> None:
+        """观察事件（异步顺序执行，等待所有 handler 完成）"""
+        event_type = type(event)
+        handlers = self._handlers.get(event_type, [])
+        for handler in handlers:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(event)
+                else:
+                    handler(event)
+            except Exception as e:
+                logger.error(f"Event observer error for {event_type.__name__}: {e}")

@@ -13,7 +13,7 @@ from shared.logging import get_logger
 logger = get_logger(__name__)
 
 
-async def _tool_search(args: dict[str, Any], deps):
+async def _tool_search(args: dict[str, Any], ctx: Any = None):
     query: str = args.get("query", "").strip()
     top_k: int = min(int(args.get("top_k", 5)), 10)
     allowed_risk: list[str] | None = args.get("allowed_risk")
@@ -23,7 +23,10 @@ async def _tool_search(args: dict[str, Any], deps):
 
     registry = get_tool_registry()
     discovery = get_tool_discovery_state()
-    conversation_id = getattr(deps, "conversation_id", None)
+    conversation_id = args.get("conversation_id")
+    if conversation_id is None and ctx is not None:
+        deps = getattr(ctx, "deps", ctx)
+        conversation_id = getattr(deps, "conversation_id", None)
 
     always_on = registry.get_always_on_names()
     preloaded = set(discovery.get_visible(conversation_id))

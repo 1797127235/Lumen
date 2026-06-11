@@ -74,7 +74,7 @@ _PROVIDERS = {
 # ── 工具执行函数 ───────────────────────────────────────────────────
 
 
-async def _web_search(args: dict[str, Any], deps):
+async def _web_search(args: dict[str, Any], ctx: Any = None):
     from core.config import get_settings
 
     query = args.get("query", "").strip()

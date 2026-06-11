@@ -172,12 +172,12 @@ async def _read_pdf_fallback(file_path: str, max_length: int):
 # ── Tool 实现 ──
 
 
-async def _file_read(args: dict[str, Any], deps):
+async def _file_read(args: dict[str, Any], ctx: Any = None):
     raw = args.get("file_path", "").strip()
     if not raw:
         return tool_error("请提供 file_path")
 
-    resolved, err = _resolve_read(raw, str(deps.workspace_root))
+    resolved, err = _resolve_read(raw, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
     if not os.path.exists(resolved):
@@ -263,13 +263,13 @@ async def _file_read(args: dict[str, Any], deps):
         return tool_error(f"读取失败：{e}")
 
 
-async def _file_write(args: dict[str, Any], deps):
+async def _file_write(args: dict[str, Any], ctx: Any = None):
     raw = args.get("file_path", "").strip()
     content = args.get("content", "")
     if not raw:
         return tool_error("请提供 file_path")
 
-    resolved, err = _resolve_write(raw, str(deps.workspace_root))
+    resolved, err = _resolve_write(raw, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
 
@@ -299,7 +299,11 @@ async def _file_write(args: dict[str, Any], deps):
     except OSError as e:
         return tool_error(f"写入失败：{e}")
 
-    rel = os.path.relpath(resolved, str(deps.workspace_root))
+    try:
+        rel = os.path.relpath(resolved, str(args.get("workspace_root")))
+    except ValueError:
+        # 跨盘符时无法计算相对路径，使用完整路径
+        rel = resolved
     if skip_diff:
         return tool_ok(f"已写入 {rel}（文件过大，diff 省略）")
 
@@ -310,9 +314,9 @@ async def _file_write(args: dict[str, Any], deps):
     return tool_ok(f"已写入 {rel}（内容未变化）")
 
 
-async def _file_ls(args: dict[str, Any], deps):
-    raw = args.get("path", "").strip() or str(deps.workspace_root)
-    resolved, err = _resolve_read(raw, str(deps.workspace_root))
+async def _file_ls(args: dict[str, Any], ctx: Any = None):
+    raw = args.get("path", "").strip() or str(args.get("workspace_root"))
+    resolved, err = _resolve_read(raw, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
     if not os.path.exists(resolved):
@@ -323,21 +327,24 @@ async def _file_ls(args: dict[str, Any], deps):
     try:
         entries = sorted(os.listdir(resolved))
         lines = [e + "/" if os.path.isdir(os.path.join(resolved, e)) else e for e in entries]
-        rel = os.path.relpath(resolved, str(deps.workspace_root)) + "/"
+        try:
+            rel = os.path.relpath(resolved, str(args.get("workspace_root"))) + "/"
+        except ValueError:
+            rel = resolved + "/"
         return tool_ok(rel + "\n" + "\n".join(lines))
     except PermissionError:
         return tool_error(f"无权访问：{resolved}")
 
 
-async def _file_grep(args: dict[str, Any], deps):
+async def _file_grep(args: dict[str, Any], ctx: Any = None):
     pattern = args.get("pattern", "").strip()
-    search_path = args.get("path", "").strip() or str(deps.workspace_root)
+    search_path = args.get("path", "").strip() or str(args.get("workspace_root"))
     include = args.get("include", "").strip()
 
     if not pattern:
         return tool_error("请提供搜索 pattern")
 
-    resolved, err = _resolve_read(search_path, str(deps.workspace_root))
+    resolved, err = _resolve_read(search_path, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
 
@@ -773,7 +780,7 @@ def _strip_line_prefixes(text: str) -> str:
 # ── file_edit 工具 ──
 
 
-async def _file_edit(args: dict[str, Any], deps):
+async def _file_edit(args: dict[str, Any], ctx: Any = None):
     raw_path = args.get("file_path", "").strip()
     old_string = args.get("old_string", "")
     new_string = args.get("new_string", "")
@@ -784,7 +791,7 @@ async def _file_edit(args: dict[str, Any], deps):
     if old_string == new_string:
         return tool_error("old_string 和 new_string 相同，无需修改")
 
-    resolved, err = _resolve_write(raw_path, str(deps.workspace_root))
+    resolved, err = _resolve_write(raw_path, str(args.get("workspace_root")))
     if err:
         return tool_error(err)
 
@@ -796,7 +803,10 @@ async def _file_edit(args: dict[str, Any], deps):
             if parent:
                 os.makedirs(parent, exist_ok=True)
             _write_file(resolved, new_string, False)
-            rel = os.path.relpath(resolved, str(deps.workspace_root))
+            try:
+                rel = os.path.relpath(resolved, str(args.get("workspace_root")))
+            except ValueError:
+                rel = resolved
             return tool_ok(f"已创建 {rel}")
 
         if not os.path.exists(resolved):
@@ -820,7 +830,10 @@ async def _file_edit(args: dict[str, Any], deps):
 
         _write_file(resolved, new_content, has_bom)
 
-        rel = os.path.relpath(resolved, str(deps.workspace_root))
+        try:
+            rel = os.path.relpath(resolved, str(args.get("workspace_root")))
+        except ValueError:
+            rel = resolved
         old_lines = content.splitlines()
         new_lines = new_content.splitlines()
         diff = "\n".join(unified_diff(old_lines, new_lines, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""))

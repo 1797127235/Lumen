@@ -11,17 +11,17 @@ from __future__ import annotations
 
 from lib.tools._base import ToolDef
 from lib.tools._discovery import get_tool_discovery_state
-from lib.tools._middleware import wrap_with_budget, wrap_with_failure_degradation, wrap_with_logging
+from lib.tools._middleware import wrap_with_loop_guard
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
 from lib.tools.delegate import create_delegate_tools
 from lib.tools.files import create_file_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
+from lib.tools.result_read import create_result_read_tool
 from lib.tools.shell import create_shell_tools
 from lib.tools.skill_load import create_skill_tools
 from lib.tools.vision import create_vision_tools
-from lib.tools.web_search import create_web_search_tools
 from lib.tools.web_tools import create_web_tools
 from shared.logging import get_logger
 
@@ -45,19 +45,16 @@ def register_all_tools() -> ToolRegistry:
         *create_memory_tools(),
         *create_profile_tools(),
         *create_web_tools(),  # 多后端搜索 + 提取 + 爬取
-        *create_web_search_tools(),  # 原有搜索工具
         *create_shell_tools(),
         *create_skill_tools(),
         *create_delegate_tools(),  # 新增：delegate 子 Agent 工具
         *create_vision_tools(),  # 新增：Vision 图片分析工具
         create_tool_search(),
+        create_result_read_tool(),
     ]
 
-    # 应用中间件（连续失败降级 → 日志 → 预算）
-    # 注意：failure_degradation 必须在最内层，这样它检测的是工具的真实返回
-    all_tools = wrap_with_failure_degradation(all_tools)
-    all_tools = wrap_with_logging(all_tools)
-    all_tools = wrap_with_budget(all_tools, limit=20)
+    # 接入循环守卫中间件（排除 task_output/task_stop）
+    all_tools = wrap_with_loop_guard(all_tools)
 
     for tool in all_tools:
         registry.register(tool, source_type="builtin", source_name="")
@@ -75,13 +72,7 @@ def _register_mcp_tools(registry: ToolRegistry) -> None:
         if not mcp_tools:
             return
 
-        # 和内置工具一样走中间件（连续失败降级 → 日志 → 预算）
-        tools_only = [tool for _, tool in mcp_tools]
-        tools_only = wrap_with_failure_degradation(tools_only)
-        tools_only = wrap_with_logging(tools_only)
-        tools_only = wrap_with_budget(tools_only, limit=20)
-
-        for (server_name, _), tool in zip(mcp_tools, tools_only, strict=False):
+        for server_name, tool in mcp_tools:
             registry.register(tool, source_type="mcp", source_name=server_name)
     except Exception as e:
         logger.warning("MCP 工具注册失败", error=str(e))
@@ -136,44 +127,3 @@ def build_deferred_tools_hint(conversation_id: str | None) -> str:
 
     lines.append('\n加载方式：`tool_search(query="select:工具名")` 或 `tool_search(query="功能关键词")`')
     return "\n".join(lines)
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  PydanticAI 转换
-# ═══════════════════════════════════════════════════════════════════
-
-
-def build_pydantic_toolset(tools: list[ToolDef]):
-    """将 list[ToolDef] 转换为 PydanticAI FunctionToolset。"""
-    from pydantic_ai import FunctionToolset  # pyright: ignore[reportMissingImports]
-
-    pydantic_tools = [_to_pydantic_tool(t) for t in tools]
-    return FunctionToolset(pydantic_tools)
-
-
-def build_pydantic_toolset_for_conversation(conversation_id: str | None):
-    """为指定 conversation 构建仅包含可见工具的 PydanticAI FunctionToolset。"""
-    visible_tools = assemble_visible_tools(conversation_id)
-    return build_pydantic_toolset(visible_tools)
-
-
-def _to_pydantic_tool(t: ToolDef):
-    from pydantic_ai import RunContext  # pyright: ignore[reportMissingImports]
-    from pydantic_ai.tools import Tool  # pyright: ignore[reportMissingImports]
-
-    from core.agent import LumenDeps
-
-    async def handler(ctx: RunContext[LumenDeps], **kwargs):
-        return await t.execute(kwargs, ctx.deps)
-
-    handler.__name__ = t.name
-    handler.__doc__ = t.description
-
-    return Tool.from_schema(
-        function=handler,
-        name=t.name,
-        description=t.description,
-        json_schema=t.input_schema,
-        takes_ctx=True,
-        sequential=not t.read_only,
-    )
