@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from core.agent import AgentResult, get_agent_generation, run_agent
 from core.db import get_async_session_maker
@@ -167,14 +166,12 @@ class AgentRunner:
                 async with session_mgr._lock(session_key):
                     session = session_mgr.get_or_create(session_key)
                     media_paths = [m.path for m in msg.media] if msg.media else []
-                    session.add_message("user", user_input, media=media_paths)
 
                     # ── Phase 2: BeforeReasoning ──
+                    # 先取 history（不含当前消息），再构建 context_frame
                     history = session.get_history()
                     _skill_names, system_prompt, skills_frame = detect_and_build(user_input)
-                    context_frame = await _get_or_freeze_frame(
-                        conv.conversation_id, conv, user_id, user_input, session_key, skills_frame
-                    )
+                    context_frame = await _build_context_frame(conv, user_id, user_input, session_key, skills_frame)
                     messages = build_messages(
                         system_prompt=system_prompt,
                         history=history,
@@ -199,6 +196,13 @@ class AgentRunner:
                     )
 
                     # ── Phase 4: AfterReasoning ──
+                    # 存入 llm_context_frame，get_history() 重构时原样回放，保证跨轮 prefix cache
+                    session.add_message(
+                        "user",
+                        user_input,
+                        media=media_paths,
+                        llm_context_frame=context_frame,
+                    )
                     session.add_message(
                         "assistant",
                         result.content,
@@ -249,34 +253,6 @@ class AgentRunner:
 
 
 # ── Context Frame 构建 ──────────────────────────────────────────────
-
-_FRAME_TTL = 300  # 5 分钟，同 conversation 内复用冻结的 context frame
-_frozen_frames: dict[str, tuple[str, float]] = {}  # conv_id -> (frame, timestamp)
-
-
-async def _get_or_freeze_frame(
-    conv_id: str,
-    conv,
-    user_id: str,
-    user_input: str,
-    session_key: str,
-    skills_frame: str,
-) -> str:
-    """按 conversation 冻结 context frame，保证对话内多轮 prefix 一致。"""
-    now = time.time()
-    cached = _frozen_frames.get(conv_id)
-    if cached is not None and now - cached[1] < _FRAME_TTL:
-        logger.debug("context frame 命中冻结缓存", conv_id=conv_id)
-        return cached[0]
-
-    frame = await _build_context_frame(conv, user_id, user_input, session_key, skills_frame)
-    _frozen_frames[conv_id] = (frame, now)
-
-    if len(_frozen_frames) > 100:
-        oldest = min(_frozen_frames, key=lambda k: _frozen_frames[k][1])
-        del _frozen_frames[oldest]
-
-    return frame
 
 
 async def _build_context_frame(
