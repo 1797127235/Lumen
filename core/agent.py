@@ -116,13 +116,14 @@ async def _run_react_loop(
         calls_record: list[dict[str, Any]] = []
         for tc in response.tool_calls:
             result = await _execute_tool(tc, ctx)
-            messages.append(_build_tool_message(tc, result))
+            result_str = str(result)
+            messages.append(_build_tool_message(tc, result_str))
             calls_record.append(
                 {
                     "call_id": tc.id,
                     "name": tc.name,
                     "arguments": dict(tc.arguments),
-                    "result": str(result),
+                    "result": result_str,
                 }
             )
             if _is_tool_failure(result):
@@ -282,7 +283,7 @@ def _build_assistant_message(response: LLMResponse) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "name": tc.name,
-                    "arguments": json.dumps(tc.arguments),
+                    "arguments": json.dumps(tc.arguments, ensure_ascii=False),
                 },
             }
             for tc in response.tool_calls
@@ -291,10 +292,12 @@ def _build_assistant_message(response: LLMResponse) -> dict[str, Any]:
 
 
 def _build_tool_message(tc: ToolCall, result: str) -> dict[str, Any]:
+    from lib.session.manager import _truncate_tool_result
+
     return {
         "role": "tool",
         "tool_call_id": tc.id,
-        "content": result,
+        "content": _truncate_tool_result(result),
     }
 
 
