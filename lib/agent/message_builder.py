@@ -1,7 +1,10 @@
 """消息构建器
 
 组装完整的 messages 列表：
-  system prompt → history → context frame → current user message
+  system prompt（含冻结的 context frame）→ history → current user message
+
+context_frame 合并进 system message，不作为独立 user 消息，
+保证 [system][history] 前缀在对话内多轮复用，最大化 prefix cache 命中。
 """
 
 from __future__ import annotations
@@ -23,16 +26,18 @@ def build_messages(
 ) -> list[dict[str, Any]]:
     """构建完整的 messages 列表。
 
-    顺序：system → history → context_frame → user message
+    顺序：system(含 context_frame) → history → user message
+    context_frame 合并到 system 末尾，而非独立 user 消息，
+    避免 history 前缀因 context_frame 变化而无法命中 prefix cache。
     """
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    full_system = system_prompt
+    if context_frame.strip():
+        full_system = f"{system_prompt}\n\n---\n\n# 运行时上下文\n\n{context_frame}"
+
+    messages: list[dict[str, Any]] = [{"role": "system", "content": full_system}]
 
     # 历史消息（已 sanitize 的干净历史）
     messages.extend(history)
-
-    # Context frame（运行时注入，不持久化）
-    if context_frame.strip():
-        messages.append({"role": "user", "content": context_frame})
 
     # 当前用户消息
     user_content = _build_user_content(current_message, media)
