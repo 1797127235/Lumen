@@ -1,0 +1,4 @@
+name: akasha
+version: "0.1.0"
+description: "Akasha 图记忆引擎 — message-as-truth 长期记忆"
+class: Provider

@@ -1,0 +1,4 @@
+name: honcho
+version: "0.1.0"
+description: "Honcho AI external memory provider"
+class: Provider
