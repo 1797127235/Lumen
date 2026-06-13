@@ -146,7 +146,7 @@ async def _do_update_understanding(user_id: str) -> str:
 
 
 async def _generate_understanding(profile_text: str, existing: str) -> str:
-    """调用 LLM 基于 memory.md 结构化画像生成 about_you 自然语言文本。"""
+    """调用 LLM 基于 MEMORY.md 生成 evidence-based 的 USER.md 画像。"""
     from core.config import get_settings
     from lib.llm.client import LLMClient
 
@@ -157,30 +157,35 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
         model=settings.llm_model,
     )
 
-    system_prompt = """你是一个 AI 伙伴的用户画像专家。基于用户的画像数据（Markdown 格式），生成一段关于用户的综合画像 + 模式洞察。
+    system_prompt = """你是一个 AI 伙伴的用户画像整理员。基于 MEMORY.md 中的用户画像数据，生成一份克制、证据化的 USER.md。
 
 ## 输出格式
-先输出画像文本，然后换行，然后输出一行分隔符 `---PATTERNS---`，然后输出 JSON 数组。
+只输出 Markdown bullet 列表，然后换行，然后输出一行分隔符 `---PATTERNS---`，然后输出 JSON 数组。
 
 示例：
-你是一位...
+## 稳定事实
+- 订阅了 12 个 RSS 源，覆盖技术与新闻 [来源: 2026-06-09 fact]
+- 有强直性脊柱炎，但明确说不疼 [来源: 2026-06-10 fact]
+
+## 偏好
+- 喜欢港乐，提及杨千嬅的《飞女正传》等 [来源: 2026-06-11 preference]
 
 ---PATTERNS---
 [
-  {"insight": "你每次面临重大选择前都会焦虑2-3天", "category": "decision_pattern", "evidence_count": 4},
-  {"insight": "你提到独处时总是在晚上", "category": "time_preference", "evidence_count": 3}
+  {"insight": "信息源覆盖技术与主流媒体，偏好多元化", "category": "value_orientation", "evidence_count": 3}
 ]
 
 ## 规则
-1. 画像文本用第二人称（"你"），像向用户本人介绍他们自己
-2. 画像写 2-3 段自然语言，总长 300-500 字
-3. 只包含有证据支撑的观察，不编造
-4. 使用"缺席成本测试"：6个月后全新对话中缺少此信息是否导致方向性失误？是→必须包含
-5. 优先包含：用户事实（身份背景）、用户偏好（思维方式/价值取向）、关键决策
-6. 忽略标记为"（待填写）"的字段——那是占位符，不是真实数据
-7. 模式洞察：从画像数据中提炼 3-5 条跨维度模式，每条用一句话概括
-8. category 只能从以下选择：time_preference, learning_style, decision_pattern, value_orientation, communication_style, emotional_pattern, social_style, energy_pattern
-9. evidence_count 是基于事件数量的合理估算（1-10）"""
+1. **禁止自然语言段落**：只使用 `## 章节标题` 和 `- bullet` 条目，不要写散文
+2. **禁止比喻、升华、人格包装**：不写"骨子里""本质上""始终是那个搭建浮桥的人"这类表述
+3. **禁止推测**：只陈述 MEMORY.md 中明确出现的事实，不 infer 用户没说过的东西
+4. **每条必须带 [来源: 日期 category]**：让用户能追溯到原始记忆
+5. **分组**：用 `## 稳定事实`、`## 偏好`、`## 意图`、`## 临时状态` 等章节
+6. **宁缺毋滥**：不确定的、证据不足的、重复的，一律不写
+7. **忽略标记为"（待填写）"的字段**：那是占位符，不是真实数据
+8. **模式洞察**：从 bullet 中提炼 0-3 条跨维度模式，每条用一句话概括，不要重复 bullet 内容
+9. **category 只能从以下选择**：time_preference, learning_style, decision_pattern, value_orientation, communication_style, emotional_pattern, social_style, energy_pattern
+10. **evidence_count 是基于事件数量的合理估算（1-10）"""
 
     existing_section = ""
     if existing and len(existing) > 20:
