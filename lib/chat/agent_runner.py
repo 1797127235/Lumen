@@ -5,7 +5,7 @@ import asyncio
 from core.agent import AgentResult, get_agent_generation, run_agent
 from core.db import get_async_session_maker
 from lib.agent.message_builder import build_messages
-from lib.agent.system_prompt_builder import detect_and_build
+from lib.agent.system_prompt_builder import detect_and_build, get_system_prompt_fingerprint
 from lib.agent.types import AgentContext
 from lib.bus.event_bus import (
     EventBus,
@@ -21,7 +21,8 @@ from shared.path_utils import find_project_root
 
 logger = get_logger(__name__)
 
-_MEMORY_WINDOW = 500
+# 限制携带的完整历史消息数（4 轮 user + assistant），防止 input 线性增长拖低 cache 率。
+_MEMORY_WINDOW = 8
 
 _runner: AgentRunner | None = None
 
@@ -202,7 +203,33 @@ class AgentRunner:
                     # ── Phase 2: BeforeReasoning ──
                     # 先取 history（不含当前消息），再构建 context_frame
                     history = get_history_since_consolidated(session, _MEMORY_WINDOW)
-                    _skill_names, system_prompt, skills_frame = detect_and_build(user_input)
+
+                    # conversation 级 system prompt 冻结：若该会话已有持久化快照，
+                    # 直接复用，不再重新构建，避免记忆写入后刷新 prefix cache。
+                    snapshot = conv.context_snapshot or {}
+                    cached_system_prompt = snapshot.get("system_prompt")
+                    if cached_system_prompt:
+                        logger.debug(
+                            "using frozen system prompt snapshot",
+                            conversation_id=conv.conversation_id,
+                        )
+
+                    _skill_names, system_prompt, skills_frame = await detect_and_build(
+                        user_input,
+                        user_id,
+                        conv.conversation_id,
+                        cached_system_prompt=cached_system_prompt,
+                    )
+
+                    # 首次进入该 conversation 时冻结 system prompt，持久化到
+                    # context_snapshot，供后续轮次（以及跨进程重启）复用。
+                    if not cached_system_prompt:
+                        conv.context_snapshot = {
+                            "system_prompt": system_prompt,
+                            "fingerprint": await get_system_prompt_fingerprint(user_id),
+                        }
+                        await db.flush()
+
                     context_frame = await _build_context_frame(conv, user_id, user_input, session_key, skills_frame)
                     messages = build_messages(
                         system_prompt=system_prompt,
@@ -318,39 +345,31 @@ async def _build_context_frame(
 ) -> str:
     """构建 context frame（参照 akashic-agent）。
 
-    返回字符串，直接注入为 user message。
+    Phase 1 后只包含动态内容：日期、L1 近期对话、L2 外部召回、
+    skills、deferred hint。L0 + PARTNER.md 已移入 system prompt。
     """
     from datetime import datetime
 
     from lib.memory import get_memory_manager
-    from lib.memory.snapshot import build_snapshot
+    from lib.memory.snapshot import build_recent_context
     from lib.tools.factory import build_deferred_tools_hint
 
     timestamp = datetime.now().strftime("%Y-%m-%d")
     manager = get_memory_manager()
 
-    parts = [f"当前日期：{timestamp}"]
+    parts: list[str] = [f"当前日期：{timestamp}"]
 
-    # L0 + L1：用户画像快照
+    # L1：近期对话上下文（snapshot.py 已退化为 L1-only）
     try:
-        static_ctx = await build_snapshot(user_id)
-        if static_ctx.strip():
-            parts.append(f"# 用户记忆\n\n{static_ctx}")
-        else:
-            parts.append("【用户画像为空】当用户提供信息时，调用 memory_save 或 update_profile 保存。")
+        recent_ctx = await build_recent_context(user_id)
+        if recent_ctx.strip():
+            parts.append(f"# 近期相关对话\n\n{recent_ctx}")
     except Exception:
-        logger.debug("build_snapshot failed", user_id=user_id)
+        logger.debug("build_recent_context failed", user_id=user_id)
 
-    # PARTNER.md：用户定义的 AI 协作规则
-    try:
-        from lib.memory.markdown import AsyncMarkdownStore
-
-        partner_store = AsyncMarkdownStore()
-        partner_content = await partner_store.read_partner(user_id)
-        if partner_content.strip():
-            parts.append(f"<partner-rules>\n{partner_content}\n</partner-rules>")
-    except Exception:
-        logger.debug("PARTNER.md 读取失败", user_id=user_id)
+    # Skills 内容
+    if skills_frame.strip():
+        parts.append(skills_frame)
 
     # L2：外部 provider 动态召回
     try:
@@ -364,24 +383,9 @@ async def _build_context_frame(
     except Exception:
         logger.debug("MemoryManager.build_context failed", user_id=user_id)
 
-    # Skills 内容（动态，不进 system prompt 以保 prefix cache）
-    if skills_frame.strip():
-        parts.append(skills_frame)
-
     # 延迟工具提示
     deferred_hint = build_deferred_tools_hint(conv.conversation_id)
     if deferred_hint:
         parts.append(deferred_hint)
-
-    # FOCUS.md
-    try:
-        from lib.memory.markdown import AsyncMarkdownStore
-
-        focus_store = AsyncMarkdownStore()
-        focus_content = await focus_store.read_focus(user_id)
-        if focus_content.strip():
-            parts.append(f"<current-focus>\n{focus_content}\n</current-focus>")
-    except Exception:
-        logger.debug("FOCUS.md 读取失败", user_id=user_id)
 
     return "\n\n".join(parts)

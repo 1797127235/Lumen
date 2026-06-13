@@ -897,7 +897,7 @@ def create_file_tools() -> list[ToolDef]:
             description=(
                 "读取文件内容。支持文本文件分页（offset/limit）、PDF/DOCX 等文档提取。\n\n"
                 "适用场景：查看代码文件、配置文件、文档内容。\n"
-                "不适用：读取 RSS 新闻（用 rss_list_items）、搜索记忆（用 memory_search）、搜索网页内容（用 web_search）。"
+                "不适用：搜索记忆（用 memory_search）、搜索网页内容（用 web_search）。"
             ),
             input_schema={
                 "type": "object",
@@ -936,7 +936,7 @@ def create_file_tools() -> list[ToolDef]:
             description=(
                 "列出目录内容。\n\n"
                 "适用场景：浏览项目结构、查看某个目录下有哪些文件。\n"
-                "不适用：查看 RSS 内容（用 rss_list_items）、搜索用户数据（用 memory_search）。"
+                "不适用：搜索用户数据（用 memory_search）。"
             ),
             input_schema={
                 "type": "object",
@@ -953,7 +953,7 @@ def create_file_tools() -> list[ToolDef]:
             description=(
                 "在工作区内用正则搜索文件内容（需要 ripgrep）。\n\n"
                 "适用场景：在代码/配置中搜索关键词、查找函数定义、搜索日志模式。\n"
-                "不适用：搜索 RSS 内容（用 rss_list_items）、搜索记忆（用 memory_search）、搜索网页（用 web_search）。"
+                "不适用：搜索记忆（用 memory_search）、搜索网页（用 web_search）。"
             ),
             input_schema={
                 "type": "object",

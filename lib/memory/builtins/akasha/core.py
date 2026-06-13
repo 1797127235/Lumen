@@ -17,7 +17,7 @@ import numpy as np
 
 # ── 常量 ──────────────────────────────────────────────────────────────
 
-# 时间衰减常数（秒）—— 基于 sessions.db 真实对话间隔统计
+# 时间衰减常数（秒）
 LONG_DECAY_TAU = 604800.0  # 7 天：strength 衰减到 1/e
 RESOURCE_RECOVER_TAU = 1800.0  # 30 分钟：短期抑制恢复
 EDGE_DECAY_TAU = 1209600.0  # 14 天：Hebbian 边衰减
@@ -80,11 +80,8 @@ def load_idf_from_db(conn: sqlite3.Connection) -> dict[str, float]:
     return {t: float(v) for t, v in rows}
 
 
-def build_idf_table(
-    sessions_db_path: str,
-    target_conn: sqlite3.Connection,
-) -> dict[str, float]:
-    """扫描 sessions.db 所有 message 算 IDF，写入 target_conn 的 fts_token_idf 表。
+def build_idf_table(conn: sqlite3.Connection) -> dict[str, float]:
+    """扫描 Akasha 自己的 akasha_turn_content 算 IDF，写入 fts_token_idf 表。
 
     用法：当 fts_token_idf 不存在或为空时调用，一次性建表。
     增量更新场景下也可重新调用——会全表重写。
@@ -93,10 +90,9 @@ def build_idf_table(
 
     import jieba
 
-    sconn = sqlite3.connect(sessions_db_path)
     df: dict[str, int] = defaultdict(int)
     n_docs = 0
-    for (content,) in sconn.execute("SELECT content FROM messages"):
+    for (content,) in conn.execute("SELECT user_message FROM akasha_turn_content"):
         n_docs += 1
         seen: set[str] = set()
         for w in jieba.cut_for_search(content or ""):
@@ -104,60 +100,53 @@ def build_idf_table(
             if len(cleaned) > 1 and cleaned not in seen:
                 seen.add(cleaned)
                 df[cleaned] += 1
-    sconn.close()
 
     idf: dict[str, float] = {}
     for tok, freq in df.items():
         idf[tok] = math.log((n_docs + 1) / (freq + 1)) + 1
 
-    target_conn.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS fts_token_idf (
             token TEXT PRIMARY KEY,
             df INTEGER NOT NULL,
             idf REAL NOT NULL
         )
     """)
-    target_conn.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS fts_token_idf_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )
     """)
-    target_conn.execute("DELETE FROM fts_token_idf")
-    target_conn.executemany(
+    conn.execute("DELETE FROM fts_token_idf")
+    conn.executemany(
         "INSERT INTO fts_token_idf VALUES (?, ?, ?)",
         [(t, df[t], idf[t]) for t in df],
     )
-    target_conn.execute(
+    conn.execute(
         "INSERT OR REPLACE INTO fts_token_idf_meta VALUES ('n_docs', ?)",
         (str(n_docs),),
     )
-    target_conn.commit()
+    conn.commit()
     return idf
 
 
-def idf_table_is_stale(
-    sessions_db_path: str,
-    target_conn: sqlite3.Connection,
-    drift_ratio: float = 0.20,
-) -> bool:
+def idf_table_is_stale(conn: sqlite3.Connection, drift_ratio: float = 0.20) -> bool:
     """判断 IDF 表是否需要重建。"""
     try:
-        cnt = target_conn.execute("SELECT COUNT(*) FROM fts_token_idf").fetchone()[0]
+        cnt = conn.execute("SELECT COUNT(*) FROM fts_token_idf").fetchone()[0]
     except sqlite3.OperationalError:
         return True
     if cnt == 0:
         return True
     try:
-        row = target_conn.execute("SELECT value FROM fts_token_idf_meta WHERE key='n_docs'").fetchone()
+        row = conn.execute("SELECT value FROM fts_token_idf_meta WHERE key='n_docs'").fetchone()
         last_n = int(row[0]) if row else None
     except sqlite3.OperationalError:
         last_n = None
     if last_n is None or last_n == 0:
         return False  # 已有数据但无 meta，先不强制重建
-    sconn = sqlite3.connect(sessions_db_path)
-    cur_n = sconn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    sconn.close()
+    cur_n = conn.execute("SELECT COUNT(*) FROM akasha_turn_content").fetchone()[0]
     return abs(cur_n - last_n) / last_n > drift_ratio
 
 
@@ -397,73 +386,21 @@ def parse_ts_unix(value: str) -> float:
         raise ValueError(f"无效时间戳: {value}") from exc
 
 
-def message_id_to_key_from_db(cursor: sqlite3.Cursor, message_id: str) -> str:
-    """从 messages 表反查 message id 对应的 turn key。"""
-    cursor.execute(
-        "SELECT session_key, seq, role FROM messages WHERE id = ?",
-        (message_id,),
-    )
-    row = cursor.fetchone()
-    if row:
-        _, _, key = turn_key(str(row[0]), int(row[1]), str(row[2] or ""))
-        return key
-    return message_id  # fallback
-
-
 # ── DB 工具函数 ───────────────────────────────────────────────────────
 
 
-def open_source_db(path: str) -> sqlite3.Connection:
-    """打开带 sqlite-vec 的源数据库。"""
-    import sqlite_vec
-
-    db = sqlite3.connect(path)
-    db.enable_load_extension(True)
-    sqlite_vec.load(db)
-    db.enable_load_extension(False)
-    return db
-
-
 def has_user_turn(cursor: sqlite3.Cursor | None, key: str) -> bool:
-    """判断 turn key 对应的轮次是否有 user 消息。"""
+    """判断 turn key 对应的轮次是否有 user 消息。
+
+    Akasha 自己写入的 turn 一定有 user，直接查 akasha_turn_content 确认即可。
+    """
     if cursor is None:
         return True
-    parsed = parse_turn_key(key)
-    if parsed is None:
-        return False
-    session_key, seq = parsed
     cursor.execute(
-        "SELECT 1 FROM messages WHERE session_key = ? AND seq = ? AND role = 'user' LIMIT 1",
-        (session_key, seq),
+        "SELECT 1 FROM akasha_turn_content WHERE key = ? LIMIT 1",
+        (key,),
     )
     return cursor.fetchone() is not None
-
-
-def get_turn_context(cursor: sqlite3.Cursor, key: str) -> tuple[str, str]:
-    """从 messages 表读取 user/assistant 消息内容（用于展示）。"""
-    parsed = parse_turn_key(key)
-    if parsed is None:
-        return "", ""
-    session_key, seq = parsed
-    cursor.execute(
-        "SELECT content FROM messages WHERE session_key = ? AND seq = ? AND role = 'user'",
-        (session_key, seq),
-    )
-    user_row = cursor.fetchone()
-    cursor.execute(
-        "SELECT content FROM messages WHERE session_key = ? AND seq = ? AND role = 'assistant'",
-        (session_key, seq + 1),
-    )
-    assistant_row = cursor.fetchone()
-    user_text = (user_row[0] if user_row else "") or ""
-    assistant_text = (assistant_row[0] if assistant_row else "") or ""
-    user_text = user_text.replace("\n", " ").strip()
-    assistant_text = assistant_text.replace("\n", " ").strip()
-    if len(user_text) > 58:
-        user_text = user_text[:55] + "..."
-    if len(assistant_text) > 58:
-        assistant_text = assistant_text[:55] + "..."
-    return user_text, assistant_text
 
 
 def load_state(path: str) -> tuple[dict[str, AkashaNode], dict[tuple[str, str], float], dict[str, tuple]]:
@@ -795,12 +732,14 @@ def seed_pool(
     if source_cursor is not None:
         fts_query = get_jieba_keywords(query)
         if fts_query:
-            # 用 BM25 排序拿 top K（bm25() 返回负值，越小越匹配）
+            fts_candidates: list[tuple[str, float]] = []
+
+            # 用 Akasha 自己的 turn_content_fts 做 BM25 召回
             try:
                 source_cursor.execute(
                     """
-                    SELECT rowid, bm25(messages_fts) AS rank
-                    FROM messages_fts
+                    SELECT rowid, bm25(akasha_turn_content_fts) AS rank
+                    FROM akasha_turn_content_fts
                     WHERE content MATCH ?
                     ORDER BY rank
                     LIMIT ?
@@ -809,9 +748,8 @@ def seed_pool(
                 )
                 rows = source_cursor.fetchall()
             except sqlite3.OperationalError:
-                # FTS5 不支持 bm25 时退回旧行为
                 source_cursor.execute(
-                    "SELECT rowid, 0 FROM messages_fts WHERE content MATCH ? LIMIT ?",
+                    "SELECT rowid, 0 FROM akasha_turn_content_fts WHERE content MATCH ? LIMIT ?",
                     (fts_query, FTS_TOP_K),
                 )
                 rows = source_cursor.fetchall()
@@ -819,32 +757,32 @@ def seed_pool(
                 rowid_to_rank = {int(r[0]): float(r[1] or 0.0) for r in rows}
                 placeholders = ",".join("?" for _ in rowid_to_rank)
                 source_cursor.execute(
-                    f"SELECT session_key, seq, role, rowid FROM messages WHERE rowid IN ({placeholders})",
+                    f"SELECT key, rowid FROM akasha_turn_content WHERE rowid IN ({placeholders})",
                     list(rowid_to_rank.keys()),
                 )
-                fts_candidates: list[tuple[str, float]] = []
-                for session_key, seq, role, rowid in source_cursor.fetchall():
-                    _, _, key = turn_key(str(session_key), int(seq), str(role or ""))
+                for key, rowid in source_cursor.fetchall():
+                    key = str(key)
                     if key not in nodes:
                         continue
                     fts_candidates.append((key, rowid_to_rank.get(int(rowid), 0.0)))
-                # 按 BM25 |rank| 降序（更匹配的排前）
-                fts_candidates.sort(key=lambda x: x[1])  # rank 是负值，小的更匹配
 
-                fts_only_count = 0
-                for key, _ in fts_candidates:
-                    if key in seed_sources:
-                        # Dense ∩ FTS: 加 boost（multiplicative fusion）
-                        if "FTS" not in seed_sources[key].split("+"):
-                            seed_sources[key] += "+FTS"
-                        seed_energy[key] = min(1.5, seed_energy[key] * FTS_OVERLAP_BOOST)
-                    else:
-                        # FTS-only: 限制数量，只让最匹配的几个进
-                        if fts_only_count >= FTS_ONLY_MAX_HITS:
-                            continue
-                        seed_sources[key] = "FTS"
-                        seed_energy[key] = 1.0
-                        fts_only_count += 1
+            # 按 BM25 |rank| 降序（更匹配的排前）
+            fts_candidates.sort(key=lambda x: x[1])  # rank 是负值，小的更匹配
+
+            fts_only_count = 0
+            for key, _ in fts_candidates:
+                if key in seed_sources:
+                    # Dense ∩ FTS: 加 boost（multiplicative fusion）
+                    if "FTS" not in seed_sources[key].split("+"):
+                        seed_sources[key] += "+FTS"
+                    seed_energy[key] = min(1.5, seed_energy[key] * FTS_OVERLAP_BOOST)
+                else:
+                    # FTS-only: 限制数量，只让最匹配的几个进
+                    if fts_only_count >= FTS_ONLY_MAX_HITS:
+                        continue
+                    seed_sources[key] = "FTS"
+                    seed_energy[key] = 1.0
+                    fts_only_count += 1
 
     blackhole_hits: list[tuple[str, float]] = []
     for key, node in nodes.items():
@@ -1281,7 +1219,7 @@ def compute_candidates(
         seq: 当前消息序号
         config: 算法参数
         fan: 节点扇出统计
-        source_cursor: 源数据库 cursor（FTS 和 user_turn 查询）
+        source_cursor: Akasha sidecar DB 的 cursor（用于 akasha_turn_content_fts 和 user_turn 验证）
         edges_by_src: 边按源节点索引（可选加速）
         soft_recall: 是否开启软召回（展示用）
         return_limit: 返回数量上限

@@ -10,6 +10,7 @@ get_history() 重构时原样回放，保证跨轮 prefix cache 命中。
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from shared.logging import get_logger
@@ -42,7 +43,24 @@ def build_messages(
     user_content = _build_user_content(current_message, media)
     messages.append({"role": "user", "content": user_content})
 
+    # Context budget telemetry：帮助定位 cache 瓶颈
+    budget = _estimate_messages_budget(messages)
+    logger.debug(
+        "context budget",
+        messages=len(messages),
+        chars=budget["chars"],
+        tokens=budget["tokens"],
+        history_messages=len(history),
+    )
+
     return messages
+
+
+def _estimate_messages_budget(messages: list[dict[str, Any]]) -> dict[str, int]:
+    """轻量估算 messages 的字符数和 tokens（1 token ≈ 3 字符，参考 akashic-agent）。"""
+    payload = json.dumps(messages, ensure_ascii=False)
+    chars = len(payload)
+    return {"messages": len(messages), "chars": chars, "tokens": max(1, chars // 3)}
 
 
 def _build_user_content(text: str, media: list[str] | None) -> str:

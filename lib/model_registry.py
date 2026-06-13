@@ -7,13 +7,12 @@ from __future__ import annotations
 
 from lib.chat.agent_trace import AgentTrace
 from lib.chat.models import Conversation, Message
-from lib.partner.models import LumenPresence, LumenState, LumenThought
+from lib.partner.models import LumenState, LumenThought
 from lib.profile.models import User, UserProfile
 
 __all__ = [
     "AgentTrace",
     "Conversation",
-    "LumenPresence",
     "LumenState",
     "LumenThought",
     "Message",

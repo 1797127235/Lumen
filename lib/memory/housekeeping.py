@@ -151,6 +151,7 @@ class MemoryHousekeeper:
 
     async def _run_once(self) -> None:
         """扫描所有用户目录，整理过期记忆（MEMORY.md + USER.md）。"""
+        from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
         from lib.memory.markdown import _BASE_MEMORY_DIR, AsyncMarkdownStore
 
         store = AsyncMarkdownStore()
@@ -182,6 +183,7 @@ class MemoryHousekeeper:
                     new_content, removed, stale = housekeep_memory(content)
                     if removed > 0 or stale > 0:
                         await write_fn(user_id, new_content)
+                        invalidate_system_prompt_cache(user_id)
                         total_removed += removed
                         total_stale += stale
                         logger.info(

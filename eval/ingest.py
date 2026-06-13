@@ -10,6 +10,7 @@ import logging
 
 from eval.dataset import LMEInstance
 from eval.runtime import BenchmarkRuntime
+from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
 from lib.memory.markdown import AsyncMarkdownStore
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ async def ingest_instance(
             category="benchmark_haystack",
             content=session_text,
         )
+        invalidate_system_prompt_cache(rt.user_id)
 
         logger.debug(
             "ingest session: qid=%s session=%d turns=%d",

@@ -153,22 +153,18 @@ async def migrate_sqlite(conn) -> None:
             PRIMARY KEY (user_id)
         )""",
         "INSERT OR IGNORE INTO lumen_state (user_id, mood) VALUES ('demo_user', 'calm')",
-        """CREATE TABLE IF NOT EXISTS lumen_presence (
-            user_id TEXT NOT NULL DEFAULT 'demo_user',
-            last_user_at DATETIME,
-            last_proactive_at DATETIME,
-            proactive_sent_24h INTEGER DEFAULT 0,
-            followup_due_at DATETIME,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (user_id)
-        )""",
-        "INSERT OR IGNORE INTO lumen_presence (user_id) VALUES ('demo_user')",
     ]:
         try:
             await conn.execute(text(sql))
         except Exception as e:
             if "duplicate column" not in str(e).lower() and "already exists" not in str(e).lower():
                 logger.warning("SQLite 迁移失败", sql=sql[:100], error=str(e))
+
+    # 移除已退役的 lumen_presence 表（原 RSS/主动推送门控使用）
+    try:
+        await conn.execute(text("DROP TABLE IF EXISTS lumen_presence"))
+    except Exception as e:
+        logger.warning("清理 lumen_presence 表失败", error=str(e))
 
 
 async def migrate_md_files() -> None:

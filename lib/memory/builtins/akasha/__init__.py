@@ -99,25 +99,20 @@ class Provider(MemoryProvider):
             return ""
 
     async def sync_turn(self, user: str, assistant: str, *, session_id: str = "") -> None:
-        """把一轮对话同步到 Akasha 图。"""
+        """把一轮对话同步到 Akasha 图。
+
+        直接通过 MemoryProvider 接口接收 user/assistant 内容，不再反向查询宿主数据库。
+        """
         if self._engine is None or not session_id:
             return
         try:
-            # 查询该会话最新的两条消息（user + assistant）
-            user_msg = await self._get_latest_message(session_id, "user")
-            assistant_msg = await self._get_latest_message(session_id, "assistant")
-            if user_msg is None or assistant_msg is None:
-                return
-
-            # 计算 turn seq：按 conversation 内 created_at 排序
-            seq = await self._compute_turn_seq(session_id, user_msg.created_at)
-
+            seq = self._engine.next_turn_seq(session_id)
             await self._engine.commit_turn(
                 session_key=session_id,
-                user_msg=user_msg.content or "",
-                assistant_msg=assistant_msg.content or "",
-                user_msg_id=user_msg.message_id,
-                assistant_msg_id=assistant_msg.message_id,
+                user_msg=user,
+                assistant_msg=assistant,
+                user_msg_id=f"{session_id}:u:{seq}",
+                assistant_msg_id=f"{session_id}:a:{seq}",
                 seq=seq,
             )
             logger.debug(
@@ -127,39 +122,6 @@ class Provider(MemoryProvider):
             )
         except Exception as exc:
             logger.warning("Akasha sync_turn 失败", error=str(exc))
-
-    async def _get_latest_message(self, conversation_id: str, role: str) -> Any | None:
-        """查询指定 conversation 最新指定角色的消息。"""
-        from sqlalchemy import select
-
-        from core.db import get_async_session_maker
-        from lib.chat.models import Message
-
-        async with get_async_session_maker()() as db:
-            stmt = (
-                select(Message)
-                .where(Message.conversation_id == conversation_id, Message.role == role)
-                .order_by(Message.created_at.desc())
-                .limit(1)
-            )
-            result = await db.execute(stmt)
-            return result.scalar_one_or_none()
-
-    async def _compute_turn_seq(self, conversation_id: str, before_ts: Any) -> int:
-        """计算某条消息在 conversation 内的 turn 序号。"""
-        from sqlalchemy import func, select
-
-        from core.db import get_async_session_maker
-        from lib.chat.models import Message
-
-        async with get_async_session_maker()() as db:
-            stmt = select(func.count()).where(
-                Message.conversation_id == conversation_id,
-                Message.role == "user",
-                Message.created_at <= before_ts,
-            )
-            result = await db.execute(stmt)
-            return result.scalar() or 1
 
     async def get_tool_schemas(self) -> list[dict]:
         """暴露 akasha_recall 工具。"""

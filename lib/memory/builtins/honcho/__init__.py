@@ -233,6 +233,34 @@ class Provider(MemoryProvider):
                 error=str(exc),
             )
 
+    # ── 会话重置 ──
+
+    async def on_session_switch(self, new_session_id: str, *, reset: bool = False, **kwargs: Any) -> None:
+        """会话切换或重置时调用。
+
+        reset=True 时删除对应 Honcho session 及其所有数据，
+        确保清空对话后不会通过 prefetch 泄漏旧上下文。
+        """
+        if not reset:
+            return
+
+        old_session_id = kwargs.get("old_session_id") or new_session_id
+        if not old_session_id:
+            return
+
+        honcho_session_id = self._sanitize_session_id(old_session_id)
+        try:
+            client = self._get_client()
+            session = client.session(honcho_session_id)
+            session.delete()
+            logger.info("Honcho session 已删除（reset）", session_id=honcho_session_id)
+        except Exception as exc:
+            logger.warning(
+                "Honcho session 删除失败",
+                session_id=honcho_session_id,
+                error=str(exc),
+            )
+
     # ── 工具 ──
 
     async def get_tool_schemas(self) -> list[dict]:

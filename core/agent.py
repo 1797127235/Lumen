@@ -1,6 +1,6 @@
 """Lumen Agent — 核心编排（参照 akashic-agent 设计）
 
-纯函数式 ReAct 循环 + 渐进式上下文裁剪，无类、无 generator、无 PydanticAI。
+纯函数式 ReAct 循环 + 渐进式上下文裁剪
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _TOOL_CALLS_LIMIT = 20
 _MAX_ITERATIONS = 12
 _CONSECUTIVE_TOOL_FAILURE_LIMIT = 2
 
-# 渐进式裁剪比率（参照 akashic-agent _SAFETY_RETRY_RATIOS）
+# 渐进式裁剪比率
 _SAFETY_RETRY_RATIOS = (1.0, 0.5, 0.0)
 
 
@@ -114,6 +114,35 @@ async def _run_react_loop(
         _accumulate(response)
 
         if not response.tool_calls:
+            # ── 首轮事实验证护栏 ──
+            # 模型第一轮直接回答（无工具调用）时，如果用户问的是事实型问题，
+            # 注入一条提醒让模型再想一次：是否需要先 web_search 验证。
+            # 模型仍然可以选择不查（重复回答），但这给了它一次自我纠正的机会。
+            if iteration == 0 and not tool_chain:
+                user_msg = ""
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        user_msg = str(m.get("content", ""))
+                        break
+                if _looks_like_fact_question(user_msg):
+                    logger.info(
+                        "[ReAct] 事实型问题未走工具，注入验证提醒",
+                        user_preview=user_msg[:60],
+                        conversation_id=ctx.conversation_id,
+                    )
+                    messages.append(_build_assistant_message(response))
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "你刚才的回答没有经过工具验证。如果回答中包含具体人名、"
+                                "作品名、事件细节等事实性内容，且你不是 100% 确定，"
+                                "请立即使用 web_search 验证后再回答。"
+                                "如果这确实是稳定知识或日常闲聊，直接重复你的回答即可。"
+                            ),
+                        }
+                    )
+                    continue
             _log_usage(total_usage, ctx.conversation_id)
             return AgentResult(content=response.content or "", tool_chain=tool_chain)
 
@@ -204,20 +233,51 @@ def _is_tool_failure(result: str) -> bool:
     return text.startswith("❌") or "[BUDGET]" in text or "[LOOP_GUARD]" in text or "Unknown tool name" in text
 
 
+def _looks_like_fact_question(text: str) -> bool:
+    """简单启发式：判断用户消息是否像事实型问题。"""
+    if not text:
+        return False
+    text = text.strip()
+    if len(text) <= 4:
+        return False
+    indicators = {
+        "吗",
+        "？",
+        "?",
+        "什么",
+        "谁",
+        "哪",
+        "多少",
+        "几",
+        "什么时候",
+        "何时",
+        "为什么",
+        "怎么",
+        "如何",
+        "是否",
+        "能不能",
+        "可不可以",
+    }
+    return any(indicator in text for indicator in indicators)
+
+
 def _log_usage(total: dict[str, int], conversation_id: str | None, *, scope: str = "aggregate") -> None:
     if sum(total.values()) == 0:
         return
     input_t = total["input"]
     cache_r = total["cache_read"]
+    cache_w = total["cache_write"]
     hit_pct = round(cache_r / input_t * 100, 1) if input_t else 0.0
+    write_pct = round(cache_w / input_t * 100, 1) if input_t else 0.0
     logger.info(
         "LLM usage",
         scope=scope,
         input=input_t,
         output=total["output"],
         cache_read=cache_r,
-        cache_write=total["cache_write"],
+        cache_write=cache_w,
         cache_hit_pct=f"{hit_pct}%",
+        cache_write_pct=f"{write_pct}%",
         conversation_id=conversation_id,
     )
 
@@ -266,8 +326,8 @@ async def _execute_tool(tc: ToolCall, ctx: AgentContext) -> str:
         registry = get_tool_registry()
         result = await registry.execute(tc.name, tc.arguments, ctx)
         ctx.usage_budget["calls"] = used + 1
-        result_preview = str(result)[:200] if result else ""
-        logger.info("[工具结果←] %s", tc.name)
+        result_preview = str(result)[:500] if result else ""
+        logger.info("[工具结果←] %s: %s", tc.name, result_preview)
         result_str = str(result)
     except Exception as exc:
         logger.exception("工具执行失败", tool=tc.name)
@@ -367,9 +427,6 @@ def _get_llm() -> LLMClient:
 
 def get_agent_generation() -> int:
     return _agent_generation
-
-
-# ── Worker Agent（用于 delegate）─────────────────────────────────────
 
 
 async def run_worker_agent(

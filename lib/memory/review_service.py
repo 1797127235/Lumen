@@ -3,7 +3,7 @@
 当 Agent 在对话中未主动保存记忆时，后台 fork 一个专用的审查 Agent 审查本轮对话，
 判断是否有值得保存的用户信息。
 
-审查 Agent 使用独立的精简 prompt + 受限工具集（仅 memory / focus_update），
+审查 Agent 使用独立的精简 prompt + 受限工具集（仅 memory），
 不携带 Lumen 人格、记忆快照、技能目录，确保审查是客观的事实记录。
 """
 
@@ -60,8 +60,7 @@ _REVIEW_SYSTEM_PROMPT = (
     "- 删除时用 memory(action='remove', old_text='旧记忆关键词')，不需要添加新条目\n\n"
     "【触发保存的条件】\n"
     "1. 用户透露了关于自己的新信息（偏好、习惯、经历、技能、状态变化）\n"
-    "2. 用户纠正了之前的认知（明确说「不是那样的」「其实…」）\n"
-    "3. 用户提到了正在关注的话题或项目 → 调用 focus_update\n\n"
+    "2. 用户纠正了之前的认知（明确说「不是那样的」「其实…」）\n\n"
     "【不保存的情况】\n"
     "- 用户只是提问或请求执行某个操作（没有透露个人信息）\n"
     "- 对话中的闲聊、玩笑、寒暄\n"
@@ -80,8 +79,8 @@ async def _run_review_agent(messages, ctx):
     """运行审查 Agent — 无人格、无记忆、受限工具集。"""
     from core.agent import run_worker_agent
 
-    # 审查 Agent 只需要 memory + focus_update 工具
-    review_tool_names = ["memory", "focus_update"]
+    # 审查 Agent 只需要 memory 工具
+    review_tool_names = ["memory"]
 
     agent_result = await run_worker_agent(
         messages=messages,

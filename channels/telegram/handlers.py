@@ -40,19 +40,53 @@ class TelegramHandlers:
     # ── 命令 ──
 
     async def on_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """/clear 或 /new — 清空当前会话的 session store + 主 DB 对话记录"""
+        """/clear 或 /new — 彻底清空当前会话（session store + 主 DB + 外部记忆 provider）"""
         if not update.effective_message:
             return
         chat_id = str(update.effective_chat.id)
 
+        session_key = f"telegram:{chat_id}"
+        cleared: list[str] = []
+
+        # 1. 清理 session store（sessions.db）
         from lib.session import get_session_manager
 
-        session_key = f"telegram:{chat_id}"
         session_mgr = get_session_manager()
         try:
             session_mgr.delete_session(session_key, cascade=True)
+            cleared.append("session store")
         except Exception:
-            logger.exception("[telegram] Failed to clear session %s", session_key)
+            logger.exception("[telegram] Failed to clear session store %s", session_key)
+
+        # 2. 清理主 DB（lumen.db Conversation + Message）
+        try:
+            from sqlalchemy import delete as sql_delete
+
+            from core.db import get_async_session_maker
+            from lib.chat.models import Conversation, Message
+
+            async_session = get_async_session_maker()
+            async with async_session() as db:
+                await db.execute(sql_delete(Message).where(Message.conversation_id == chat_id))
+                conv = await db.get(Conversation, chat_id)
+                if conv:
+                    await db.delete(conv)
+                await db.commit()
+            cleared.append("main DB")
+        except Exception:
+            logger.exception("[telegram] Failed to clear main DB for %s", chat_id)
+
+        # 3. 重置外部记忆 provider session（Honcho 等）
+        try:
+            from lib.memory import get_memory_manager
+
+            manager = get_memory_manager()
+            await manager.on_session_switch(session_key, reset=True, old_session_id=session_key)
+            cleared.append("memory providers")
+        except Exception:
+            logger.exception("[telegram] Failed to reset memory providers for %s", session_key)
+
+        logger.info("[telegram] /clear completed for %s: %s", session_key, ", ".join(cleared))
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -228,7 +262,7 @@ class TelegramHandlers:
 
 
 def _auto_save_chat_id(chat_id: str) -> None:
-    """自动填充 telegram_chat_id（RSS 推送需要）。"""
+    """自动填充 telegram_chat_id，便于 Telegram 渠道后续主动推送使用。"""
     try:
         from core.config import load_user_config, save_user_config
 

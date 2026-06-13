@@ -9,6 +9,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
 from lib.memory.markdown import AsyncMarkdownStore
 from lib.memory.understanding import update_ai_understanding
 from lib.tools._base import ToolDef, ToolMeta, tool_error, tool_ok
@@ -19,10 +20,14 @@ logger = get_logger(__name__)
 _store = AsyncMarkdownStore()
 
 
-async def _bg_refresh_understanding(user_id: str) -> None:
+async def _bg_refresh_understanding(
+    user_id: str,
+    *,
+    exclude_conversation_id: str | None = None,
+) -> None:
     """后台刷新 USER.md，失败静默。"""
     try:
-        await update_ai_understanding(user_id)
+        await update_ai_understanding(user_id, exclude_conversation_id=exclude_conversation_id)
     except Exception as exc:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
@@ -90,19 +95,20 @@ async def _memory(args: dict[str, Any], ctx: Any = None):
         return tool_error("target 必须是 memory / user / partner")
 
     user_id = args.get("user_id")
+    conversation_id = getattr(ctx, "conversation_id", None) or ""
 
     if action == "add":
-        return await _memory_add(args)
+        return await _memory_add(args, conversation_id=conversation_id)
 
     # action == "replace" or "remove"
     old_text = args.get("old_text", "")
     if not old_text or not old_text.strip():
         return tool_error(f"{action} 操作必须提供 old_text 参数")
 
-    return await _memory_replace_remove(action, user_id, target, old_text, content)
+    return await _memory_replace_remove(action, user_id, target, old_text, content, conversation_id=conversation_id)
 
 
-async def _memory_add(args: dict[str, Any], ctx: Any = None) -> Any:
+async def _memory_add(args: dict[str, Any], ctx: Any = None, *, conversation_id: str = "") -> Any:
     """处理 add 操作。"""
     content = args.get("content", "")
     user_id = args.get("user_id")
@@ -167,8 +173,13 @@ async def _memory_add(args: dict[str, Any], ctx: Any = None) -> Any:
     # 触发 USER.md 刷新（后台，不阻塞）
     import asyncio as _asyncio
 
-    _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+    _asyncio.create_task(  # noqa: RUF006
+        _bg_refresh_understanding(user_id, exclude_conversation_id=conversation_id or None)
+    )
     _asyncio.create_task(_notify_memory_write("add", target, content, user_id, category=category))  # noqa: RUF006
+
+    # 使 system prompt 缓存失效，但保留当前 conversation 的缓存（会话冻结）
+    invalidate_system_prompt_cache(user_id, exclude_conversation_id=conversation_id)
 
     return tool_ok(f"已记录到 {target}", target=target)
 
@@ -179,6 +190,8 @@ async def _memory_replace_remove(
     target: str,
     old_text: str,
     new_content: str | None = None,
+    *,
+    conversation_id: str = "",
 ) -> Any:
     """处理 replace / remove 操作。
 
@@ -275,46 +288,21 @@ async def _memory_replace_remove(
         await _asyncio.to_thread(_release_file_lock, lock_fd, lock_path)
 
     # 触发 USER.md 刷新（后台，不阻塞）
-    _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+    _asyncio.create_task(  # noqa: RUF006
+        _bg_refresh_understanding(user_id, exclude_conversation_id=conversation_id or None)
+    )
 
     notify_content = new_content if action == "replace" else matched_line.strip()
     _asyncio.create_task(_notify_memory_write(action, target, notify_content or "", user_id))  # noqa: RUF006
+
+    # 使 system prompt 缓存失效，但保留当前 conversation 的缓存（会话冻结）
+    invalidate_system_prompt_cache(user_id, exclude_conversation_id=conversation_id)
 
     return tool_ok(result_msg, target=target, action=action)
 
 
 # 匹配记忆条目前缀的正则: "- 2026-05-26 — [category] "
 _MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2} — \[[^\]]+\] ")
-
-
-async def _focus_update(args: dict[str, Any], ctx: Any = None):
-    """更新 FOCUS.md 的当前关注列表。"""
-    topics = args.get("topics", [])
-    if not topics:
-        return tool_error("请提供关注点列表 (topics)")
-
-    if not isinstance(topics, list):
-        return tool_error("topics 必须是字符串列表")
-
-    # 过滤空字符串
-    topics = [t.strip() for t in topics if t and isinstance(t, str) and t.strip()]
-    if not topics:
-        return tool_error("关注点列表为空")
-
-    user_id = args.get("user_id")
-
-    # 构建 FOCUS.md 内容
-    lines = ["## 当前关注", ""]
-    for topic in topics:
-        lines.append(f"- {topic}")
-    lines.append("")  # 末尾换行
-    content = "\n".join(lines)
-
-    # 写入
-    await _store.write_focus(user_id, content)
-
-    logger.info("FOCUS.md 已更新", user_id=user_id, topics=topics)
-    return tool_ok(f"已更新当前关注: {', '.join(topics)}", topics=topics)
 
 
 def create_memory_tools() -> list[ToolDef]:
@@ -391,30 +379,5 @@ def create_memory_tools() -> list[ToolDef]:
             execute=_memory,
             read_only=False,
             meta=ToolMeta(always_on=True, risk="write", search_hint="保存记忆、记录、记住"),
-        ),
-        ToolDef(
-            name="focus_update",
-            description=(
-                "更新当前关注的话题列表。覆盖写入，之前的关注点会被替换。\n\n"
-                "WHEN TO USE:\n"
-                "- 用户说'我在关注 X''我在研究 Y''我在学 Z'\n"
-                "- 用户提到正在做的项目、学习方向\n"
-                "- 对话中发现用户当前的兴趣点\n\n"
-                "INPUT: topics 是字符串列表，每个元素是一个关注点。"
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "topics": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "当前关注点列表，如 ['Agent 记忆系统', 'PydanticAI', 'RSSHub']",
-                    },
-                },
-                "required": ["topics"],
-            },
-            execute=_focus_update,
-            read_only=False,
-            meta=ToolMeta(always_on=True, risk="write", search_hint="关注点、兴趣、研究方向、学习"),
         ),
     ]

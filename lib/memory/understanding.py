@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
 from lib.memory.markdown import AsyncMarkdownStore
 from shared.logging import get_logger
 
@@ -72,11 +73,19 @@ def _is_debounced(user_id: str) -> bool:
     return False
 
 
-async def update_ai_understanding(user_id: str) -> str:
+async def update_ai_understanding(
+    user_id: str,
+    *,
+    exclude_conversation_id: str | None = None,
+) -> str:
     """生成/更新 AI 综合画像。返回画像文本。
 
     防抖：同一 user_id 已有进行中的任务或最近更新过时不重复触发。
     成功后记录时间戳，失败不留时间戳（允许立即重试）。
+
+    Args:
+        user_id: 用户 ID
+        exclude_conversation_id: 失效缓存时要保留的 conversation ID（当前对话冻结）
     """
     store = AsyncMarkdownStore()
 
@@ -88,7 +97,7 @@ async def update_ai_understanding(user_id: str) -> str:
         # 双重检查：获取锁后可能已有新任务注册
         if _is_debounced(user_id):
             return await store.read_about_you(user_id)
-        task = asyncio.create_task(_do_update_understanding(user_id))
+        task = asyncio.create_task(_do_update_understanding(user_id, exclude_conversation_id=exclude_conversation_id))
         _PENDING_TASKS[user_id] = task
 
     try:
@@ -102,7 +111,11 @@ async def update_ai_understanding(user_id: str) -> str:
                 del _PENDING_TASKS[user_id]
 
 
-async def _do_update_understanding(user_id: str) -> str:
+async def _do_update_understanding(
+    user_id: str,
+    *,
+    exclude_conversation_id: str | None = None,
+) -> str:
     """执行实际的 LLM 画像生成（由 update_ai_understanding 的 protected task 调用）。"""
     store = AsyncMarkdownStore()
 
@@ -132,6 +145,10 @@ async def _do_update_understanding(user_id: str) -> str:
 
     await store.write_about_you(user_id, about_you_text)
     await _update_profile_data(user_id, about_you_text, patterns)
+
+    # USER.md 已更新，使该用户的 system prompt 缓存失效；保留当前对话缓存
+    # 以维持 conversation 级 system prompt 冻结和 prefix cache。
+    invalidate_system_prompt_cache(user_id, exclude_conversation_id=exclude_conversation_id)
 
     # 只在成功后才写入时间戳（允许失败立即重试）
     _LAST_UPDATE[user_id] = datetime.now(UTC)
@@ -164,7 +181,6 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
 
 示例：
 ## 稳定事实
-- 订阅了 12 个 RSS 源，覆盖技术与新闻 [来源: 2026-06-09 fact]
 - 有强直性脊柱炎，但明确说不疼 [来源: 2026-06-10 fact]
 
 ## 偏好

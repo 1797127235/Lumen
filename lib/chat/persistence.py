@@ -129,8 +129,6 @@ async def save_user_message(
     user_id: str,
 ) -> bool:
     """保存用户消息到 ORM（API 显示层）。"""
-    from lib.partner.presence import record_user_message
-
     db.add(
         Message(
             conversation_id=conv.conversation_id,
@@ -141,9 +139,6 @@ async def save_user_message(
     )
     conv.message_count = (conv.message_count or 0) + 1
     conv.last_message_at = datetime.now(UTC)
-
-    # 更新 presence：记录用户最后活跃时间（ProactiveScheduler 门控依赖此字段）
-    await record_user_message(db, user_id)
 
     try:
         await db.commit()

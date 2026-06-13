@@ -639,7 +639,6 @@ def create_shell_tools() -> list[ToolDef]:
                 "在系统 shell 中执行命令并返回输出。\n\n"
                 "适用场景：安装依赖、运行测试、启动服务、查看进程、git 操作、系统管理。\n\n"
                 "⚠️ 不适用场景（有专用工具，不要用 shell 替代）：\n"
-                "- 查询 RSS 内容 → 用 rss_list_items\n"
                 "- 搜索文件内容 → 用 file_grep\n"
                 "- 读取文件 → 用 file_read\n"
                 "- 查询数据库 → 如果有专用工具就用专用工具\n\n"

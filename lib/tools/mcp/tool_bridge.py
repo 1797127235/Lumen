@@ -51,6 +51,21 @@ def discover_mcp_tools() -> list[tuple[str, ToolDef]]:
 def _make_handler(server_name: str, tool_name: str):
     async def handler(args: dict[str, Any], ctx: Any = None):
         manager = get_mcp_manager()
-        return await manager.call_tool(server_name, tool_name, args)
+        # 只传递工具 schema 中定义的参数，剔除 Lumen 注入的会话上下文字段
+        cleaned = {
+            k: v
+            for k, v in args.items()
+            if k
+            not in {
+                "user_id",
+                "conversation_id",
+                "workspace_root",
+                "db",
+                "source_platform",
+                "progress_emitter",
+                "description",
+            }
+        }
+        return await manager.call_tool(server_name, tool_name, cleaned)
 
     return handler

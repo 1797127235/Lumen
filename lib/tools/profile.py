@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
 from lib.memory.markdown import AsyncMarkdownStore, _dump_frontmatter, _parse_frontmatter
 from lib.memory.understanding import update_ai_understanding
 from lib.tools._base import ToolDef, ToolMeta, tool_ok
@@ -34,10 +35,14 @@ _PROFILE_FIELDS = {
 }
 
 
-async def _bg_refresh_understanding(user_id: str) -> None:
+async def _bg_refresh_understanding(
+    user_id: str,
+    *,
+    exclude_conversation_id: str | None = None,
+) -> None:
     """后台刷新 USER.md，失败静默。"""
     try:
-        await update_ai_understanding(user_id)
+        await update_ai_understanding(user_id, exclude_conversation_id=exclude_conversation_id)
     except Exception as exc:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
@@ -75,6 +80,7 @@ async def _get_profile(args: dict[str, Any], ctx: Any = None):
 async def _update_profile(args: dict[str, Any], ctx: Any = None):
     """更新结构化画像（覆盖 frontmatter 字段）。"""
     user_id = args.get("user_id")
+    conversation_id = getattr(ctx, "conversation_id", None) or ""
 
     # 提取传入的字段（支持 null 清空）
     updates: dict[str, Any] = {}
@@ -128,11 +134,16 @@ async def _update_profile(args: dict[str, Any], ctx: Any = None):
 
     await _store.write_about_you(user_id, new_content)
 
+    # 使 system prompt 缓存失效，但保留当前 conversation 的缓存（会话冻结）
+    invalidate_system_prompt_cache(user_id, exclude_conversation_id=conversation_id)
+
     # 触发 USER.md 刷新（后台，不阻塞）
     import asyncio
     import json
 
-    asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+    asyncio.create_task(  # noqa: RUF006
+        _bg_refresh_understanding(user_id, exclude_conversation_id=conversation_id or None)
+    )
 
     # 镜像写入事件给外部 memory provider
     try:

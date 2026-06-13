@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
@@ -99,3 +100,86 @@ async def test_provider_prefetch_without_engine_returns_empty():
     provider = Provider()
     text = await provider.prefetch("test")
     assert text == ""
+
+
+@pytest.mark.asyncio
+async def test_sync_turn_uses_passed_arguments():
+    """sync_turn 必须直接使用接口传入的 user/assistant，不反向查询宿主数据库。"""
+    provider = Provider()
+    provider._engine = AsyncMock()
+    provider._engine.next_turn_seq = Mock(return_value=0)
+
+    await provider.sync_turn("user text", "assistant text", session_id="web:abc")
+
+    provider._engine.next_turn_seq.assert_called_once_with("web:abc")
+    provider._engine.commit_turn.assert_awaited_once_with(
+        session_key="web:abc",
+        user_msg="user text",
+        assistant_msg="assistant text",
+        user_msg_id="web:abc:u:0",
+        assistant_msg_id="web:abc:a:0",
+        seq=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_commit_turn_merges_user_and_assistant_into_one_node(fake_embedder, temp_db_path):
+    """一个 turn 的 user 和 assistant 必须合并为同一个节点，不覆盖其他 turn。"""
+    engine = AkashaEngine(
+        user_id="demo",
+        config={"db_path": str(temp_db_path)},
+        embedder=fake_embedder,
+    )
+    try:
+        await engine.commit_turn(
+            session_key="sess1",
+            user_msg="hello",
+            assistant_msg="hi there",
+            user_msg_id="u1",
+            assistant_msg_id="a1",
+            seq=0,
+        )
+        await engine.commit_turn(
+            session_key="sess1",
+            user_msg="how are you",
+            assistant_msg="I am fine",
+            user_msg_id="u2",
+            assistant_msg_id="a2",
+            seq=1,
+        )
+
+        nodes = engine._store.list_nodes()
+        session_nodes = [n for n in nodes if n.session_key == "sess1"]
+        assert len(session_nodes) == 2
+        assert {n.key for n in session_nodes} == {"sess1:0", "sess1:1"}
+    finally:
+        engine.close()
+
+
+@pytest.mark.asyncio
+async def test_idf_based_on_turn_content(fake_embedder, temp_db_path):
+    """IDF 必须基于 Akasha 自己的 akasha_turn_content 计算，而不是 sessions.db。"""
+    engine = AkashaEngine(
+        user_id="demo",
+        config={"db_path": str(temp_db_path)},
+        embedder=fake_embedder,
+    )
+    try:
+        await engine.commit_turn(
+            session_key="sess1",
+            user_msg="Python programming language",
+            assistant_msg="Python is great",
+            user_msg_id="u1",
+            assistant_msg_id="a1",
+            seq=0,
+        )
+
+        from lib.memory.builtins.akasha.core import build_idf_table, load_idf_from_db
+
+        conn = engine._store.raw_connection()
+        idf = build_idf_table(conn)
+        assert "python" in idf
+        loaded = load_idf_from_db(conn)
+        assert "python" in loaded
+    finally:
+        engine.close()

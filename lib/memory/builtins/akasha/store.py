@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 import uuid
@@ -125,6 +126,24 @@ CREATE TABLE IF NOT EXISTS akasha_turn_content (
     assistant_preview  TEXT NOT NULL,
     updated_at         TEXT NOT NULL
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS akasha_turn_content_fts USING fts5(
+    content,
+    content='akasha_turn_content',
+    content_rowid='rowid',
+    tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS akasha_turn_content_ai AFTER INSERT ON akasha_turn_content BEGIN
+    INSERT INTO akasha_turn_content_fts(rowid, content) VALUES (new.rowid, new.user_message);
+END;
+CREATE TRIGGER IF NOT EXISTS akasha_turn_content_ad AFTER DELETE ON akasha_turn_content BEGIN
+    INSERT INTO akasha_turn_content_fts(akasha_turn_content_fts, rowid, content)
+    VALUES('delete', old.rowid, old.user_message);
+END;
+CREATE TRIGGER IF NOT EXISTS akasha_turn_content_au AFTER UPDATE ON akasha_turn_content BEGIN
+    INSERT INTO akasha_turn_content_fts(akasha_turn_content_fts, rowid, content)
+    VALUES('delete', old.rowid, old.user_message);
+    INSERT INTO akasha_turn_content_fts(rowid, content) VALUES (new.rowid, new.user_message);
+END;
 CREATE TABLE IF NOT EXISTS akasha_migration_runs (
     id               TEXT PRIMARY KEY,
     source_db_path   TEXT NOT NULL,
@@ -203,6 +222,10 @@ class AkashaStore:
         self._db.close()
         self._closed = True
 
+    # 返回底层 sqlite3 连接，用于初始化等需要直接操作 schema 的场景。
+    def raw_connection(self) -> sqlite3.Connection:
+        return self._db
+
     # 确保 Akasha schema 存在。
     def ensure_schema(self) -> None:
         # 1. schema 可重复执行，用于启动和迁移前检查。
@@ -212,6 +235,9 @@ class AkashaStore:
             if "message_count" not in _table_columns(self._db, "akasha_migration_runs"):
                 _ = self._db.execute("DROP TABLE IF EXISTS akasha_migration_runs")
             _ = self._db.executescript(SCHEMA)
+            # 2. 重建 FTS 索引以覆盖已有数据（幂等，启动时执行一次）。
+            with contextlib.suppress(sqlite3.OperationalError):
+                _ = self._db.execute("INSERT INTO akasha_turn_content_fts(akasha_turn_content_fts) VALUES('rebuild')")
             self._db.commit()
 
     # 清空并重建 Akasha 状态表。
@@ -221,6 +247,16 @@ class AkashaStore:
             _ = self._db.executescript(RESET_SQL)
             _ = self._db.executescript(SCHEMA)
             self._db.commit()
+
+    # 获取指定 session 的下一个 turn seq。
+    def next_turn_seq(self, session_key: str) -> int:
+        """返回该 session 下一个可用的 turn seq（从 0 开始）。"""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COALESCE(MAX(turn_seq), -1) + 1 AS next_seq FROM akasha_nodes WHERE session_key = ?",
+                (session_key,),
+            ).fetchone()
+        return int(row["next_seq"] if row else 0)
 
     # 写入或更新一轮对话的原文内容（用于召回展示）。
     def upsert_turn_content(

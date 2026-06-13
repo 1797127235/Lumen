@@ -161,7 +161,6 @@ def write_about_you(user_id: str, content: str, *, event_count: int = 0) -> None
 _MD_CHAR_LIMITS: dict[str, int] = {
     "memory": 2200,
     "about_you": 1375,
-    "focus": 500,
     "partner": 800,
 }
 
@@ -474,34 +473,6 @@ class AsyncMarkdownStore:
                 await self._write_atomic(self._memory_path(user_id), "")
                 await self._write_atomic(self._about_you_path(user_id), "")
                 await self._write_atomic(self._partner_path(user_id), "")
-            finally:
-                await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
-
-    # ── FOCUS.md（当前关注）──
-
-    def _focus_path(self, user_id: str) -> Path:
-        return self._user_dir(user_id) / "FOCUS.md"
-
-    async def read_focus(self, user_id: str) -> str:
-        """读取 FOCUS.md 内容。文件不存在时返回空字符串。"""
-        return await self._read(self._focus_path(user_id))
-
-    async def write_focus(self, user_id: str, content: str) -> None:
-        """覆写 FOCUS.md（原子写入 + 安全扫描 + 字符限制）。"""
-        safe, reason = _scan_memory_content(content)
-        if not safe:
-            logger.warning("FOCUS.md 写入被拒绝", user_id=user_id, reason=reason)
-            return
-
-        limit = _MD_CHAR_LIMITS["focus"]
-        if len(content) > limit:
-            content = _truncate_to_limit(content, limit)
-            logger.warning("FOCUS.md 超限截断", user_id=user_id, limit=limit)
-
-        async with self._locks[user_id]:
-            lock_fd = await asyncio.to_thread(_acquire_file_lock, self._lock_path(user_id))
-            try:
-                await self._write_atomic(self._focus_path(user_id), content)
             finally:
                 await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
 

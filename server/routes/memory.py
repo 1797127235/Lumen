@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from lib.agent.system_prompt_builder import invalidate_system_prompt_cache
 from lib.memory.markdown import AsyncMarkdownStore, ensure_memory_dirs, memory_dir
 from shared.logging import get_logger
 
@@ -96,6 +97,7 @@ async def put_my_memory(
     content = body.get("content", "")
     try:
         await _store.write_memory(user_id, content)
+        invalidate_system_prompt_cache(user_id)
         return {"message": "已保存", "chars": len(content)}
     except Exception as exc:
         logger.exception("Write memory failed: user_id=%s", user_id)
@@ -124,6 +126,7 @@ async def put_partner_rules(
     content = body.get("content", "")
     try:
         await _store.write_partner(user_id, content)
+        invalidate_system_prompt_cache(user_id)
         return {"message": "已保存", "chars": len(content)}
     except Exception as exc:
         logger.exception("Write partner rules failed: user_id=%s", user_id)
@@ -151,6 +154,7 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
     _validate_user_id(user_id)
     try:
         await _store.reset_user_memory(user_id)
+        invalidate_system_prompt_cache(user_id)
         return MemoryResetResponse(deleted=0, index_cleared=True)
     except Exception as exc:
         logger.error("Memory reset failed: %s", exc)
@@ -198,6 +202,7 @@ async def correct_ai_understanding(
         from lib.memory.understanding import _update_profile_data
 
         await _update_profile_data(user_id, corrected_text)
+        invalidate_system_prompt_cache(user_id)
         return {"message": "已更新", "chars": len(corrected_text)}
     except Exception as exc:
         logger.error("AI understanding correct failed: %s", exc)
@@ -227,6 +232,7 @@ async def tell_ai(
         with contextlib.suppress(Exception):
             await update_ai_understanding(user_id)
 
+        invalidate_system_prompt_cache(user_id)
         return {"message": "已记录"}
     except Exception as exc:
         logger.error("tell_ai failed: %s", exc)

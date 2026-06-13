@@ -147,9 +147,9 @@ class MemoryManager:
         """
         parts: list[str] = []
 
-        # 当前日期（只保留日期，不带时分，避免破坏 prefix cache）
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
-        parts.append(f"Current date: {today}")
+        # 当前日期时间（带时分，让模型感知时段；context_frame 每轮动态，不影响 system prompt prefix cache）
+        now = datetime.now(UTC)
+        parts.append(f"Current date/time: {now.strftime('%Y-%m-%d %H:%M')} UTC")
 
         # 外部 provider prefetch
         if user_input:
@@ -294,6 +294,21 @@ class MemoryManager:
             except Exception as exc:
                 logger.debug(
                     "on_session_end 失败",
+                    provider=provider.display_name,
+                    error=str(exc),
+                )
+
+    async def on_session_switch(self, new_session_id: str, *, reset: bool = False, **kwargs: Any) -> None:
+        """转发 session 切换/重置到所有 provider。
+
+        reset=True 时各 provider 应清除该 session 的外部状态。
+        """
+        for provider in self._providers.values():
+            try:
+                await provider.on_session_switch(new_session_id, reset=reset, **kwargs)
+            except Exception as exc:
+                logger.debug(
+                    "on_session_switch 失败",
                     provider=provider.display_name,
                     error=str(exc),
                 )

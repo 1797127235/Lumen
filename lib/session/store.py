@@ -58,10 +58,11 @@ class SessionStore:
     def _ensure_session_columns(self) -> None:
         rows = self._conn.execute("PRAGMA table_info(sessions)").fetchall()
         existing = {str(row["name"]) for row in rows}
-        if "last_user_at" not in existing:
-            self._conn.execute("ALTER TABLE sessions ADD COLUMN last_user_at TEXT")
-        if "last_proactive_at" not in existing:
-            self._conn.execute("ALTER TABLE sessions ADD COLUMN last_proactive_at TEXT")
+        # 移除已退役的 RSS/主动推送相关列
+        for col in ("last_user_at", "last_proactive_at"):
+            if col in existing:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(f"ALTER TABLE sessions DROP COLUMN {col}")
         if "next_seq" not in existing:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 0")
 
@@ -184,7 +185,7 @@ class SessionStore:
     def get_session_meta(self, key: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT key, created_at, updated_at, last_consolidated, metadata, last_user_at, last_proactive_at FROM sessions WHERE key = ?",
+                "SELECT key, created_at, updated_at, last_consolidated, metadata FROM sessions WHERE key = ?",
                 (key,),
             ).fetchone()
         if row is None:
@@ -195,14 +196,12 @@ class SessionStore:
             "updated_at": row["updated_at"],
             "last_consolidated": int(row["last_consolidated"] or 0),
             "metadata": json.loads(row["metadata"] or "{}"),
-            "last_user_at": row["last_user_at"],
-            "last_proactive_at": row["last_proactive_at"],
         }
 
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute("""
-                SELECT key, created_at, updated_at, last_user_at, last_proactive_at
+                SELECT key, created_at, updated_at
                 FROM sessions
                 ORDER BY updated_at DESC
                 """).fetchall()
@@ -211,8 +210,6 @@ class SessionStore:
                 "key": str(row["key"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-                "last_user_at": row["last_user_at"],
-                "last_proactive_at": row["last_proactive_at"],
             }
             for row in rows
         ]
@@ -224,7 +221,6 @@ class SessionStore:
         channel: str = "",
         updated_from: str = "",
         updated_to: str = "",
-        has_proactive: bool | None = None,
         page: int = 1,
         page_size: int = 50,
         sort_by: str = "updated_at",
@@ -239,8 +235,6 @@ class SessionStore:
             in {
                 "updated_at",
                 "created_at",
-                "last_user_at",
-                "last_proactive_at",
             }
             else "updated_at"
         )
@@ -262,10 +256,6 @@ class SessionStore:
         if updated_to:
             where_parts.append("s.updated_at <= ?")
             params.append(updated_to)
-        if has_proactive is True:
-            where_parts.append("s.last_proactive_at IS NOT NULL")
-        if has_proactive is False:
-            where_parts.append("s.last_proactive_at IS NULL")
 
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         count_sql = f"""
@@ -280,8 +270,6 @@ class SessionStore:
                 s.updated_at,
                 s.last_consolidated,
                 s.metadata,
-                s.last_user_at,
-                s.last_proactive_at,
                 COALESCE(msg.message_count, 0) AS message_count
             FROM sessions s
             LEFT JOIN (
@@ -307,8 +295,6 @@ class SessionStore:
                 "updated_at": row["updated_at"],
                 "last_consolidated": int(row["last_consolidated"] or 0),
                 "metadata": json.loads(row["metadata"] or "{}"),
-                "last_user_at": row["last_user_at"],
-                "last_proactive_at": row["last_proactive_at"],
                 "message_count": int(row["message_count"] or 0),
             }
             for row in rows
@@ -320,8 +306,6 @@ class SessionStore:
         key: str,
         metadata: dict[str, Any] | None = None,
         last_consolidated: int = 0,
-        last_user_at: str | None = None,
-        last_proactive_at: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now().astimezone().isoformat()
         payload = json.dumps(metadata or {}, ensure_ascii=False)
@@ -333,11 +317,9 @@ class SessionStore:
                     created_at,
                     updated_at,
                     last_consolidated,
-                    metadata,
-                    last_user_at,
-                    last_proactive_at
+                    metadata
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     key,
@@ -345,8 +327,6 @@ class SessionStore:
                     now,
                     int(last_consolidated),
                     payload,
-                    last_user_at,
-                    last_proactive_at,
                 ),
             )
             self._conn.commit()
@@ -361,8 +341,6 @@ class SessionStore:
         *,
         metadata: dict[str, Any] | None = None,
         last_consolidated: int | None = None,
-        last_user_at: str | None = None,
-        last_proactive_at: str | None = None,
     ) -> dict[str, Any] | None:
         set_parts = ["updated_at = ?"]
         params: list[Any] = [datetime.now().astimezone().isoformat()]
@@ -372,12 +350,6 @@ class SessionStore:
         if last_consolidated is not None:
             set_parts.append("last_consolidated = ?")
             params.append(int(last_consolidated))
-        if last_user_at is not None:
-            set_parts.append("last_user_at = ?")
-            params.append(last_user_at)
-        if last_proactive_at is not None:
-            set_parts.append("last_proactive_at = ?")
-            params.append(last_proactive_at)
         params.append(key)
         with self._lock:
             cur = self._conn.execute(
@@ -440,79 +412,6 @@ class SessionStore:
             )
             self._conn.commit()
         return int(cur.rowcount or 0)
-
-    def update_presence(
-        self,
-        key: str,
-        *,
-        last_user_at: str | None = None,
-        last_proactive_at: str | None = None,
-    ) -> None:
-        now = datetime.now().astimezone().isoformat()
-        with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO sessions (
-                    key,
-                    created_at,
-                    updated_at,
-                    last_consolidated,
-                    metadata,
-                    last_user_at,
-                    last_proactive_at
-                )
-                VALUES (?, ?, ?, 0, '{}', ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    updated_at = excluded.updated_at,
-                    last_user_at = COALESCE(excluded.last_user_at, sessions.last_user_at),
-                    last_proactive_at = COALESCE(excluded.last_proactive_at, sessions.last_proactive_at)
-                """,
-                (key, now, now, last_user_at, last_proactive_at),
-            )
-            self._conn.commit()
-
-    def get_presence(self, key: str) -> dict[str, str | None] | None:
-        with self._lock:
-            row = self._conn.execute(
-                """
-                SELECT last_user_at, last_proactive_at
-                FROM sessions
-                WHERE key = ?
-                """,
-                (key,),
-            ).fetchone()
-        if row is None:
-            return None
-        return {
-            "last_user_at": row["last_user_at"],
-            "last_proactive_at": row["last_proactive_at"],
-        }
-
-    def list_presence(self) -> dict[str, dict[str, str | None]]:
-        with self._lock:
-            rows = self._conn.execute("""
-                SELECT key, last_user_at, last_proactive_at
-                FROM sessions
-                WHERE last_user_at IS NOT NULL OR last_proactive_at IS NOT NULL
-                """).fetchall()
-        return {
-            str(row["key"]): {
-                "last_user_at": row["last_user_at"],
-                "last_proactive_at": row["last_proactive_at"],
-            }
-            for row in rows
-        }
-
-    def most_recent_user_at(self) -> str | None:
-        with self._lock:
-            row = self._conn.execute("""
-                SELECT MAX(last_user_at) AS last_user_at
-                FROM sessions
-                WHERE last_user_at IS NOT NULL
-                """).fetchone()
-        if row is None:
-            return None
-        return row["last_user_at"]
 
     def get_channel_metadata(self, channel: str) -> list[dict[str, Any]]:
         like_key = f"{channel}:%"

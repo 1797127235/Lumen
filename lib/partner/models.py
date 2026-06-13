@@ -22,17 +22,6 @@ class LumenState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class LumenPresence(Base):
-    __tablename__ = "lumen_presence"
-
-    user_id: Mapped[str] = mapped_column(String, primary_key=True, default="demo_user")
-    last_user_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_proactive_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    proactive_sent_24h: Mapped[int] = mapped_column(Integer, default=0)
-    followup_due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
-
-
 class LumenThought(Base):
     __tablename__ = "lumen_thoughts"
 

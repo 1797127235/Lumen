@@ -13,21 +13,23 @@ from lib.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
 
-_TOOL_RESULT_CHAR_BUDGET = 10000
+_TOOL_RESULT_CHAR_BUDGET = 3000
+_TOOL_RESULT_HISTORY_CHAR_BUDGET = 1500
+_ASSISTANT_HISTORY_CHAR_BUDGET = 800
 _PROACTIVE_HISTORY_CHAR_BUDGET = 360
 _PROACTIVE_META_HISTORY_CHAR_BUDGET = 1200
 _CONTEXT_CACHE_KEEP_MESSAGES = 20
 _CONTEXT_CACHE_PRUNE_TRIGGER = 60
 
 
-def _truncate_tool_result(content: object) -> str:
+def _truncate_tool_result(content: object, budget: int = _TOOL_RESULT_CHAR_BUDGET) -> str:
     text = content if isinstance(content, str) else str(content)
-    if len(text) <= _TOOL_RESULT_CHAR_BUDGET:
+    if len(text) <= budget:
         return text
-    omitted = len(text) - _TOOL_RESULT_CHAR_BUDGET
+    omitted = len(text) - budget
     while True:
         marker = f"…{omitted} chars truncated…"
-        keep = max(0, _TOOL_RESULT_CHAR_BUDGET - len(marker))
+        keep = max(0, budget - len(marker))
         actual_omitted = len(text) - keep
         if actual_omitted == omitted:
             break
@@ -200,8 +202,19 @@ class Session:
             messages = []
         else:
             messages = self.messages[-max_messages:]
+        # 每轮 user 消息都原样回放当时的 llm_context_frame。这看似冗余，但为 DeepSeek 的
+        # prefix prompt cache 提供了稳定前缀：当前轮 context_frame 与历史 context_frame
+        # 前缀对齐，cache_write 只需支付最新差异部分。
         out: list[dict[str, Any]] = []
-        for m in messages:
+
+        # 最后一条 assistant 消息视为“当前轮”，其 tool result 保留完整预算；
+        # 更早的 assistant 消息都是历史轮，tool result 激进截断以控制 input 增长。
+        last_assistant_index = -1
+        for i, m in enumerate(messages):
+            if m.get("role") == "assistant" and not m.get("proactive"):
+                last_assistant_index = i
+
+        for i, m in enumerate(messages):
             role = m.get("role")
 
             if role == "user":
@@ -223,6 +236,10 @@ class Session:
             if m.get("proactive"):
                 out.extend(_build_proactive_history_messages(str(content), m))
                 continue
+
+            # 历史轮 tool result 用更小预算，当前轮保留完整
+            is_current_assistant = i == last_assistant_index
+            tool_budget = _TOOL_RESULT_CHAR_BUDGET if is_current_assistant else _TOOL_RESULT_HISTORY_CHAR_BUDGET
 
             tool_chain: list[dict] = m.get("tool_chain") or []
             for group in tool_chain:
@@ -253,12 +270,15 @@ class Session:
                         {
                             "role": "tool",
                             "tool_call_id": c["call_id"],
-                            "content": _truncate_tool_result(c.get("result", "")),
+                            "content": _truncate_tool_result(c.get("result", ""), budget=tool_budget),
                         }
                     )
 
             if content:
                 content = _append_proactive_meta(content, m)
+            # 历史轮 assistant 回复截断，控制 input 增长；当前轮保留完整
+            if not is_current_assistant and len(content) > _ASSISTANT_HISTORY_CHAR_BUDGET:
+                content = content[:_ASSISTANT_HISTORY_CHAR_BUDGET] + "\n\n…（历史回复已截断）"
             assistant_msg = {"role": "assistant", "content": content}
             reasoning_content = m.get("reasoning_content")
             if isinstance(reasoning_content, str):

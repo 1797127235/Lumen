@@ -1,11 +1,13 @@
-"""Agent 系统提示快照 — 分层注入（固定块 + 近期上下文）。
+"""Agent 近期对话上下文快照 — L1 only。
 
-L0 固定块：用户画像聚合（USER.md / MEMORY.md）
-L1 近期上下文：最近对话的摘要（Conversation + Message，非原始事件）
+Phase 1 改造后，L0 固定块（用户画像 + PARTNER.md）已移入 system prompt 的
+context suffix，由 lib/agent/system_prompt_builder.py 按用户缓存。
 
-Hermes-Pure 架构下，snapshot.py 作为薄封装层：
-- L0 委托给 BuiltinMemoryProvider（通过 MemoryManager）
-- L1 保留原有对话查询逻辑
+本模块只负责：
+- L1 近期上下文：最近对话的摘要（Conversation + Message，非原始事件）
+
+通过 `set_conversation_fetcher()` 由 chat 模块注入自定义查询逻辑，
+解耦 memory 与 chat 模块的 ORM 模型。
 """
 
 from __future__ import annotations
@@ -16,9 +18,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
-
-from core.db import get_async_session_maker
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,8 +27,26 @@ _CONTEXT_MAX_MESSAGES_PER_CONV = 3
 _CONTEXT_MAX_AGE_DAYS = 7
 _CONTEXT_MAX_CHARS = 600
 
+# L1 摘要化配置：当原始内容超过阈值时，调用 LLM 压缩成一段摘要
+_SUMMARIZE_THRESHOLD_TOKENS = 350
+_SUMMARY_MAX_TOKENS = 180
+_SUMMARY_MAX_CHARS = 450
+
 _CACHE_TTL_MINUTES = 30
 _MAX_CACHE_SIZE = 100
+
+
+# ── token 估算（轻量，避免引入 tiktoken）────────────────────────────
+
+
+def _estimate_tokens(text: str) -> int:
+    """粗略估算 token 数：中文按 2 字符/token，其他按 4 字符/token。"""
+    if not text:
+        return 0
+    # 简单按字符加权：中文字符计 1/2，其他计 1/4
+    cn_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+    other_chars = len(text) - cn_chars
+    return max(1, cn_chars // 2 + other_chars // 4)
 
 
 @dataclass
@@ -88,192 +105,13 @@ async def invalidate_cache(user_id: str) -> None:
         _static_cache.pop(user_id, None)
 
 
-# ── L0: 固定块（数据源 = about_you.md / memory.md）────────────────
-
-_MIN_ABOUT_YOU_CHARS = 30
-
-
-async def _build_fixed_block(user_id: str, nickname: str | None = None) -> str:
-    """L0 固定块：同时注入 USER.md + MEMORY.md。
-
-    由 BuiltinMemoryProvider 读取文件内容。
-    """
-    from lib.memory import get_memory_manager
-
-    parts: list[str] = []
-    if nickname:
-        parts.append(f"【用户称呼】你可以称呼用户为「{nickname}」，但不必每次都叫。")
-
-    manager = get_memory_manager()
-    l0_block = await manager.build_system_prompt(user_id=user_id)
-    l0_block = _strip_meta(l0_block)
-
-    if l0_block and _has_substantive_content(l0_block):
-        parts.append(f"## AI 对你的理解\n{l0_block.strip()}")
-
-    return "\n\n".join(parts) if parts else ""
+# ═══════════════════════════════════════════════════════════════════
+#  L1: 近期对话上下文
+# ═══════════════════════════════════════════════════════════════════
 
 
-def _strip_meta(text: str) -> str:
-    """移除元数据注释行。"""
-
-    lines = text.splitlines()
-    filtered: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("<!--") and stripped.endswith("-->"):
-            continue
-        if stripped.startswith("<!--"):
-            continue
-        filtered.append(line)
-    return "\n".join(filtered)
-
-
-def _has_substantive_content(text: str) -> bool:
-    """判断文本是否有实质内容（非纯模板占位符）。"""
-    import re as _re
-
-    text = text.strip()
-    if len(text) <= _MIN_ABOUT_YOU_CHARS:
-        return False
-    stripped = _re.sub(r"（待填写）", "", text)
-    stripped = _re.sub(r"_暂无记录_", "", stripped)
-    stripped = stripped.strip()
-    return len(stripped) > _MIN_ABOUT_YOU_CHARS
-
-
-# ── L1: 近期上下文（数据源 = Conversation + Message，通过依赖注入解耦）──
-
-
-def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[str]]:
-    """从最近对话中提取上下文摘要。
-
-    与 L0 不同：L0 来自 USER.md + MEMORY.md（「用户是谁」），
-    L1 从对话记录提取「最近在聊什么」— 数据源分离，避免重复注入。
-    """
-    if not contexts:
-        return "", set()
-
-    lines: list[str] = ["## 近期对话"]
-    conv_ids: set[str] = set()
-    total_chars = 0
-
-    for ctx in contexts:
-        if total_chars >= _CONTEXT_MAX_CHARS:
-            break
-
-        msgs = ctx.messages
-        if not msgs:
-            continue
-
-        title = ctx.title
-        if not title:
-            user_msgs = [m for m in msgs if m.get("role") == "user"]
-            if user_msgs:
-                title = (user_msgs[0].get("content") or "")[:40]
-            else:
-                title = "未命名对话"
-
-        if ctx.summary:
-            line = f"- **{title}**：{ctx.summary[:80]}"
-        else:
-            msg_parts: list[str] = []
-            for msg in msgs[:_CONTEXT_MAX_MESSAGES_PER_CONV]:
-                content = msg.get("content")
-                if content:
-                    role_label = "用户" if msg.get("role") == "user" else "AI"
-                    msg_parts.append(f"{role_label}：{content[:50]}")
-            content_hint = "；".join(msg_parts)
-            line = f"- **{title}**：{content_hint[:80]}" if content_hint else f"- **{title}**"
-
-        if len(line) > 120:
-            line = line[:117] + "…"
-
-        lines.append(line)
-        conv_ids.add(ctx.conversation_id)
-        total_chars += len(line)
-
-    if len(lines) <= 1:
-        return "", set()
-
-    return "\n".join(lines), conv_ids
-
-
-async def _default_fetch_recent_conversations(user_id: str, db) -> list[ConversationContext]:
-    """默认 fetcher：延迟导入 chat 模型，转换为 ConversationContext。"""
-    cutoff = datetime.now(UTC) - timedelta(days=_CONTEXT_MAX_AGE_DAYS)
-
-    from lib.chat.models import Conversation, Message
-
-    conv_stmt = (
-        select(Conversation)
-        .where(
-            Conversation.user_id == user_id,
-            Conversation.status == "active",
-            Conversation.last_message_at >= cutoff,
-        )
-        .order_by(Conversation.last_message_at.desc())
-        .limit(_CONTEXT_MAX_CONVERSATIONS)
-    )
-    conv_result = await db.execute(conv_stmt)
-    conversations = list(conv_result.scalars().all())
-
-    if not conversations:
-        return []
-
-    conv_ids = [c.conversation_id for c in conversations]
-    msg_stmt = select(Message).where(Message.conversation_id.in_(conv_ids)).order_by(Message.created_at.desc())
-    msg_result = await db.execute(msg_stmt)
-    all_messages = list(msg_result.scalars().all())
-
-    messages_by_conv: dict[str, list[Message]] = {}
-    for msg in all_messages:
-        msgs = messages_by_conv.setdefault(msg.conversation_id, [])
-        if len(msgs) < _CONTEXT_MAX_MESSAGES_PER_CONV:
-            msgs.append(msg)
-
-    contexts: list[ConversationContext] = []
-    for conv in conversations:
-        msgs = messages_by_conv.get(conv.conversation_id, [])
-        contexts.append(
-            ConversationContext(
-                conversation_id=conv.conversation_id,
-                title=conv.title,
-                summary=conv.summary,
-                messages=[{"role": m.role, "content": m.content or ""} for m in msgs],
-            )
-        )
-
-    return contexts
-
-
-async def _fetch_recent_conversations(user_id: str, db) -> list[ConversationContext]:
-    """获取近期对话上下文。
-
-    优先使用注入的 fetcher，未注入时使用默认实现（延迟导入 chat 模型）。
-    """
-    if _conversation_fetcher is not None:
-        return await _conversation_fetcher(user_id, db)
-    return await _default_fetch_recent_conversations(user_id, db)
-
-
-# ── 构建快照 ──────────────────────────────────────────────────────
-
-
-async def _evict_expired_cache() -> None:
-    """驱逐所有过期的缓存条目（定期清理，防止内存泄漏）。"""
-    now = datetime.now(UTC)
-    async with _cache_lock:
-        expired = [k for k, v in _static_cache.items() if (now - v.created_at) >= timedelta(minutes=_CACHE_TTL_MINUTES)]
-        for k in expired:
-            del _static_cache[k]
-
-
-async def build_snapshot(user_id: str) -> str:
-    """构建用户画像快照（L0 + L1）。
-
-    Hermes-Pure 架构下保留为兼容层，内部使用 MemoryManager 获取 L0。
-    """
+async def build_recent_context(user_id: str) -> str:
+    """构建 L1 近期对话上下文摘要。"""
     await _evict_expired_cache()
     async with _cache_lock:
         cached = _static_cache.get(user_id)
@@ -281,38 +119,191 @@ async def build_snapshot(user_id: str) -> str:
             cached.last_accessed = datetime.now(UTC)
             return cached.content
 
-    # 查询用户 nickname + 近期对话
-    nickname: str | None = None
+    # 查询近期对话
+    contexts: list[ConversationContext] = []
     try:
-        from lib.profile.models import User
+        if _conversation_fetcher is not None:
+            from core.db import get_async_session_maker
 
-        async with get_async_session_maker()() as db:
-            user_result = await db.execute(select(User).where(User.user_id == user_id))
-            user_obj = user_result.scalar_one_or_none()
-            if user_obj:
-                nickname = user_obj.nickname
-            contexts = await _fetch_recent_conversations(user_id, db)
+            async with get_async_session_maker()() as db:
+                contexts = await _conversation_fetcher(user_id, db)
+        else:
+            contexts = await _fetch_recent_conversations_default(user_id)
     except Exception:
+        logger.debug("build_recent_context failed", user_id=user_id)
         contexts = []
-
-    fixed_block = await _build_fixed_block(user_id, nickname)
-
-    if not fixed_block and not contexts:
-        content = "【用户画像为空】"
-        await _cache_insert(_CacheEntry(user_id=user_id, content=content, created_at=datetime.now(UTC)))
-        return content
 
     context_block, conv_ids = _build_context_block(contexts)
 
-    parts = [p for p in [fixed_block, context_block] if p]
-    content = "\n\n".join(parts) if parts else "【用户画像为空】"
+    if not context_block:
+        content = ""
+        await _cache_insert(
+            _CacheEntry(
+                user_id=user_id,
+                content=content,
+                created_at=datetime.now(UTC),
+                context_conv_ids=conv_ids,
+            )
+        )
+        return content
+
+    # Phase 3：当 L1 过长时，用 LLM 压缩成摘要，减少每轮 context_frame 新增 token
+    summarized = await _maybe_summarize_context(context_block)
 
     await _cache_insert(
         _CacheEntry(
             user_id=user_id,
-            content=content,
+            content=summarized,
             created_at=datetime.now(UTC),
             context_conv_ids=conv_ids,
         )
     )
-    return content
+    return summarized
+
+
+# 保留旧别名，避免外部调用方改动
+build_snapshot = build_recent_context
+
+
+# ── 默认查询逻辑（延迟导入，避免启动时循环依赖）──────────────────────
+
+
+async def _fetch_recent_conversations_default(user_id: str) -> list[ConversationContext]:
+    from core.db import get_async_session_maker
+
+    async with get_async_session_maker()() as db:
+        return await _fetch_recent_conversations(user_id, db)
+
+
+async def _fetch_recent_conversations(user_id: str, db) -> list[ConversationContext]:
+    """查询用户最近的对话及其消息。"""
+    from sqlalchemy import select
+
+    from lib.chat.models import Conversation, Message
+
+    cutoff = datetime.now(UTC) - timedelta(days=_CONTEXT_MAX_AGE_DAYS)
+
+    result = await db.execute(
+        select(Conversation)
+        .where(
+            Conversation.user_id == user_id,
+            Conversation.updated_at >= cutoff,
+            Conversation.is_deleted.is_(False),
+        )
+        .order_by(Conversation.updated_at.desc())
+        .limit(_CONTEXT_MAX_CONVERSATIONS)
+    )
+    conversations = result.scalars().all()
+
+    contexts: list[ConversationContext] = []
+    for conv in conversations:
+        msg_result = await db.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conv.conversation_id,
+                Message.role.in_(["user", "assistant"]),
+                Message.is_deleted.is_(False),
+            )
+            .order_by(Message.created_at.desc())
+            .limit(_CONTEXT_MAX_MESSAGES_PER_CONV)
+        )
+        messages = list(reversed(msg_result.scalars().all()))
+
+        contexts.append(
+            ConversationContext(
+                conversation_id=conv.conversation_id,
+                title=conv.title,
+                summary=conv.summary,
+                messages=[
+                    {
+                        "role": msg.role,
+                        "content": (msg.content or "")[:_CONTEXT_MAX_CHARS],
+                    }
+                    for msg in messages
+                ],
+            )
+        )
+
+    return contexts
+
+
+def _build_context_block(contexts: list[ConversationContext]) -> tuple[str, set[str]]:
+    """把近期对话上下文格式化为 Markdown 字符串。"""
+    if not contexts:
+        return "", set()
+
+    lines: list[str] = ["## 近期相关对话"]
+    conv_ids: set[str] = set()
+
+    for ctx in contexts:
+        conv_ids.add(ctx.conversation_id)
+        title = ctx.title or "无标题对话"
+        summary = ctx.summary
+        lines.append(f"\n### {title}")
+        if summary:
+            lines.append(f"摘要：{summary[:_CONTEXT_MAX_CHARS]}")
+        for msg in ctx.messages:
+            role_label = "用户" if msg["role"] == "user" else "AI"
+            lines.append(f"- {role_label}: {msg['content'][:_CONTEXT_MAX_CHARS]}")
+
+    return "\n".join(lines), conv_ids
+
+
+async def _maybe_summarize_context(text: str) -> str:
+    """当 L1 上下文过长时，调用 LLM 压缩成一段摘要。"""
+    if _estimate_tokens(text) <= _SUMMARIZE_THRESHOLD_TOKENS:
+        return text
+
+    try:
+        from core.config import get_settings
+        from lib.llm.client import LLMClient
+
+        settings = get_settings()
+        client = LLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
+        prompt = (
+            "把下面这段近期对话总结成一段简洁的中文摘要，"
+            f"不超过 {_SUMMARY_MAX_CHARS} 个汉字。"
+            "保留用户提到的关键事实、偏好、计划和情绪。"
+            "只输出摘要，不要解释、不要分段。\n\n---\n\n"
+            f"{text}\n\n---\n\n摘要："
+        )
+        resp = await client.chat(
+            messages=[
+                {"role": "system", "content": "你是一位高效的对话摘要助手。"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=_SUMMARY_MAX_TOKENS,
+        )
+        summary = (resp.content or "").strip()
+        if summary:
+            logger.debug(
+                "L1 context summarized",
+                original_tokens=_estimate_tokens(text),
+                summary_tokens=_estimate_tokens(summary),
+            )
+            return f"## 近期相关对话（摘要）\n\n{summary[:_SUMMARY_MAX_CHARS]}"
+    except Exception:
+        logger.debug("L1 summarization failed, falling back to truncation", exc_info=True)
+
+    # 失败或 LLM 返回空：硬截断到阈值附近
+    fallback = text
+    while _estimate_tokens(fallback) > _SUMMARIZE_THRESHOLD_TOKENS and len(fallback) > 200:
+        fallback = fallback[: int(len(fallback) * 0.9)]
+    return fallback
+
+
+async def _evict_expired_cache() -> None:
+    """驱逐过期缓存条目。"""
+    now = datetime.now(UTC)
+    async with _cache_lock:
+        expired = [
+            user_id
+            for user_id, entry in _static_cache.items()
+            if (now - entry.created_at) >= timedelta(minutes=_CACHE_TTL_MINUTES)
+        ]
+        for user_id in expired:
+            del _static_cache[user_id]

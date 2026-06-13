@@ -15,8 +15,8 @@ from typing import Any
 
 import numpy as np
 
-from core.config import USER_DATA_DIR
 from lib.llm.embeddings import AsyncEmbeddingClient
+from shared.logging import get_logger
 
 from .config import AkashaConfig, load_akasha_config, resolve_akasha_db_path
 from .core import (
@@ -28,14 +28,20 @@ from .core import (
     activation_edge_updates,
     activation_updates,
     build_dense_message_index,
+    build_idf_table,
     compute_candidates_from_snapshot,
     edges_by_src,
     fan_counts,
     graph_seed_keys_from_snapshot,
+    idf_table_is_stale,
+    load_idf_from_db,
     parse_turn_key,
+    set_idf_table,
     turn_key,
 )
 from .store import AkashaStore
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -95,7 +101,6 @@ class AkashaEngine:
             user_id=user_id,
             akasha_config=self._akasha_config,
         )
-        self._sessions_db_path = USER_DATA_DIR / "sessions.db"
         self._store = AkashaStore(self._db_path)
         self._embedder = embedder
         self._lock = threading.RLock()
@@ -104,6 +109,20 @@ class AkashaEngine:
         self._message_turn_keys: dict[str, str] = {}
         self._message_index = build_dense_message_index({})
         self._load_graph_cache()
+        self._init_idf_table()
+
+    def _init_idf_table(self) -> None:
+        """加载或重建 FTS IDF 表。"""
+        conn = self._store.raw_connection()
+        try:
+            if idf_table_is_stale(conn):
+                idf = build_idf_table(conn)
+            else:
+                idf = load_idf_from_db(conn)
+            set_idf_table(idf)
+        except Exception as exc:
+            logger.warning("Akasha IDF 初始化失败", error=str(exc))
+            set_idf_table(None)
 
     @property
     def db_path(self) -> Path:
@@ -155,16 +174,15 @@ class AkashaEngine:
         snapshot = self._graph_snapshot()
         cfg = _core_config(self._akasha_config)
 
-        # 连接 sessions.db 提供 FTS BM25 混合召回
+        # 连接自己的 akasha.db 提供 FTS BM25 混合召回
         source_conn: sqlite3.Connection | None = None
         source_cursor: sqlite3.Cursor | None = None
-        if self._sessions_db_path.exists():
-            try:
-                source_conn = sqlite3.connect(str(self._sessions_db_path), check_same_thread=False)
-                source_cursor = source_conn.cursor()
-            except Exception:
-                source_conn = None
-                source_cursor = None
+        try:
+            source_conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            source_cursor = source_conn.cursor()
+        except Exception:
+            source_conn = None
+            source_cursor = None
 
         try:
             graph_seed_keys = graph_seed_keys_from_snapshot(
@@ -253,6 +271,10 @@ class AkashaEngine:
 
     # ── 写入 ──
 
+    def next_turn_seq(self, session_key: str) -> int:
+        """返回指定 session 的下一个 turn seq。"""
+        return self._store.next_turn_seq(session_key)
+
     async def commit_turn(
         self,
         session_key: str,
@@ -329,11 +351,12 @@ class AkashaEngine:
             ),
             user_emb,
         )
+        # assistant 传入 seq + 1，使 turn_key 把它归到同一个 turn
         assistant_key = self._upsert_message(
             SourceMessage(
                 id=assistant_msg_id,
                 session_key=session_key,
-                seq=seq,
+                seq=seq + 1,
                 role="assistant",
                 content=assistant_msg,
                 ts=now_iso,

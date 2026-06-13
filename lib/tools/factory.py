@@ -16,6 +16,7 @@ from lib.tools._registry import ToolRegistry, get_tool_registry
 from lib.tools._search_tool import create_tool_search
 from lib.tools.delegate import create_delegate_tools
 from lib.tools.files import create_file_tools
+from lib.tools.mcp_setup import create_mcp_setup_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
 from lib.tools.shell import create_shell_tools
@@ -46,6 +47,7 @@ def register_all_tools() -> ToolRegistry:
         *create_web_tools(),  # 多后端搜索 + 提取 + 爬取
         *create_shell_tools(),
         *create_skill_tools(),
+        *create_mcp_setup_tools(),  # 新增：一键启用 lumen-rss 等 MCP server
         *create_delegate_tools(),  # 新增：delegate 子 Agent 工具
         *create_vision_tools(),  # 新增：Vision 图片分析工具
         create_tool_search(),
