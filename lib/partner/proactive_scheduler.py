@@ -45,7 +45,7 @@ _MCP_SERVER = "lumen-rss"
 _USER_ID = "demo_user"
 
 # 活跃判定：用户最后消息时间在 COOLDOWN 内视为"正在聊天"
-_ACTIVE_COOLDOWN = timedelta(minutes=2)
+_ACTIVE_COOLDOWN = timedelta(minutes=10)
 
 # 24 小时窗口起始时间
 _DAY_WINDOW = timedelta(hours=24)
@@ -138,6 +138,10 @@ class ProactiveScheduler:
     async def _tick(self) -> None:
         """执行一次完整的推送检查"""
         now = datetime.now(UTC)
+        # 重新加载 config.json，确保自动保存的 telegram_chat_id 等配置生效
+        from core.config import apply_user_config, load_user_config
+
+        apply_user_config(get_settings(), load_user_config())
         settings = get_settings()
         mcp = get_mcp_manager()
 
@@ -171,20 +175,21 @@ class ProactiveScheduler:
 
         # 4. 前置门控
         async with get_async_session_maker()() as db:
-            gate = await self._check_gates(db, settings, now)
+            user_id = await self._get_target_user(db)
+            gate = await self._check_gates(db, settings, now, user_id)
             if not gate.passed:
                 logger.debug("门控未通过，跳过推送", reason=gate.reason)
                 return
 
             # 5. 读取 FOCUS.md
             store = AsyncMarkdownStore()
-            focus = await store.read_focus(_USER_ID)
+            focus = await store.read_focus(user_id)
 
             # 6. 调用 RSS Reader Agent 生成推送文案
             from lib.partner.rss_reader import get_rss_reader
 
             reader = get_rss_reader()
-            message = await reader.generate_push(entries, focus, _USER_ID)
+            message = await reader.generate_push(entries, focus, user_id)
             if not message:
                 logger.debug("RSS Reader Agent 无推荐")
                 return
@@ -203,12 +208,18 @@ class ProactiveScheduler:
                                 ack_ids.append(eid)
                             break
 
-            if ack_ids:
-                try:
-                    await mcp.call_tool(_MCP_SERVER, "rss_acknowledge", {"event_ids": ack_ids})
-                except Exception:
-                    logger.exception("rss_acknowledge 失败，跳过推送防止重复")
-                    return
+            if not ack_ids:
+                logger.warning(
+                    "RSS Reader 生成的文案没有匹配到任何条目 URL，跳过推送防止重复",
+                    user_id=user_id,
+                )
+                return
+
+            try:
+                await mcp.call_tool(_MCP_SERVER, "rss_acknowledge", {"event_ids": ack_ids})
+            except Exception:
+                logger.exception("rss_acknowledge 失败，跳过推送防止重复")
+                return
 
             # 8. 推送
             chat_id = settings.telegram_chat_id
@@ -225,7 +236,7 @@ class ProactiveScheduler:
             )
 
             # 9. 更新 presence
-            await self._update_presence(db, now)
+            await self._update_presence(db, now, user_id)
             await db.commit()
 
         self._state.last_tick = now
@@ -238,12 +249,12 @@ class ProactiveScheduler:
         passed: bool
         reason: str = ""
 
-    async def _check_gates(self, db: AsyncSession, settings: Any, now: datetime) -> _GateResult:
+    async def _check_gates(self, db: AsyncSession, settings: Any, now: datetime, user_id: str) -> _GateResult:
         """频率限制 / 用户活跃 / 每日上限"""
-        # 检查 1: 用户正在聊天（10 分钟内有消息）
+        # 检查 1: 该用户正在聊天（10 分钟内有消息）
         result = await db.execute(
             text("SELECT last_user_at FROM lumen_presence WHERE user_id = :uid"),
-            {"uid": _USER_ID},
+            {"uid": user_id},
         )
         row = result.first()
         last_user_at = _parse_db_datetime(row[0]) if row else None
@@ -255,7 +266,7 @@ class ProactiveScheduler:
         daily_limit = getattr(settings, "proactive_daily_limit", None) or 20
         result = await db.execute(
             text("SELECT proactive_sent_24h, last_proactive_at FROM lumen_presence WHERE user_id = :uid"),
-            {"uid": _USER_ID},
+            {"uid": user_id},
         )
         row = result.first()
         last_proactive: datetime | None = None
@@ -279,9 +290,20 @@ class ProactiveScheduler:
 
         return self._GateResult(passed=True)
 
+    async def _get_target_user(self, db: AsyncSession) -> str | None:
+        """获取推送目标用户。当前单用户模式：优先返回 lumen_presence 中存在的用户，否则 demo_user。"""
+        try:
+            result = await db.execute(text("SELECT user_id FROM lumen_presence LIMIT 1"))
+            row = result.first()
+            if row and row[0]:
+                return str(row[0])
+        except Exception:
+            logger.debug("读取 lumen_presence 用户失败，使用默认用户")
+        return _USER_ID
+
     # ── Presence 更新 ─────────────────────────────────
 
-    async def _update_presence(self, db: AsyncSession, now: datetime) -> None:
+    async def _update_presence(self, db: AsyncSession, now: datetime, user_id: str) -> None:
         """更新推送统计"""
         try:
             await db.execute(
@@ -290,10 +312,10 @@ class ProactiveScheduler:
                 VALUES (:uid, :now, :now, 1, :now)
                 ON CONFLICT(user_id) DO UPDATE SET
                     last_proactive_at = :now,
-                    proactive_sent_24h = MIN(proactive_sent_24h + 1, 99),
+                    proactive_sent_24h = MIN(COALESCE(proactive_sent_24h, 0) + 1, 99),
                     updated_at = :now
             """),
-                {"uid": _USER_ID, "now": now},
+                {"uid": user_id, "now": now},
             )
         except Exception as e:
             logger.warning("presence 更新失败", error=str(e))

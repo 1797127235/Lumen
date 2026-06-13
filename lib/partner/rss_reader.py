@@ -26,7 +26,7 @@ def _strip_html(html: str) -> str:
     if not html:
         return ""
     text = html.replace("</p>", "\n").replace("<br>", "\n").replace("<br/>", "\n")
-    text = re.sub(r"<[^>]+", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
