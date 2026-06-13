@@ -15,13 +15,22 @@ class MemoryProvider(ABC):
     分为核心生命周期方法（必须实现）和可选钩子（子类重写启用）。
     """
 
+    def __init__(self) -> None:
+        # 运行时可被 MemoryManager 覆盖为配置中的实例名
+        self.instance_name: str = ""
+
     # ── 核心属性 ──
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Provider 唯一标识名（如 builtin / honcho / mem0）。"""
+        """Provider 类型标识名（如 builtin / honcho / mem0）。"""
         ...
+
+    @property
+    def display_name(self) -> str:
+        """Provider 实例显示名：配置实例名优先，fallback 到类型名。"""
+        return self.instance_name or self.name
 
     # ── 核心生命周期 ──
 
@@ -96,6 +105,9 @@ class MemoryProvider(ABC):
 
 class NoOpMemoryProvider(MemoryProvider):
     """空操作 Provider — 当 memory.provider 未配置时兜底使用。"""
+
+    def __init__(self) -> None:
+        super().__init__()
 
     @property
     def name(self) -> str:

@@ -1,6 +1,6 @@
 """MemoryManager — fan-out 编排器。
 
-进程级单例，维护内置 + 最多一个外部 provider，负责：
+进程级单例，维护内置 + 多个外部 provider，负责：
 - 上下文组装（L0 冻结快照 + L2 动态召回）
 - Provider 工具路由
 - 生命周期钩子转发
@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,7 +27,8 @@ class MemoryManager:
     Usage:
         manager = MemoryManager()
         manager.add_provider(BuiltinMemoryProvider())
-        # 可选：manager.add_provider(external_provider)
+        # 可注册多个外部 provider（用不同实例名区分）
+        manager.add_provider(external_provider, instance_name="honcho-prod")
 
         # 会话启动时（按 chat_id 缓存）
         system_prompt = base_prompt + await manager.build_system_prompt(user_id="demo_user")
@@ -53,10 +55,11 @@ class MemoryManager:
         self._providers["builtin"] = provider
         logger.info("注册内置 provider")
 
-    def add_provider(self, provider: MemoryProvider) -> None:
+    def add_provider(self, provider: MemoryProvider, *, instance_name: str = "") -> None:
         """注册 provider。
 
-        builtin 始终允许；外部 provider 最多一个。
+        builtin 始终唯一；外部 provider 用 instance_name 区分，同名覆盖便于热重载。
+        instance_name 为空时 fallback 到 provider.name。
         """
         if provider.name == "builtin":
             assert isinstance(provider, BuiltinMemoryProvider)
@@ -65,18 +68,35 @@ class MemoryManager:
             logger.info("注册内置 provider")
             return
 
-        # 检查是否已存在外部 provider
-        existing_external = [name for name in self._providers if name not in ("builtin", "noop")]
-        if existing_external:
-            logger.warning(
-                "拒绝注册第二个外部 provider",
-                rejected=provider.name,
-                existing=existing_external[0],
-            )
-            return
+        key = instance_name or provider.name
+        provider.instance_name = key
 
-        self._providers[provider.name] = provider
-        logger.info("注册外部 provider", name=provider.name)
+        # 同名覆盖（允许热重载）
+        if key in self._providers:
+            logger.info("覆盖已注册 provider", name=key, provider_type=provider.name)
+        else:
+            logger.info("注册外部 provider", name=key, provider_type=provider.name)
+
+        self._providers[key] = provider
+
+    def remove_provider(self, name: str) -> bool:
+        """移除指定 provider，返回是否成功。"""
+        if name == "builtin":
+            logger.warning("不能移除内置 provider")
+            return False
+        if name not in self._providers:
+            return False
+        del self._providers[name]
+        logger.info("移除 provider", name=name)
+        return True
+
+    def clear_external_providers(self) -> None:
+        """移除所有外部 provider（保留 builtin）。"""
+        external = [name for name in self._providers if name not in ("builtin", "noop")]
+        for name in external:
+            del self._providers[name]
+        if external:
+            logger.info("清空外部 providers", count=len(external))
 
     def get_provider(self, name: str) -> MemoryProvider | None:
         return self._providers.get(name)
@@ -101,11 +121,11 @@ class MemoryManager:
                     **kwargs,  # type: ignore[call-arg]
                 )
                 if block and block.strip():
-                    blocks.append(f"[{provider.name}]\n{block}")
+                    blocks.append(f"[{provider.display_name}]\n{block}")
             except Exception as exc:
                 logger.warning(
                     "system_prompt_block 失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
         return "\n\n".join(blocks)
@@ -127,9 +147,9 @@ class MemoryManager:
         """
         parts: list[str] = []
 
-        # 当前时间
-        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-        parts.append(f"Current time: {now}")
+        # 当前日期（只保留日期，不带时分，避免破坏 prefix cache）
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        parts.append(f"Current date: {today}")
 
         # 外部 provider prefetch
         if user_input:
@@ -148,23 +168,28 @@ class MemoryManager:
     # ── Prefetch fan-out ──
 
     async def prefetch_all(self, query: str, *, session_id: str = "", user_id: str = "") -> str:
-        """同时向所有 provider 发起 prefetch，结果按 [provider.name] 标注后拼接。
+        """同时向所有 provider 发起 prefetch，结果按 [provider.display_name] 标注后拼接。
 
         一个 provider 失败只跳过它，不影响其他。
         """
-        results: list[str] = []
-        for provider in self._providers.values():
+
+        async def _fetch(provider: MemoryProvider) -> str:
             try:
-                result = await provider.prefetch(
+                return await provider.prefetch(
                     query,
                     session_id=session_id,
                     user_id=user_id,  # type: ignore[call-arg]
                 )
-                if result and result.strip():
-                    results.append(f"[{provider.name}]\n{result}")
             except Exception as exc:
-                logger.debug("prefetch 失败", provider=provider.name, error=str(exc))
-        return "\n\n".join(results)
+                logger.debug("prefetch 失败", provider=provider.display_name, error=str(exc))
+                return ""
+
+        fetched = await asyncio.gather(*(_fetch(p) for p in self._providers.values()))
+        blocks: list[str] = []
+        for provider, text in zip(self._providers.values(), fetched, strict=False):
+            if text and text.strip():
+                blocks.append(f"[{provider.display_name}]\n{text}")
+        return "\n\n".join(blocks)
 
     async def queue_prefetch_all(self, query: str, *, session_id: str = "", user_id: str = "") -> None:
         """为下一回合排队后台预取。"""
@@ -172,7 +197,7 @@ class MemoryManager:
             try:
                 await provider.queue_prefetch(query, session_id=session_id)
             except Exception as exc:
-                logger.debug("queue_prefetch 失败", provider=provider.name, error=str(exc))
+                logger.debug("queue_prefetch 失败", provider=provider.display_name, error=str(exc))
 
     # ── 轮次同步 ──
 
@@ -191,7 +216,7 @@ class MemoryManager:
             try:
                 await provider.sync_turn(user_msg, assistant_msg, session_id=session_id)
             except Exception as exc:
-                logger.warning("sync_turn 失败", provider=provider.name, error=str(exc))
+                logger.warning("sync_turn 失败", provider=provider.display_name, error=str(exc))
 
     # ── 工具路由 ──
 
@@ -205,7 +230,7 @@ class MemoryManager:
             except Exception as exc:
                 logger.warning(
                     "get_tool_schemas 失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
         return schemas
@@ -233,7 +258,7 @@ class MemoryManager:
             except Exception as exc:
                 logger.warning(
                     "handle_tool_call 检查失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
         return f'{{"error": "Tool {tool_name} not found"}}'
@@ -245,7 +270,7 @@ class MemoryManager:
             try:
                 await provider.on_turn_start(turn_number, message, **kwargs)
             except Exception as exc:
-                logger.debug("on_turn_start 失败", provider=provider.name, error=str(exc))
+                logger.debug("on_turn_start 失败", provider=provider.display_name, error=str(exc))
 
     async def on_pre_compress(self, messages: list[dict]) -> str:
         results: list[str] = []
@@ -253,11 +278,11 @@ class MemoryManager:
             try:
                 result = await provider.on_pre_compress(messages)
                 if result and result.strip():
-                    results.append(f"[{provider.name}]\n{result}")
+                    results.append(f"[{provider.display_name}]\n{result}")
             except Exception as exc:
                 logger.debug(
                     "on_pre_compress 失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
         return "\n\n".join(results)
@@ -269,7 +294,7 @@ class MemoryManager:
             except Exception as exc:
                 logger.debug(
                     "on_session_end 失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
 
@@ -291,7 +316,7 @@ class MemoryManager:
             except Exception as exc:
                 logger.debug(
                     "on_memory_write 失败",
-                    provider=provider.name,
+                    provider=provider.display_name,
                     error=str(exc),
                 )
 
@@ -302,11 +327,11 @@ class MemoryManager:
             try:
                 await provider.initialize(session_id, **kwargs)
             except Exception as exc:
-                logger.warning("initialize 失败", provider=provider.name, error=str(exc))
+                logger.warning("initialize 失败", provider=provider.display_name, error=str(exc))
 
     async def shutdown_all(self) -> None:
         for provider in self._providers.values():
             try:
                 await provider.shutdown()
             except Exception as exc:
-                logger.warning("shutdown 失败", provider=provider.name, error=str(exc))
+                logger.warning("shutdown 失败", provider=provider.display_name, error=str(exc))

@@ -27,6 +27,28 @@ async def _bg_refresh_understanding(user_id: str) -> None:
         logger.debug("USER.md 后台刷新失败", error=str(exc))
 
 
+async def _notify_memory_write(
+    action: str,
+    target: str,
+    content: str,
+    user_id: str,
+    category: str = "fact",
+) -> None:
+    """通知 MemoryManager 将写入事件镜像给外部 provider。"""
+    try:
+        from lib.memory import get_memory_manager
+
+        manager = get_memory_manager()
+        await manager.on_memory_write(
+            action,
+            target,
+            content,
+            metadata={"user_id": user_id, "category": category},
+        )
+    except Exception as exc:
+        logger.debug("on_memory_write 镜像失败", error=str(exc))
+
+
 async def _search(args: dict[str, Any], ctx: Any = None):
     query = args.get("query", "").strip()
     if not query:
@@ -143,6 +165,7 @@ async def _memory_add(args: dict[str, Any], ctx: Any = None) -> Any:
     import asyncio as _asyncio
 
     _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+    _asyncio.create_task(_notify_memory_write("add", target, content, user_id, category=category))  # noqa: RUF006
 
     return tool_ok(f"已记录到 {target}", target=target)
 
@@ -224,7 +247,7 @@ async def _memory_replace_remove(
             if new_line == matched_line:
                 new_line = new_content + "\n"
 
-                new_lines = [*lines[:match_idx], new_line, *lines[match_idx + 1 :]]
+        new_lines = [*lines[:match_idx], new_line, *lines[match_idx + 1 :]]
         result_msg = f"已替换条目: {matched_line.strip()[:80]} → {new_content[:80]}"
 
     # 写回文件
@@ -245,6 +268,9 @@ async def _memory_replace_remove(
 
     # 触发 USER.md 刷新（后台，不阻塞）
     _asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+
+    notify_content = new_content if action == "replace" else matched_line.strip()
+    _asyncio.create_task(_notify_memory_write(action, target, notify_content or "", user_id))  # noqa: RUF006
 
     return tool_ok(result_msg, target=target, action=action)
 

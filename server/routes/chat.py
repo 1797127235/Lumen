@@ -169,6 +169,18 @@ async def delete_conversation(
     await db.delete(conv)
     await db.commit()
 
+    # 同步清理 session store（sessions.db），否则旧消息会继续被 get_history 加载
+    from lib.session import get_session_manager
+
+    session_mgr = get_session_manager()
+    for prefix in ("web", "telegram"):
+        sk = f"{prefix}:{conversation_id}"
+        try:
+            session_mgr.invalidate(sk)
+            session_mgr.delete_session(sk, cascade=True)
+        except Exception:
+            pass
+
     # 清理该会话的附件副本
     from lib.chat.session_files import cleanup_session_files
 

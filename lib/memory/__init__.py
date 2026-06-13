@@ -11,7 +11,12 @@
 from __future__ import annotations
 
 from lib.memory.builtin_provider import BuiltinMemoryProvider
-from lib.memory.loader import discover_providers, load_provider
+from lib.memory.loader import (
+    discover_builtin_providers,
+    discover_providers,
+    discover_user_providers,
+    load_provider,
+)
 from lib.memory.manager import MemoryManager
 from lib.memory.markdown import AsyncMarkdownStore
 from lib.memory.provider import MemoryProvider, NoOpMemoryProvider
@@ -29,12 +34,14 @@ def get_memory_manager() -> MemoryManager:
 
 
 __all__ = [
-    "MemoryProvider",
-    "NoOpMemoryProvider",
+    "AsyncMarkdownStore",
     "BuiltinMemoryProvider",
     "MemoryManager",
-    "AsyncMarkdownStore",
+    "MemoryProvider",
+    "NoOpMemoryProvider",
+    "discover_builtin_providers",
     "discover_providers",
-    "load_provider",
+    "discover_user_providers",
     "get_memory_manager",
+    "load_provider",
 ]

@@ -71,7 +71,7 @@ def update_memory_provider_config(name: str, patch: dict[str, Any]) -> MemoryPro
 def migrate_honcho_enabled() -> bool:
     """从旧的 honcho_enabled / HONCHO_API_KEY 迁移到 memory_providers 配置。
 
-    仅在 config.json 中不存在 memory_providers 时执行一次。
+    仅在 config.json 中不存在 memory_providers 且存在旧配置时执行一次。
     返回是否发生了迁移。
     """
     cfg = load_user_config()
@@ -102,6 +102,5 @@ def migrate_honcho_enabled() -> bool:
         logger.info("honcho_enabled / HONCHO_API_KEY 已迁移到 memory_providers")
         return True
 
-    # 既没开也没关，写入空列表占位
-    save_user_config({_CONFIG_KEY: []})
+    # 没有旧 honcho 配置，不写空列表，保持 config.json 干净
     return False

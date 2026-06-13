@@ -53,6 +53,8 @@ class MemoryProviderResponse(BaseModel):
 
 class InstalledProviderResponse(BaseModel):
     name: str
+    provider_type: str
+    display_name: str
 
 
 class TestResponse(BaseModel):
@@ -88,7 +90,15 @@ async def list_memory_providers() -> dict[str, list[dict[str, Any]]]:
 async def list_installed_providers() -> list[InstalledProviderResponse]:
     """返回当前已加载的 provider 名称列表。"""
     manager = get_memory_manager()
-    return [InstalledProviderResponse(name=p.name) for p in manager.providers if p.name != "builtin"]
+    return [
+        InstalledProviderResponse(
+            name=p.instance_name or p.name,
+            provider_type=p.name,
+            display_name=p.display_name,
+        )
+        for p in manager.providers
+        if p.name != "builtin"
+    ]
 
 
 @router.post("/memory/providers", response_model=MemoryProviderResponse)

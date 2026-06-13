@@ -97,21 +97,44 @@ async def lifespan(app: FastAPI):
     except BaseException:
         logger.debug("MCP server 连接失败，跳过")
 
-    # 注册 Honcho 外部记忆 Provider
-    if get_settings().honcho_enabled:
-        with contextlib.suppress(Exception):
-            from lib.memory import get_memory_manager
-            from lib.memory.honcho_provider import HonchoProvider
+    # 注册外部记忆 Provider（配置驱动 + 插件化）
+    with contextlib.suppress(Exception):
+        from lib.memory import discover_providers, get_memory_manager, load_provider
+        from lib.memory.config_store import load_memory_provider_configs, migrate_honcho_enabled
 
-            honcho_provider = HonchoProvider()
-            if await honcho_provider.is_available():
-                manager = get_memory_manager()
-                manager.add_provider(honcho_provider)
-                logger.info("Honcho Provider 已注册")
+        # 从旧 honcho_enabled / HONCHO_API_KEY 迁移一次
+        migrate_honcho_enabled()
+
+        manager = get_memory_manager()
+        provider_configs = load_memory_provider_configs()
+        discovered = discover_providers()
+
+        for cfg in provider_configs:
+            if not cfg.enabled:
+                continue
+            if cfg.provider_type not in discovered:
+                logger.warning(
+                    "未找到记忆 provider 插件",
+                    name=cfg.name,
+                    provider_type=cfg.provider_type,
+                )
+                continue
+            provider = load_provider(cfg.provider_type, config=cfg.config)
+            if provider is None:
+                continue
+            if await provider.is_available():
+                manager.add_provider(provider, instance_name=cfg.name)
+                logger.info(
+                    "记忆 provider 已注册",
+                    name=cfg.name,
+                    provider_type=cfg.provider_type,
+                )
             else:
-                logger.warning("Honcho Provider 不可用，跳过注册")
-    else:
-        logger.info("Honcho Provider 已禁用（settings.honcho_enabled=false）")
+                logger.warning(
+                    "记忆 provider 不可用，跳过",
+                    name=cfg.name,
+                    provider_type=cfg.provider_type,
+                )
 
     # ── 初始化 SessionManager（Agent 历史层）──
     from lib.session import init_session_manager

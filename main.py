@@ -8,12 +8,14 @@ from fastapi.staticfiles import StaticFiles
 
 from core.config import get_settings
 from core.startup import lifespan
+from server.routes.akasha import router as akasha_router
 from server.routes.chat import router as chat_router
 from server.routes.commands import router as commands_router
 from server.routes.config import router as config_router
 from server.routes.health import router as health_router
 from server.routes.mcp import router as mcp_router
 from server.routes.memory import router as memory_router
+from server.routes.memory_providers import router as memory_providers_router
 from server.routes.partner import router as partner_router
 from server.routes.providers import router as providers_router
 from shared.logging import RequestLoggingMiddleware, get_logger
@@ -42,7 +44,9 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # ── API 路由 ──
 app.include_router(health_router, prefix="/api")
+app.include_router(akasha_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
+app.include_router(memory_providers_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 

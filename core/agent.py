@@ -105,7 +105,12 @@ async def _run_react_loop(
         visible, schemas = _visible_tool_schemas(registry, ctx.conversation_id)
         logger.info("[ReAct] 第%d轮，可见工具=%d", iteration + 1, len(visible))
 
-        response = await _call_llm(messages, schemas)
+        response = await _call_llm(
+            messages,
+            schemas,
+            conversation_id=ctx.conversation_id,
+            usage_scope=f"call:{iteration + 1}",
+        )
         _accumulate(response)
 
         if not response.tool_calls:
@@ -153,7 +158,12 @@ async def _run_react_loop(
                     ),
                 }
             )
-            response = await _call_llm(messages, None)
+            response = await _call_llm(
+                messages,
+                None,
+                conversation_id=ctx.conversation_id,
+                usage_scope="call:final_after_failures",
+            )
             _accumulate(response)
             _log_usage(total_usage, ctx.conversation_id)
             return AgentResult(content=response.content or "", tool_chain=tool_chain)
@@ -161,7 +171,12 @@ async def _run_react_loop(
     # 达到最大轮次，强制最终回答
     logger.warning("[ReAct] 达到最大轮次，强制最终回答")
     messages.append({"role": "user", "content": "请基于已有信息直接回答用户，不要再调用任何工具。"})
-    response = await _call_llm(messages, None)
+    response = await _call_llm(
+        messages,
+        None,
+        conversation_id=ctx.conversation_id,
+        usage_scope="call:final_after_limit",
+    )
     _accumulate(response)
     _log_usage(total_usage, ctx.conversation_id)
     return AgentResult(content=response.content or "", tool_chain=tool_chain)
@@ -189,7 +204,7 @@ def _is_tool_failure(result: str) -> bool:
     return text.startswith("❌") or "[BUDGET]" in text or "[LOOP_GUARD]" in text or "Unknown tool name" in text
 
 
-def _log_usage(total: dict[str, int], conversation_id: str | None) -> None:
+def _log_usage(total: dict[str, int], conversation_id: str | None, *, scope: str = "aggregate") -> None:
     if sum(total.values()) == 0:
         return
     input_t = total["input"]
@@ -197,6 +212,7 @@ def _log_usage(total: dict[str, int], conversation_id: str | None) -> None:
     hit_pct = round(cache_r / input_t * 100, 1) if input_t else 0.0
     logger.info(
         "LLM usage",
+        scope=scope,
         input=input_t,
         output=total["output"],
         cache_read=cache_r,
@@ -209,13 +225,18 @@ def _log_usage(total: dict[str, int], conversation_id: str | None) -> None:
 async def _call_llm(
     messages: list[dict[str, Any]],
     schemas: list[dict[str, Any]] | None,
+    *,
+    conversation_id: str | None = None,
+    usage_scope: str = "call",
 ) -> LLMResponse:
     """调用 LLM。"""
     llm = _get_llm()
-    return await llm.chat(
+    response = await llm.chat(
         messages=messages,
         tools=schemas if schemas else None,
     )
+    _log_usage(response.usage, conversation_id, scope=usage_scope)
+    return response
 
 
 async def _execute_tool(tc: ToolCall, ctx: AgentContext) -> str:

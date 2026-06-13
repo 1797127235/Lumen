@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from core.config import USER_DATA_DIR
 from lib.llm.embeddings import AsyncEmbeddingClient
 
 from .config import AkashaConfig, load_akasha_config, resolve_akasha_db_path
@@ -93,6 +95,7 @@ class AkashaEngine:
             user_id=user_id,
             akasha_config=self._akasha_config,
         )
+        self._sessions_db_path = USER_DATA_DIR / "sessions.db"
         self._store = AkashaStore(self._db_path)
         self._embedder = embedder
         self._lock = threading.RLock()
@@ -152,23 +155,38 @@ class AkashaEngine:
         snapshot = self._graph_snapshot()
         cfg = _core_config(self._akasha_config)
 
-        graph_seed_keys = graph_seed_keys_from_snapshot(
-            query_vec,
-            snapshot,
-            limit=self._akasha_config.dense_top_k,
-        )
+        # 连接 sessions.db 提供 FTS BM25 混合召回
+        source_conn: sqlite3.Connection | None = None
+        source_cursor: sqlite3.Cursor | None = None
+        if self._sessions_db_path.exists():
+            try:
+                source_conn = sqlite3.connect(str(self._sessions_db_path), check_same_thread=False)
+                source_cursor = source_conn.cursor()
+            except Exception:
+                source_conn = None
+                source_cursor = None
 
-        candidates, ripple_items, trace = compute_candidates_from_snapshot(
-            query_text,
-            query_vec,
-            snapshot,
-            now_ts,
-            config=cfg,
-            source_cursor=None,
-            soft_recall=False,
-            return_limit=self._akasha_config.activate_limit,
-            graph_seed_keys=graph_seed_keys,
-        )
+        try:
+            graph_seed_keys = graph_seed_keys_from_snapshot(
+                query_vec,
+                snapshot,
+                limit=self._akasha_config.dense_top_k,
+            )
+
+            candidates, ripple_items, trace = compute_candidates_from_snapshot(
+                query_text,
+                query_vec,
+                snapshot,
+                now_ts,
+                config=cfg,
+                source_cursor=source_cursor,
+                soft_recall=False,
+                return_limit=self._akasha_config.activate_limit,
+                graph_seed_keys=graph_seed_keys,
+            )
+        finally:
+            if source_conn is not None:
+                source_conn.close()
 
         # 构造卡片
         cards = await self._cards_from_candidates(candidates[: self._akasha_config.activate_limit])

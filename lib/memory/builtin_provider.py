@@ -24,6 +24,7 @@ class BuiltinMemoryProvider(MemoryProvider):
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self._store = AsyncMarkdownStore()
 
     @property
