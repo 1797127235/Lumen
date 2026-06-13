@@ -45,6 +45,10 @@ docling>=2.94.0
 # Vision — 图片处理
 Pillow>=10.0.0
 
+# 记忆层 / Akasha 图记忆
+numpy>=1.24.0
+jieba>=0.42.1
+
 # MCP
 mcp>=1.12.0
 

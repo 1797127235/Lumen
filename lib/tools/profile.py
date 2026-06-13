@@ -55,9 +55,7 @@ async def _get_profile(args: dict[str, Any], ctx: Any = None):
 
     if not frontmatter:
         # 旧格式：没有 frontmatter，返回简短提示
-        return tool_ok(
-            "已读取用户画像，但目前缺少结构化信息。" f"可用 update_profile 补充。现有画像约 {len(body)} 字。"
-        )
+        return tool_ok(f"已读取用户画像，但目前缺少结构化信息。可用 update_profile 补充。现有画像约 {len(body)} 字。")
 
     # 构建结构化摘要
     parts: list[str] = []
@@ -132,8 +130,25 @@ async def _update_profile(args: dict[str, Any], ctx: Any = None):
 
     # 触发 USER.md 刷新（后台，不阻塞）
     import asyncio
+    import json
 
     asyncio.create_task(_bg_refresh_understanding(user_id))  # noqa: RUF006
+
+    # 镜像写入事件给外部 memory provider
+    try:
+        from lib.memory import get_memory_manager
+
+        manager = get_memory_manager()
+        asyncio.create_task(  # noqa: RUF006
+            manager.on_memory_write(
+                "update_profile",
+                "user",
+                json.dumps(changed, ensure_ascii=False),
+                metadata={"user_id": user_id, "updated_fields": list(updates.keys())},
+            )
+        )
+    except Exception as exc:
+        logger.debug("update_profile on_memory_write 镜像失败", error=str(exc))
 
     return tool_ok(
         "画像已更新: " + "; ".join(changed),

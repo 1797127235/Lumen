@@ -18,7 +18,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -38,7 +38,7 @@ PROVIDER_MAP: dict[str, str] = {
     "openai": "openai",
     "google": "google",
     "gemini": "google",
-    "dashscope": "alibaba",   # 阿里云 DashScope = alibaba
+    "dashscope": "alibaba",  # 阿里云 DashScope = alibaba
     "deepseek": "deepseek",
     "groq": "groq",
     "mistral": "mistral",
@@ -54,6 +54,7 @@ PROVIDER_MAP: dict[str, str] = {
 
 
 # ── 数据类 ─────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ModelInfo:
@@ -72,7 +73,7 @@ class ModelInfo:
     max_output: int = 0
     cost_input: float = 0.0
     cost_output: float = 0.0
-    cost_cache_read: Optional[float] = None
+    cost_cache_read: float | None = None
     knowledge_cutoff: str = ""
     status: str = ""
 
@@ -95,6 +96,7 @@ class ProviderInfo:
 
 # ── 磁盘缓存 ───────────────────────────────────────────────────────────────────
 
+
 def _cache_path() -> Path:
     p = Path.home() / ".lumen" / "models_dev_cache.json"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -111,7 +113,7 @@ def _load_disk() -> dict[str, Any]:
     return {}
 
 
-def _disk_age() -> Optional[float]:
+def _disk_age() -> float | None:
     try:
         p = _cache_path()
         if not p.exists():
@@ -133,6 +135,7 @@ def _save_disk(data: dict[str, Any]) -> None:
 
 
 # ── 主拉取函数 ─────────────────────────────────────────────────────────────────
+
 
 def fetch_models_dev(force_refresh: bool = False) -> dict[str, Any]:
     """拉取 models.dev 注册表，四级缓存策略。"""
@@ -189,25 +192,33 @@ _NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_GOOGLE_HIDDEN: frozenset[str] = frozenset({
-    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b",
-    "gemini-2.0-flash", "gemini-2.0-flash-lite",
-    "gemma-4-31b-it", "gemma-4-26b-it", "gemma-3-27b-it",
-    "gemma-3-12b-it", "gemma-3-4b-it", "gemma-3-2b-it", "gemma-3-1b-it",
-})
+_GOOGLE_HIDDEN: frozenset[str] = frozenset(
+    {
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash-8b",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemma-4-31b-it",
+        "gemma-4-26b-it",
+        "gemma-3-27b-it",
+        "gemma-3-12b-it",
+        "gemma-3-4b-it",
+        "gemma-3-2b-it",
+        "gemma-3-1b-it",
+    }
+)
 
 
 def _should_hide(provider: str, model_id: str) -> bool:
-    if provider.lower() in {"gemini", "google"} and model_id.lower() in _GOOGLE_HIDDEN:
-        return True
-    return False
+    return provider.lower() in {"gemini", "google"} and model_id.lower() in _GOOGLE_HIDDEN
 
 
-def _mdev_id(provider: str) -> Optional[str]:
+def _mdev_id(provider: str) -> str | None:
     return PROVIDER_MAP.get(provider)
 
 
-def _provider_models(provider: str) -> Optional[dict[str, Any]]:
+def _provider_models(provider: str) -> dict[str, Any] | None:
     mdev = _mdev_id(provider)
     if not mdev:
         return None
@@ -219,7 +230,7 @@ def _provider_models(provider: str) -> Optional[dict[str, Any]]:
     return models if isinstance(models, dict) else None
 
 
-def _find_entry(models: dict[str, Any], model_id: str) -> Optional[dict[str, Any]]:
+def _find_entry(models: dict[str, Any], model_id: str) -> dict[str, Any] | None:
     entry = models.get(model_id)
     if isinstance(entry, dict):
         return entry
@@ -238,10 +249,10 @@ def _parse_model(model_id: str, raw: dict[str, Any], provider_id: str) -> ModelI
     out_mods = mods.get("output") if isinstance(mods, dict) else None
 
     def _int(v: Any) -> int:
-        return int(v) if isinstance(v, (int, float)) and v > 0 else 0
+        return int(v) if isinstance(v, int | float) and v > 0 else 0
 
     def _float(v: Any) -> float:
-        return float(v) if isinstance(v, (int, float)) else 0.0
+        return float(v) if isinstance(v, int | float) else 0.0
 
     return ModelInfo(
         id=model_id,
@@ -266,6 +277,7 @@ def _parse_model(model_id: str, raw: dict[str, Any], provider_id: str) -> ModelI
 
 
 # ── 公开查询接口 ───────────────────────────────────────────────────────────────
+
 
 def list_provider_models(provider: str) -> list[str]:
     """返回 provider 下所有可用模型 ID。"""
@@ -294,7 +306,7 @@ def list_agentic_models(provider: str) -> list[str]:
     return result
 
 
-def get_model_info(provider: str, model_id: str) -> Optional[ModelInfo]:
+def get_model_info(provider: str, model_id: str) -> ModelInfo | None:
     """查询单个模型的完整元数据。"""
     mdev = _mdev_id(provider) or provider
     data = fetch_models_dev()
@@ -310,7 +322,7 @@ def get_model_info(provider: str, model_id: str) -> Optional[ModelInfo]:
     return _parse_model(model_id, raw, mdev)
 
 
-def get_provider_info(provider: str) -> Optional[ProviderInfo]:
+def get_provider_info(provider: str) -> ProviderInfo | None:
     """查询 provider 元数据（name、api base_url、env vars）。"""
     mdev = _mdev_id(provider) or provider
     data = fetch_models_dev()
@@ -329,7 +341,7 @@ def get_provider_info(provider: str) -> Optional[ProviderInfo]:
     )
 
 
-def lookup_context_window(provider: str, model_id: str) -> Optional[int]:
+def lookup_context_window(provider: str, model_id: str) -> int | None:
     """查询模型的 context window，找不到返回 None。"""
     info = get_model_info(provider, model_id)
     return info.context_window if info and info.context_window > 0 else None

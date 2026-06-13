@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException, Request  # pyright: ignore[reportMissingImports]
@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 # ── 枚举定义 ────────────────────────────────────────────────
 
 
-class ErrorSeverity(str, Enum):
+class ErrorSeverity(StrEnum):
     """错误严重级别"""
 
     CRITICAL = "critical"  # 系统可能不可用，需要立即处理
@@ -50,7 +50,7 @@ class ErrorSeverity(str, Enum):
     COSMETIC = "cosmetic"  # 非关键问题，不影响核心功能
 
 
-class ErrorCategory(str, Enum):
+class ErrorCategory(StrEnum):
     """错误分类"""
 
     LLM = "llm"

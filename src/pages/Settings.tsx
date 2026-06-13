@@ -409,7 +409,7 @@ export default function Settings({ isOpen, onClose }: SettingsProps) {
 
                   <div className="pt-4 border-t border-border-soft">
                     <a
-                      href="https://github.com/questionliuxinyu/career-os"
+                      href="https://github.com/1797127235/Lumen"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-ink transition-colors duration-150"
