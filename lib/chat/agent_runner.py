@@ -341,6 +341,17 @@ async def _build_context_frame(
     except Exception:
         logger.debug("build_snapshot failed", user_id=user_id)
 
+    # PARTNER.md：用户定义的 AI 协作规则
+    try:
+        from lib.memory.markdown import AsyncMarkdownStore
+
+        partner_store = AsyncMarkdownStore()
+        partner_content = await partner_store.read_partner(user_id)
+        if partner_content.strip():
+            parts.append(f"<partner-rules>\n{partner_content}\n</partner-rules>")
+    except Exception:
+        logger.debug("PARTNER.md 读取失败", user_id=user_id)
+
     # L2：外部 provider 动态召回
     try:
         dynamic_ctx = await manager.build_context(

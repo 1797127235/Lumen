@@ -162,6 +162,7 @@ _MD_CHAR_LIMITS: dict[str, int] = {
     "memory": 2200,
     "about_you": 1375,
     "focus": 500,
+    "partner": 800,
 }
 
 # Prompt injection 检测模式
@@ -257,6 +258,9 @@ class AsyncMarkdownStore:
 
     def _about_you_path(self, user_id: str) -> Path:
         return self._user_dir(user_id) / "USER.md"
+
+    def _partner_path(self, user_id: str) -> Path:
+        return self._user_dir(user_id) / "PARTNER.md"
 
     def _lock_path(self, user_id: str) -> Path:
         return self._user_dir(user_id) / ".lock"
@@ -394,6 +398,74 @@ class AsyncMarkdownStore:
 
         return "\n\n".join(parts)
 
+    async def read_partner(self, user_id: str) -> str:
+        """读取 PARTNER.md 内容。"""
+        return await self._read(self._partner_path(user_id))
+
+    async def write_partner(self, user_id: str, content: str) -> None:
+        """覆写 PARTNER.md（原子写入 + 安全扫描 + 字符限制）。"""
+        safe, reason = _scan_memory_content(content)
+        if not safe:
+            logger.warning("PARTNER.md 写入被拒绝", user_id=user_id, reason=reason)
+            return
+
+        async with self._locks[user_id]:
+            lock_fd = await asyncio.to_thread(_acquire_file_lock, self._lock_path(user_id))
+            try:
+                limit = _MD_CHAR_LIMITS["partner"]
+                if len(content) > limit:
+                    content = _truncate_to_limit(content, limit)
+                    logger.warning("PARTNER.md 超限截断", user_id=user_id, limit=limit)
+                await self._write_atomic(self._partner_path(user_id), content)
+            finally:
+                await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
+
+    async def append_partner_rule(self, user_id: str, rule: str) -> None:
+        """追加一条协作规则到 PARTNER.md。
+
+        格式：- 规则内容
+        """
+        safe, reason = _scan_memory_content(rule)
+        if not safe:
+            logger.warning("PARTNER.md 规则追加被拒绝", user_id=user_id, reason=reason)
+            return
+
+        async with self._locks[user_id]:
+            lock_fd = await asyncio.to_thread(_acquire_file_lock, self._lock_path(user_id))
+            try:
+                existing = await self._read(self._partner_path(user_id))
+                if not existing.strip():
+                    existing = "# 协作方式\n\n"
+
+                if "# 协作方式" not in existing:
+                    existing += "\n\n# 协作方式\n\n"
+
+                entry = f"- {rule}\n"
+                new_content = existing + entry
+
+                limit = _MD_CHAR_LIMITS["partner"]
+                if len(new_content) > limit:
+                    lines = new_content.splitlines(keepends=True)
+                    header_end = 0
+                    in_entries = False
+                    first_entry_idx = -1
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith("- ") and not in_entries:
+                            in_entries = True
+                            first_entry_idx = i
+                        if in_entries and i > first_entry_idx and line.strip().startswith("- "):
+                            header_end = i
+                            break
+                    if header_end > 0:
+                        new_content = "".join(lines[: first_entry_idx + 1] + lines[header_end:])
+                    else:
+                        new_content = _truncate_to_limit(new_content, limit)
+                    logger.warning("PARTNER.md 超限时丢弃旧规则", user_id=user_id, limit=limit)
+
+                await self._write_atomic(self._partner_path(user_id), new_content)
+            finally:
+                await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
+
     async def reset_user_memory(self, user_id: str) -> None:
         """清空用户的记忆文件。"""
         async with self._locks[user_id]:
@@ -401,6 +473,7 @@ class AsyncMarkdownStore:
             try:
                 await self._write_atomic(self._memory_path(user_id), "")
                 await self._write_atomic(self._about_you_path(user_id), "")
+                await self._write_atomic(self._partner_path(user_id), "")
             finally:
                 await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
 

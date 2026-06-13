@@ -86,8 +86,8 @@ async def _memory(args: dict[str, Any], ctx: Any = None):
     if action not in {"add", "replace", "remove"}:
         return tool_error("action 必须是 add / replace / remove")
 
-    if target not in {"memory", "user"}:
-        return tool_error("target 必须是 memory 或 user")
+    if target not in {"memory", "user", "partner"}:
+        return tool_error("target 必须是 memory / user / partner")
 
     user_id = args.get("user_id")
 
@@ -128,6 +128,9 @@ async def _memory_add(args: dict[str, Any], ctx: Any = None) -> Any:
     if target == "memory":
         # 写入 MEMORY.md，category 作为条目标签
         await _store.append_memory_entry(user_id, category, content)
+    elif target == "partner":
+        # target == "partner"：写入 PARTNER.md（AI 协作规则）
+        await _store.append_partner_rule(user_id, content)
     else:
         # target == "user"：写入 USER.md
         date_str = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -190,6 +193,8 @@ async def _memory_replace_remove(
     # 选择文件路径
     if target == "memory":
         file_path = _store._memory_path(user_id)
+    elif target == "partner":
+        file_path = _store._partner_path(user_id)
     else:
         file_path = _store._about_you_path(user_id)
 
@@ -236,11 +241,14 @@ async def _memory_replace_remove(
             return tool_error(f"写入被拒绝: {reason}", "SAFETY")
 
         # 保留前缀（日期 + category），替换内容部分
-        # 格式: "- 2026-05-26 — [category] content"
+        # 格式: "- 2026-05-26 — [category] content" 或 partner 的 "- content"
         prefix_match = _MATCH_ENTRY_PREFIX.match(matched_line)
         if prefix_match:
             prefix = prefix_match.group(0)
             new_line = prefix + new_content + "\n"
+        elif matched_line.strip().startswith("- "):
+            # partner 条目：保留 "- " 前缀
+            new_line = "- " + new_content + "\n"
         else:
             # 非标准格式，整行替换
             new_line = matched_line.replace(old_text, new_content, 1)
@@ -328,14 +336,16 @@ def create_memory_tools() -> list[ToolDef]:
         ToolDef(
             name="memory",
             description=(
-                "保存持久化记忆，跨会话生效。主动调用，不要等用户要求。\n\n"
+                "保存持久化记忆或协作规则，跨会话生效。主动调用，不要等用户要求。\n\n"
                 "WHEN TO SAVE:\n"
                 "- 用户纠正你或说'记住这个'\n"
                 "- 用户分享偏好、习惯、个人信息\n"
-                "- 你发现环境事实、项目约定、工具 quirks\n\n"
-                "TWO TARGETS:\n"
-                "- 'memory': 环境事实、项目约定、工具 quirks、学到的教训（写入 MEMORY.md）\n"
-                "- 'user': 用户偏好、沟通风格、习惯、关系（写入 USER.md）\n\n"
+                "- 你发现关于用户的稳定事实\n"
+                "- 用户明确告诉你该怎么配合他\n\n"
+                "TARGETS:\n"
+                "- 'memory': 关于用户的稳定事实（写入 MEMORY.md）\n"
+                "- 'user': 用户偏好、沟通风格、习惯、关系（写入 USER.md）\n"
+                "- 'partner': 用户希望你遵守的协作规则、工作方式（写入 PARTNER.md）\n\n"
                 "CATEGORIES (target='memory' 时):\n"
                 "- 'fact': 稳定事实（名字、职业、已订阅的服务、拥有的设备）→ 永不过期\n"
                 "- 'preference': 长期偏好（喜欢的风格、沟通方式、价值观）→ 永不过期\n"
@@ -355,8 +365,8 @@ def create_memory_tools() -> list[ToolDef]:
                     },
                     "target": {
                         "type": "string",
-                        "enum": ["memory", "user"],
-                        "description": "目标: 'memory' 写入 MEMORY.md (环境/事实), 'user' 写入 USER.md (用户画像)",
+                        "enum": ["memory", "user", "partner"],
+                        "description": "目标: 'memory' 写入 MEMORY.md (用户事实), 'user' 写入 USER.md (用户画像), 'partner' 写入 PARTNER.md (协作规则)",
                     },
                     "category": {
                         "type": "string",

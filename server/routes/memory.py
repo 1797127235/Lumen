@@ -102,6 +102,34 @@ async def put_my_memory(
         raise HTTPException(status_code=500, detail="保存记忆失败") from exc
 
 
+@router.get("/partner", response_model=MemoryContent)
+async def get_partner_rules(user_id: str = Query("demo_user")) -> MemoryContent:
+    """读取 PARTNER.md（AI 协作规则）。"""
+    _validate_user_id(user_id)
+    try:
+        content = await _store.read_partner(user_id)
+        return MemoryContent(content=content or "")
+    except Exception as exc:
+        logger.exception("Read partner rules failed: user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="读取协作规则失败") from exc
+
+
+@router.put("/partner")
+async def put_partner_rules(
+    body: dict[str, str],
+    user_id: str = Query("demo_user"),
+) -> dict:
+    """保存完整 PARTNER.md。"""
+    _validate_user_id(user_id)
+    content = body.get("content", "")
+    try:
+        await _store.write_partner(user_id, content)
+        return {"message": "已保存", "chars": len(content)}
+    except Exception as exc:
+        logger.exception("Write partner rules failed: user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="保存协作规则失败") from exc
+
+
 @router.get("/stats", response_model=MemoryStats)
 async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
     _validate_user_id(user_id)
