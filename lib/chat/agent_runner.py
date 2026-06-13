@@ -21,6 +21,15 @@ from shared.path_utils import find_project_root
 
 logger = get_logger(__name__)
 
+_MEMORY_WINDOW = 500
+
+_runner: AgentRunner | None = None
+
+
+def get_agent_runner() -> AgentRunner | None:
+    """获取当前全局 AgentRunner（主要用于 Channel 命令如 /stop）。"""
+    return _runner
+
 
 class AgentRunner:
     """后台任务：持续消费 inbound 消息，运行 Agent Loop
@@ -38,16 +47,24 @@ class AgentRunner:
         self._event_bus = event_bus
         self._running = False
         self._task: asyncio.Task | None = None
+        self._active_turns: dict[str, asyncio.Task] = {}
 
     def start(self) -> None:
         """启动后台任务"""
+        global _runner
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
+        _runner = self
         logger.info("AgentRunner started")
 
     async def stop(self) -> None:
         """停止后台任务"""
+        global _runner
         self._running = False
+        for task in list(self._active_turns.values()):
+            if not task.done():
+                task.cancel()
+        self._active_turns.clear()
         if self._task:
             await self._bus.publish_inbound(None)  # type: ignore[arg-type]
             self._task.cancel()
@@ -55,7 +72,17 @@ class AgentRunner:
 
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        if _runner is self:
+            _runner = None
         logger.info("AgentRunner stopped")
+
+    def cancel_turn(self, session_key: str) -> bool:
+        """取消指定 session 正在运行的 turn（如 Telegram /stop）。"""
+        task = self._active_turns.get(session_key)
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return False
 
     async def _run_loop(self) -> None:
         """主循环"""
@@ -76,6 +103,10 @@ class AgentRunner:
         session_key = msg.session_key
         user_id = msg.sender
         user_input = msg.content
+
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._active_turns[session_key] = current_task
 
         # ── Phase 0: TurnStarted ──
         self._event_bus.emit(
@@ -166,10 +197,11 @@ class AgentRunner:
                 async with session_mgr._lock(session_key):
                     session = session_mgr.get_or_create(session_key)
                     media_paths = [m.path for m in msg.media] if msg.media else []
+                    session_mgr.prune_for_context_cache(session)
 
                     # ── Phase 2: BeforeReasoning ──
                     # 先取 history（不含当前消息），再构建 context_frame
-                    history = session.get_history()
+                    history = get_history_since_consolidated(session, _MEMORY_WINDOW)
                     _skill_names, system_prompt, skills_frame = detect_and_build(user_input)
                     context_frame = await _build_context_frame(conv, user_id, user_input, session_key, skills_frame)
                     messages = build_messages(
@@ -209,6 +241,7 @@ class AgentRunner:
                         tool_chain=result.tool_chain if result.tool_chain else None,
                     )
                     session_mgr.save(session)
+                    session_mgr.prune_for_context_cache(session)
 
                 await persist_turn(
                     db,
@@ -238,6 +271,16 @@ class AgentRunner:
                     )
                 )
 
+            except asyncio.CancelledError:
+                logger.info("Turn cancelled", session_key=session_key)
+                await db.rollback()
+                await self._bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="⏹ 已停止当前任务。",
+                    )
+                )
             except Exception:
                 logger.exception("生成 AI 回复失败")
                 await db.rollback()
@@ -249,10 +292,21 @@ class AgentRunner:
                     )
                 )
             finally:
+                self._active_turns.pop(session_key, None)
                 unbind_chat_context()
 
 
 # ── Context Frame 构建 ──────────────────────────────────────────────
+
+
+def get_history_since_consolidated(session, memory_window: int) -> list[dict]:
+    try:
+        return session.get_history(
+            max_messages=memory_window,
+            start_index=session.last_consolidated,
+        )
+    except TypeError:
+        return session.get_history(max_messages=memory_window)
 
 
 async def _build_context_frame(
@@ -272,10 +326,10 @@ async def _build_context_frame(
     from lib.memory.snapshot import build_snapshot
     from lib.tools.factory import build_deferred_tools_hint
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    timestamp = datetime.now().strftime("%Y-%m-%d")
     manager = get_memory_manager()
 
-    parts = [f"当前时间：{timestamp}"]
+    parts = [f"当前日期：{timestamp}"]
 
     # L0 + L1：用户画像快照
     try:

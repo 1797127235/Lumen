@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # 暂存目录 — Channel 下载后由 AttachmentService 移入 session-files
 _STAGING_DIR = Path.home() / ".lumen" / "tmp" / "telegram-incoming"
 
+# Telegram Bot API 文件下载上限（20 MB）
+_MAX_FILE_SIZE = 20 * 1024 * 1024
+
 
 def _ensure_staging_dir() -> Path:
     _STAGING_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,6 +38,15 @@ async def download_file(tg_file, original_name: str) -> RawFile | None:
         RawFile 或 None（下载失败时）
     """
     try:
+        file_size = getattr(tg_file, "file_size", 0) or 0
+        if file_size > _MAX_FILE_SIZE:
+            logger.warning(
+                "[telegram] 文件过大，跳过下载: %s, size=%d",
+                original_name,
+                file_size,
+            )
+            return None
+
         staging = _ensure_staging_dir()
         safe_name = f"{secrets.token_hex(6)}_{original_name}" if original_name else secrets.token_hex(6)
         dest = staging / safe_name

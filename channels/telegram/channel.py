@@ -14,7 +14,7 @@ import contextlib
 import logging
 from dataclasses import dataclass
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
@@ -49,6 +49,10 @@ _MAX_TOOL_LINES = 12
 # 工具预览字符限制
 _TOOL_PREVIEW_LIMIT = 60
 
+# 断线重连退避（秒）
+_RECONNECT_BASE_DELAY = 1.0
+_RECONNECT_MAX_DELAY = 60.0
+
 
 @dataclass
 class _ToolLiveLine:
@@ -75,9 +79,7 @@ class TelegramChannel(BaseChannel):
         self._bus = bus
         self._event_bus = event_bus
 
-        request = HTTPXRequest(connection_pool_size=20)
-        self._app = Application.builder().token(token).request(request).build()
-
+        self._app: Application | None = None
         self._handlers = TelegramHandlers(bus)
         self._limiter = TelegramOutboundLimiter()
 
@@ -95,30 +97,35 @@ class TelegramChannel(BaseChannel):
         # session_key -> live edit task
         self._live_edit_tasks: dict[str, asyncio.Task] = {}
 
+        self._running = False
+        self._reconnect_attempt = 0
+        self._subscribed = False
+
     async def start(self) -> None:
         """启动 Telegram Polling 并订阅事件"""
-        # 注册入站消息 handler
-        self._handlers.register(self._app)
+        if self._running:
+            return
+        self._running = True
 
-        # 订阅出站
-        self._bus.subscribe_outbound("telegram", self._on_response)
+        # 注册入站消息 handler 在 _build_app 中完成
+        # 订阅出站和 EventBus 只需一次（避免重连时重复订阅）
+        if not self._subscribed:
+            self._bus.subscribe_outbound("telegram", self._on_response)
 
-        # 订阅 EventBus
-        self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
-        self._event_bus.on(TurnStarted, self._on_turn_started)
-        self._event_bus.on(SubagentProgress, self._on_subagent_progress)
-        # 新增：工具调用事件
-        self._event_bus.on(ToolCallStarted, self._on_tool_call_started)
-        self._event_bus.on(ToolCallCompleted, self._on_tool_call_completed)
+            self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
+            self._event_bus.on(TurnStarted, self._on_turn_started)
+            self._event_bus.on(SubagentProgress, self._on_subagent_progress)
+            self._event_bus.on(ToolCallStarted, self._on_tool_call_started)
+            self._event_bus.on(ToolCallCompleted, self._on_tool_call_completed)
+            self._subscribed = True
 
-        await self._app.initialize()
-        await self._app.start()
-        self._polling_task = asyncio.create_task(self._app.updater.start_polling(allowed_updates=Update.ALL_TYPES))
-
+        self._polling_task = asyncio.create_task(self._polling_loop(), name="telegram-polling-loop")
         logger.info("TelegramChannel started")
 
     async def stop(self) -> None:
         """停止 Telegram Polling"""
+        self._running = False
+
         for task in self._typing_tasks.values():
             task.cancel()
         self._typing_tasks.clear()
@@ -128,27 +135,101 @@ class TelegramChannel(BaseChannel):
             task.cancel()
         self._live_edit_tasks.clear()
 
+        if self._polling_task:
+            self._polling_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._polling_task
+            self._polling_task = None
+
+        await self._shutdown_app()
+
+        self._reply_buffers.clear()
+        self._thinking_buffers.clear()
+        self._tool_lines.clear()
+        self._live_messages.clear()
+        logger.info("TelegramChannel stopped")
+
+    # ── 连接生命周期（含断线重连）────────────────────────────
+
+    def _build_app(self) -> Application:
+        """构建新的 Telegram Application 并注册 handlers。"""
+        request = HTTPXRequest(connection_pool_size=20)
+        app = Application.builder().token(self._token).request(request).build()
+        self._handlers.register(app)
+        return app
+
+    async def _shutdown_app(self) -> None:
+        """安全关闭当前 Application。"""
+        app = self._app
+        self._app = None
+        if app is None:
+            return
         try:
-            if self._polling_task:
-                self._polling_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._polling_task
-            if getattr(self._app, "updater", None) and self._app.updater.running:
-                await self._app.updater.stop()
-            if self._app.running:
-                await self._app.stop()
-            await self._app.shutdown()
+            if getattr(app, "updater", None) and app.updater.running:
+                await app.updater.stop()
+            if app.running:
+                await app.stop()
+            await app.shutdown()
         except Exception as e:
-            logger.warning("[telegram] 停止时出错（可能未成功初始化）: %s", e)
-        finally:
-            self._reply_buffers.clear()
-            self._thinking_buffers.clear()
-            self._tool_lines.clear()
-            self._live_messages.clear()
-            logger.info("TelegramChannel stopped")
+            logger.debug("[telegram] shutdown app error: %s", e)
+
+    async def _polling_loop(self) -> None:
+        """带指数退避的 polling 重连循环。
+
+        telegram-python-bot 内部有 network_retry_loop，但遇到致命错误导致
+        updater task 退出时，需要应用层重新初始化 Application 并恢复 polling。
+        """
+        while self._running:
+            try:
+                self._app = self._build_app()
+                await self._app.initialize()
+                await self._app.start()
+
+                # 设置 Bot 命令菜单
+                await self._app.bot.set_my_commands(
+                    [
+                        BotCommand("new", "开始新对话（清空历史）"),
+                        BotCommand("clear", "清空对话历史"),
+                        BotCommand("stop", "停止当前任务"),
+                    ]
+                )
+
+                logger.info("[telegram] polling connected")
+                self._reconnect_attempt = 0
+
+                polling_task = asyncio.create_task(
+                    self._app.updater.start_polling(allowed_updates=Update.ALL_TYPES),
+                    name="telegram-updater-polling",
+                )
+                await polling_task
+
+                # 正常结束（stop() 触发）
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("[telegram] polling error: %s", e)
+                await self._shutdown_app()
+
+                if not self._running:
+                    break
+
+                delay = min(
+                    _RECONNECT_BASE_DELAY * (2**self._reconnect_attempt),
+                    _RECONNECT_MAX_DELAY,
+                )
+                self._reconnect_attempt += 1
+                logger.info("[telegram] reconnecting in %.1fs (attempt=%d)", delay, self._reconnect_attempt)
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    break
 
     async def send_message(self, chat_id: str, content: str, **kwargs) -> None:
         """保底方法：发送纯文本"""
+        if self._app is None:
+            logger.warning("[telegram] send_message skipped: app not ready")
+            return
         await self._limiter.run(
             int(chat_id),
             kind="send",
@@ -304,20 +385,30 @@ class TelegramChannel(BaseChannel):
         try:
             if message_id is None:
                 # 首次发送
-                msg = await self._app.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    disable_notification=True,
+                sent = await self._limiter.run(
+                    chat_id,
+                    kind="edit",
+                    label="live_message_send",
+                    action=lambda: self._app.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    ),
                 )
-                self._live_messages[session_key] = msg.message_id
+                self._live_messages[session_key] = sent.message_id
             else:
                 # 编辑已有消息
-                await self._app.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                    parse_mode="HTML",
+                await self._limiter.run(
+                    chat_id,
+                    kind="edit",
+                    label="live_message_edit",
+                    action=lambda: self._app.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=text,
+                        parse_mode="HTML",
+                    ),
                 )
         except Exception as e:
             if "not modified" not in str(e).lower():
@@ -351,6 +442,9 @@ class TelegramChannel(BaseChannel):
 
         final_reply = msg.content or self._reply_buffers.pop(chat_id, "")
         final_thinking = msg.thinking or self._thinking_buffers.pop(chat_id, "")
+        # 无论如何清空 buffer，避免内存泄漏
+        self._reply_buffers.pop(chat_id, None)
+        self._thinking_buffers.pop(chat_id, None)
 
         # 发送思考过程
         if final_thinking:
@@ -384,7 +478,7 @@ class TelegramChannel(BaseChannel):
             except Exception as e:
                 logger.error("[telegram] Markdown send failed, fallback to plain: %s", e)
                 try:
-                    await self.send_message(msg.chat_id, msg.content)
+                    await self.send_message(msg.chat_id, final_reply)
                 except Exception as e2:
                     logger.error("[telegram] Fallback send also failed: %s", e2)
 
@@ -409,9 +503,7 @@ def _format_tool_live(lines: list[_ToolLiveLine], terminal: bool = False) -> str
         elif line.status == "error":
             status = "✗"
         target = f" {line.target}" if line.target else ""
-        rows.append(
-            f"{_tool_emoji(line.tool_name)} {_clip_inline(line.tool_name, 32)}: " f"{line.intent}{target} {status}"
-        )
+        rows.append(f"{_tool_emoji(line.tool_name)} {_clip_inline(line.tool_name, 32)}: {line.intent}{target} {status}")
 
     if terminal and lines and all(line.status != "running" for line in lines):
         rows.append(f"Done · {len(lines)} tools")

@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 _TOOL_RESULT_CHAR_BUDGET = 10000
 _PROACTIVE_HISTORY_CHAR_BUDGET = 360
 _PROACTIVE_META_HISTORY_CHAR_BUDGET = 1200
+_CONTEXT_CACHE_KEEP_MESSAGES = 20
+_CONTEXT_CACHE_PRUNE_TRIGGER = 60
 
 
 def _truncate_tool_result(content: object) -> str:
@@ -129,6 +131,17 @@ def _align_to_user_boundary(messages: list[dict[str, Any]]) -> list[dict[str, An
         if m.get("role") == "user" or (m.get("role") == "assistant" and m.get("proactive")):
             return messages[i:]
     return []
+
+
+def _is_history_boundary(msg: dict[str, Any]) -> bool:
+    return msg.get("role") == "user" or (msg.get("role") == "assistant" and msg.get("proactive"))
+
+
+def _move_back_to_history_boundary(messages: list[dict[str, Any]], index: int) -> int:
+    idx = max(0, min(index, len(messages)))
+    while idx > 0 and idx < len(messages) and not _is_history_boundary(messages[idx]):
+        idx -= 1
+    return idx
 
 
 def _safe_filename(key: str) -> str:
@@ -399,11 +412,61 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         self._cache.pop(key, None)
 
+    def delete_session(self, key: str, *, cascade: bool = False) -> bool:
+        """删除指定 session，可选择是否级联删除关联数据。"""
+        self._cache.pop(key, None)
+        return self._store.delete_session(key, cascade=cascade)
+
     def list_sessions(self) -> list[dict[str, Any]]:
         sessions = self._store.list_sessions()
         for item in sessions:
             item["path"] = str(self.db_path)
         return sessions
+
+    def prune_for_context_cache(
+        self,
+        session: Session,
+        *,
+        keep_messages: int = _CONTEXT_CACHE_KEEP_MESSAGES,
+        trigger_messages: int = _CONTEXT_CACHE_PRUNE_TRIGGER,
+    ) -> int:
+        """Drop old session replay rows so the LLM prompt keeps a stable prefix.
+
+        The canonical chat history remains in the main Conversation/Message tables.
+        This only trims the session replay store used to rebuild model prompts.
+        """
+
+        keep = max(1, int(keep_messages))
+        trigger = max(keep + 1, int(trigger_messages))
+        if len(session.messages) <= trigger:
+            return 0
+
+        cutoff = _move_back_to_history_boundary(session.messages, len(session.messages) - keep)
+        if cutoff <= 0:
+            return 0
+
+        removed = session.messages[:cutoff]
+        ids = [str(m.get("id")) for m in removed if str(m.get("id") or "").strip()]
+        if len(ids) != len(removed):
+            # Unpersisted in-memory messages mean save() has not run yet. Do not
+            # partially trim because DB and cache would diverge.
+            return 0
+
+        remaining = session.messages[cutoff:]
+        deleted = self._store.delete_session_messages_and_update_cursor(
+            session.key,
+            ids=ids,
+            last_consolidated=0,
+        )
+        if deleted != len(ids):
+            self.invalidate(session.key)
+            return 0
+
+        session.messages = remaining
+        session.last_consolidated = 0
+        session.updated_at = datetime.now()
+        self._cache[session.key] = session
+        return deleted
 
     def get_channel_metadata(self, channel: str) -> list[dict[str, Any]]:
         try:

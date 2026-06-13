@@ -10,7 +10,7 @@ import contextlib
 import logging
 
 from telegram import Update
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from channels.telegram.downloader import download_file
 from lib.bus.queue import InboundMessage, MessageBus
@@ -29,10 +29,54 @@ class TelegramHandlers:
 
     def register(self, app: Application) -> None:
         """将所有 handler 注册到 Application。"""
+        app.add_handler(CommandHandler("clear", self.on_clear))
+        app.add_handler(CommandHandler("new", self.on_clear))
+        app.add_handler(CommandHandler("stop", self.on_stop))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.Document.ALL, self.on_document))
         app.add_handler(MessageHandler(filters.PHOTO, self.on_photo))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO, self.on_media))
+
+    # ── 命令 ──
+
+    async def on_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/clear 或 /new — 清空当前会话的 session store + 主 DB 对话记录"""
+        if not update.effective_message:
+            return
+        chat_id = str(update.effective_chat.id)
+
+        from lib.session import get_session_manager
+
+        session_key = f"telegram:{chat_id}"
+        session_mgr = get_session_manager()
+        try:
+            session_mgr.delete_session(session_key, cascade=True)
+        except Exception:
+            logger.exception("[telegram] Failed to clear session %s", session_key)
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="🧹 对话已清空，我们重新开始吧～",
+        )
+
+    async def on_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/stop — 尝试中断当前正在生成的回复。"""
+        if not update.effective_message:
+            return
+        chat_id = str(update.effective_chat.id)
+        session_key = f"telegram:{chat_id}"
+
+        from lib.chat.agent_runner import get_agent_runner
+
+        runner = get_agent_runner()
+        if runner is None:
+            await _reply_error(context, chat_id, "当前没有运行中的任务")
+            return
+
+        if runner.cancel_turn(session_key):
+            await _reply_error(context, chat_id, "⏹ 正在停止当前任务…")
+        else:
+            await _reply_error(context, chat_id, "当前没有运行中的任务")
 
     # ── 文本 ──
 
@@ -186,9 +230,10 @@ class TelegramHandlers:
 def _auto_save_chat_id(chat_id: str) -> None:
     """自动填充 telegram_chat_id（RSS 推送需要）。"""
     try:
-        from core.config import get_settings, save_user_config
+        from core.config import load_user_config, save_user_config
 
-        if not get_settings().telegram_chat_id:
+        cfg = load_user_config()
+        if not cfg.get("telegram_chat_id"):
             save_user_config({"telegram_chat_id": chat_id})
     except Exception:
         pass
