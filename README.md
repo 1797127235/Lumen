@@ -78,6 +78,7 @@ cargo tauri dev
               │              AgentRunner (PydanticAI) │
               │                       ↓               │
               │  记忆系统 (memory.md 文件优先)         │
+│  + MemoryProvider 插件（honcho / akasha）│
               │  SQLite  (~/.lumen/lumen.db)           │
               └──────────────────────────────────────┘
                          ↑ sidecar subprocess
@@ -103,7 +104,7 @@ Telegram 模式：配置 `telegram_bot_token` 后同一 Python 进程启动 Tele
 | Agent | PydanticAI + ReAct Loop | 流式推理，4 个工具，可观测 |
 | 数据库 | SQLite (aiosqlite) | 单文件零运维，FTS5 全文搜索 |
 | 前端 | React 19 + Tailwind CSS 4 | 现代 UI，OKLCH 配色 |
-| 记忆 | memory.md 文件优先 + MemoryProvider 插件 | 长期记忆存为可编辑 Markdown（唯一真相源）；外部语义召回通过 provider 插件按需接入 |
+| 记忆 | memory.md 文件优先 + MemoryProvider 插件 | 长期记忆存为可编辑 Markdown（唯一真相源）；外部语义召回通过 `~/.lumen/config.json["memory_providers"]` 配置 provider 插件（内置 honcho / akasha，也可放 `~/.lumen/plugins/memory/<name>/`），支持多实例并存 |
 
 ---
 
@@ -112,6 +113,7 @@ Telegram 模式：配置 `telegram_bot_token` 后同一 Python 进程启动 Tele
 ```
 core/             基础设施与运行时（配置、数据库、启动、Agent 装配）
 lib/              业务模块（Chat、Memory、Tools、Profile、Data Sources）
+                  `lib/memory/builtins/` 内置 Memory Provider 插件（honcho / akasha）
 server/           FastAPI 路由层
 src/              React 19 前端（Vite + Tailwind CSS 4）
 src-tauri/        Tauri v2 桌面壳（Rust）
