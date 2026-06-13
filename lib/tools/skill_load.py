@@ -42,7 +42,7 @@ def create_skill_tools() -> list[ToolDef]:
     return [
         ToolDef(
             name="skill_load",
-            description=("查询指定技能的完整指令内容。" "当需要查看某个技能的详细说明时使用。"),
+            description=("查询指定技能的完整指令内容。当需要查看某个技能的详细说明时使用。"),
             input_schema={
                 "type": "object",
                 "properties": {

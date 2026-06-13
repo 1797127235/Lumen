@@ -403,7 +403,7 @@ async def _process_large_content(content: str, url: str = "", title: str = "") -
 
     async def summarize_chunk(idx: int, chunk: str) -> tuple[int, str | None]:
         try:
-            result = await _compress_with_llm(chunk, url, f"{title} (第{idx+1}块)")
+            result = await _compress_with_llm(chunk, url, f"{title} (第{idx + 1}块)")
             return idx, result
         except Exception:
             return idx, None
@@ -414,7 +414,7 @@ async def _process_large_content(content: str, url: str = "", title: str = "") -
     summaries = []
     for idx, summary in sorted(results, key=lambda x: x[0]):
         if summary:
-            summaries.append(f"## 第{idx+1}部分\n{summary}")
+            summaries.append(f"## 第{idx + 1}部分\n{summary}")
 
     if not summaries:
         return content[:_MAX_OUTPUT_SIZE]

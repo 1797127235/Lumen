@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 target-version = "py311"
 line-length = 120
 exclude = [
+    ".agents/skills",
     ".claude/skills",
     ".git",
     "__pycache__",
@@ -57,3 +58,4 @@ asyncio_mode = "auto"
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+pythonpath = ["."]

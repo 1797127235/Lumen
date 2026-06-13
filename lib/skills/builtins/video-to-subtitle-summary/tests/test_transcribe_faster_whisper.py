@@ -102,7 +102,7 @@ class OutputGenerationTests(unittest.TestCase):
             self.assertEqual(output.text_path.read_text(encoding="utf-8"), "第一段 第二段\n")
             self.assertEqual(
                 output.srt_path.read_text(encoding="utf-8"),
-                "1\n00:00:00,000 --> 00:00:01,250\n第一段\n\n" "2\n00:00:01,250 --> 00:00:03,000\n第二段\n\n",
+                "1\n00:00:00,000 --> 00:00:01,250\n第一段\n\n2\n00:00:01,250 --> 00:00:03,000\n第二段\n\n",
             )
 
     def test_write_outputs_renumbers_after_skipping_empty_segments(self):

@@ -54,7 +54,7 @@ Hello <c>world</c>
 
             self.assertEqual(
                 output.srt_path.read_text(encoding="utf-8"),
-                "1\n00:00:00,000 --> 00:00:01,250\nHello world\n\n" "2\n00:00:01,250 --> 00:00:03,000\n第二段\n\n",
+                "1\n00:00:00,000 --> 00:00:01,250\nHello world\n\n2\n00:00:01,250 --> 00:00:03,000\n第二段\n\n",
             )
             self.assertEqual(
                 output.text_path.read_text(encoding="utf-8"),

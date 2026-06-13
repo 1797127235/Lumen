@@ -177,7 +177,7 @@ def create_tool_search() -> ToolDef:
                         "enum": ["read-only", "write", "destructive"],
                     },
                     "description": (
-                        "允许的风险等级，不填则不过滤。" "read-only=只读，write=写操作，destructive=破坏性操作"
+                        "允许的风险等级，不填则不过滤。read-only=只读，write=写操作，destructive=破坏性操作"
                     ),
                 },
             },

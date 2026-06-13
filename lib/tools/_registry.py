@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, cast
@@ -152,16 +153,28 @@ class ToolRegistry:
     def get_registered_names(self) -> set[str]:
         return set(self._tools.keys())
 
-    def get_schemas(self, names: set[str]) -> list[dict[str, Any]]:
+    def get_schemas(self, names: Iterable[str] | None = None) -> list[dict[str, Any]]:
         """按名称集合过滤返回 OpenAI function calling 格式的工具定义。"""
         schemas: list[dict[str, Any]] = []
-        for name in names:
+        if names is None:
+            ordered_names = list(self._tools.keys())
+        elif isinstance(names, set | frozenset):
+            ordered_names = [name for name in self._tools if name in names]
+        else:
+            ordered_names = list(names)
+
+        for name in ordered_names:
             tool = self._tools.get(name)
             if tool is None:
                 continue
             schema = self._tool_to_schema(tool)
             schemas.append(_with_progress_description(schema, tool))
         return schemas
+
+    def get_registered_order(self, names: set[str] | None = None) -> list[str]:
+        if names is None:
+            return list(self._tools.keys())
+        return [name for name in self._tools if name in names]
 
     def get_always_on_names(self) -> set[str]:
         return {name for name, doc in self._documents.items() if doc.always_on}

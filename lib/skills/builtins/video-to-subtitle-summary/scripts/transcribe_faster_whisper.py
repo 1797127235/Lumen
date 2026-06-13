@@ -87,8 +87,7 @@ def load_ctranslate2():
         import ctranslate2  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            "Missing dependency 'ctranslate2'. Install 'faster-whisper' first, "
-            "for example: pip install faster-whisper"
+            "Missing dependency 'ctranslate2'. Install 'faster-whisper' first, for example: pip install faster-whisper"
         ) from exc
     return ctranslate2
 
@@ -98,7 +97,7 @@ def load_whisper_model():
         from faster_whisper import WhisperModel  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            "Missing dependency 'faster-whisper'. Install it with " "'pip install faster-whisper'."
+            "Missing dependency 'faster-whisper'. Install it with 'pip install faster-whisper'."
         ) from exc
     return WhisperModel
 

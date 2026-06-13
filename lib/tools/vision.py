@@ -201,7 +201,7 @@ async def _image_read(args: dict[str, Any], ctx: Any = None) -> Any:
     vl_config = _get_vl_config()
 
     if not vl_config["api_key"]:
-        return tool_error("未配置 VL 模型 API Key。请在设置页面配置 VL 模型，" "或确保主模型 API Key 已配置。")
+        return tool_error("未配置 VL 模型 API Key。请在设置页面配置 VL 模型，或确保主模型 API Key 已配置。")
 
     # 调用 VL 模型
     try:

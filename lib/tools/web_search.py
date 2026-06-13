@@ -109,7 +109,7 @@ async def _web_search(args: dict[str, Any], ctx: Any = None):
                 "不要重复尝试搜索，直接告知用户当前搜索不可用。"
             )
         if status_code == 429:
-            return tool_error(f"搜索服务限流（{status_code}）：API 调用配额已耗尽，请稍后再试。" "不要重复尝试搜索。")
+            return tool_error(f"搜索服务限流（{status_code}）：API 调用配额已耗尽，请稍后再试。不要重复尝试搜索。")
         return tool_error(f"搜索 API 返回错误（{status_code}）。不要重复尝试。")
     except Exception as e:
         logger.warning("web_search failed", provider=provider, error=str(e))
@@ -136,7 +136,7 @@ def create_web_search_tools() -> list[ToolDef]:
         ToolDef(
             name="web_search",
             description=(
-                "搜索互联网获取最新信息。当用户问到新闻、近期事件、实时数据、" "或你知识截止日期之后的内容时使用。"
+                "搜索互联网获取最新信息。当用户问到新闻、近期事件、实时数据、或你知识截止日期之后的内容时使用。"
             ),
             input_schema={
                 "type": "object",

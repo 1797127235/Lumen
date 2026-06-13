@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 
@@ -59,10 +60,8 @@ async def _collect_stream(user_id: str, question: str) -> str:
     finally:
         await runner.stop()
         dispatch_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await dispatch_task
-        except asyncio.CancelledError:
-            pass
 
 
 async def run_qa_instance(

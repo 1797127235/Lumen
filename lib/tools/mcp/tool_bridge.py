@@ -49,7 +49,7 @@ def discover_mcp_tools() -> list[tuple[str, ToolDef]]:
 
 
 def _make_handler(server_name: str, tool_name: str):
-    async def handler(args: dict[str, Any]):
+    async def handler(args: dict[str, Any], ctx: Any = None):
         manager = get_mcp_manager()
         return await manager.call_tool(server_name, tool_name, args)
 

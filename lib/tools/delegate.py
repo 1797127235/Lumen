@@ -187,7 +187,7 @@ async def _force_summary(
     from lib.llm.client import LLMClient
 
     steps_text = "\n".join(f"- {s}" for s in step_log[-20:])  # 最近 20 步
-    prompt = f"[收尾原因] {reason}\n" f"[已执行步骤]\n{steps_text}\n\n" f"{_FORCE_SUMMARY_PROMPT}"
+    prompt = f"[收尾原因] {reason}\n[已执行步骤]\n{steps_text}\n\n{_FORCE_SUMMARY_PROMPT}"
     try:
         client = LLMClient()
         summary = await client.complete(

@@ -23,17 +23,20 @@ class ProviderRegistry:
             pdata = mdev.get(mdev_id)
             if not isinstance(pdata, dict):
                 continue
-            result.append({
-                "id": lumen_id,
-                "name": pdata.get("name") or lumen_id,
-                "baseUrl": pdata.get("api") or "",
-                "models": list_provider_models(lumen_id),
-                "embeddingModels": [],
-            })
+            result.append(
+                {
+                    "id": lumen_id,
+                    "name": pdata.get("name") or lumen_id,
+                    "baseUrl": pdata.get("api") or "",
+                    "models": list_provider_models(lumen_id),
+                    "embeddingModels": [],
+                }
+            )
         return result
 
     def get_default_models(self, name: str) -> list[str]:
         from lib.providers.models_dev import list_provider_models
+
         return list_provider_models(name)
 
     def get_credentials(self, name: str | None) -> dict[str, Any] | None:
