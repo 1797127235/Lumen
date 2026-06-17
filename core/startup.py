@@ -60,7 +60,29 @@ async def lifespan(app: FastAPI):
     # Hermes-Pure: 语义索引补偿循环已移除（ProjectionManager 已删除）
     pass
 
-    # 连接已配置的 MCP Servers
+    # ── 主动行动能力:时间触发(scheduler)+ 事件触发(triggers)──
+    # 在 MCP connect_all 之前初始化,确保 server 通知 handler 能解析到 TriggerManager。
+    # 统一概念模型:两者都是「触发源 → 动作」;notify 动作共享同一条
+    # 「注入 InboundMessage → AgentRunner → agent 经 Telegram 主动触达」路径。
+    # 详见 lib/scheduler/__init__.py 与 lib/triggers/__init__.py 顶部 docstring。
+    from lib.bus.queue import MessageBus, set_bus
+
+    bus = MessageBus()  # 提前创建,MCP 通知转发与下方 Channels 共用同一实例
+    set_bus(bus)  # 注册全局单例,主动送达层(delivery.py)经 get_bus() 取用
+
+    sched_engine = None
+    trigger_manager = None
+    with contextlib.suppress(Exception):
+        from lib.scheduler import get_scheduler_engine
+        from lib.triggers import get_manager
+
+        trigger_manager = get_manager(bus)
+        await trigger_manager.start()
+        sched_engine = get_scheduler_engine(bus)
+        await sched_engine.start()
+        logger.info("Proactive engines started (scheduler + triggers)")
+
+    # 连接已配置的 MCP Servers(通知 handler 此刻可正确转发给 TriggerManager)
     try:
         from lib.tools.mcp.client_manager import get_mcp_manager
 
@@ -120,10 +142,9 @@ async def lifespan(app: FastAPI):
 
     from channels.web.web import WebChannel
     from lib.bus.event_bus import EventBus
-    from lib.bus.queue import MessageBus
     from lib.chat.agent_runner import AgentRunner
 
-    bus = MessageBus()
+    # bus 已在上方(MCP 连接前)创建,此处只补 EventBus
     event_bus = EventBus()
 
     # 启动 Channels（配置驱动）
@@ -183,6 +204,14 @@ async def lifespan(app: FastAPI):
 
     await runner.stop()
     dispatch_task.cancel()
+
+    # 关闭主动行动引擎(与启动顺序相反)
+    with contextlib.suppress(Exception):
+        if trigger_manager is not None:
+            await trigger_manager.stop()
+    with contextlib.suppress(Exception):
+        if sched_engine is not None:
+            await sched_engine.stop()
 
     for channel in channels:
         await channel.stop()

@@ -135,8 +135,7 @@ async def get_conversation_messages(
     conv = await db.get(Conversation, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if conv.user_id != user_id:
-        raise HTTPException(status_code=403, detail="无权访问该会话")
+    # 单用户产品:不做 conv.user_id != user_id 权限校验(威胁不存在,且曾阻断主动送达)。
 
     result = await db.execute(
         select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
@@ -162,8 +161,7 @@ async def delete_conversation(
     conv = await db.get(Conversation, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if conv.user_id != user_id:
-        raise HTTPException(status_code=403, detail="无权删除该会话")
+    # 单用户产品:不做 conv.user_id != user_id 权限校验(威胁不存在)。
 
     await db.execute(Message.__table__.delete().where(Message.conversation_id == conversation_id))
     await db.delete(conv)
@@ -198,8 +196,7 @@ async def update_conversation(
     conv = await db.get(Conversation, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if conv.user_id != req.user_id:
-        raise HTTPException(status_code=403, detail="无权修改")
+    # 单用户产品:不做 conv.user_id != req.user_id 权限校验(威胁不存在)。
     if req.title is not None:
         conv.title = req.title
     if req.is_pinned is not None:

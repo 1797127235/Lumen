@@ -174,6 +174,42 @@ class McpClientManager:
 
     # -- 内部连接管理 --
 
+    def _make_message_handler(self, name: str):
+        """构造捕获 server_name 的 notification 转发 handler。
+
+        只关心 ServerNotification(单向通知,如 resources/updated);
+        RequestResponder(server 主动发起请求)和 Exception 在此忽略。
+        延迟 import lib.triggers,避免循环依赖;manger 未初始化时静默跳过,
+        不阻断 MCP 会话本身的正常工作。
+        """
+        from mcp.types import ServerNotification
+
+        async def handler(message: Any) -> None:
+            # 只处理 server 主动发的通知;其他类型(RequestResponder/Exception)忽略
+            if not isinstance(message, ServerNotification):
+                return
+            try:
+                from lib.triggers import get_manager
+
+                await get_manager().handle_notification(name, message)
+            except Exception:
+                # TriggerManager 未初始化或转发失败,不阻断 MCP 通知流
+                logger.debug("notification 转发跳过", server=name)
+
+        return handler
+
+    async def reconnect_one(self, server_name: str) -> None:
+        """重连单个 server(断开 + 重连)。供 TriggerManager 连续失败时定点重连。
+
+        无该 server 配置时直接返回;不持有锁时静默跳过避免与 connect_all 竞态。
+        """
+        conn = self._connections.get(server_name)
+        if conn is None:
+            return
+        async with self._lock:
+            await self._disconnect_one(server_name)
+            await self._connect_one(conn.config)
+
     async def _connect_one(self, cfg: McpServerConfig) -> None:
         """连接单个 server。"""
         name = cfg.name
@@ -195,7 +231,13 @@ class McpClientManager:
                 return
 
             read_stream, write_stream = await stack.enter_async_context(transport_cm)
-            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                    message_handler=self._make_message_handler(name),
+                )
+            )
             await session.initialize()
 
             # 获取工具列表

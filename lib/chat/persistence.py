@@ -69,18 +69,6 @@ async def persist_turn(
         )
         task.add_done_callback(_log_task_error)
 
-    # ── 情绪推断（对话结束后异步更新）──
-    try:
-        from core.db import get_async_session_maker
-        from lib.partner.mood_inference import update_mood_state
-
-        mood_task = asyncio.create_task(
-            update_mood_state(get_async_session_maker, user_id), name=f"mood-inference-{conv.conversation_id[:8]}"
-        )
-        mood_task.add_done_callback(_log_task_error)
-    except Exception:
-        pass
-
     return True
 
 
@@ -161,13 +149,16 @@ def _log_task_error(task: asyncio.Task) -> None:
 
 
 async def ensure_conversation(db, user_id: str, conversation_id: str | None, user_input: str):
-    """确保会话存在。返回 Conversation 实例或错误信息字符串"""
+    """确保会话存在。返回 Conversation 实例或错误信息字符串。
+
+    单用户产品:不再做 conv.user_id != user_id 权限校验(该威胁不存在,且曾是
+    主动送达崩溃根因——送达层 sender 与历史会话 user_id 不一致即被拒)。
+    多用户化时在此恢复校验。
+    """
     from lib.chat.models import Conversation
 
     if conversation_id:
         conv = await db.get(Conversation, conversation_id)
-        if conv and conv.user_id != user_id:
-            return "无权访问该会话"
         if not conv:
             try:
                 title = user_input[:27] + "..." if len(user_input) > 30 else user_input

@@ -19,8 +19,10 @@ from lib.tools.files import create_file_tools
 from lib.tools.mcp_setup import create_mcp_setup_tools
 from lib.tools.memory import create_memory_tools
 from lib.tools.profile import create_profile_tools
+from lib.tools.scheduler import create_scheduler_tools
 from lib.tools.shell import create_shell_tools
 from lib.tools.skill_load import create_skill_tools
+from lib.tools.triggers import create_trigger_tools
 from lib.tools.vision import create_vision_tools
 from lib.tools.web_tools import create_web_tools
 from shared.logging import get_logger
@@ -47,9 +49,11 @@ def register_all_tools() -> ToolRegistry:
         *create_web_tools(),  # 多后端搜索 + 提取 + 爬取
         *create_shell_tools(),
         *create_skill_tools(),
-        *create_mcp_setup_tools(),  # 新增：一键启用 lumen-rss 等 MCP server
+        *create_mcp_setup_tools(),  # 新增：一键启用 lumen-feed 等 MCP server
         *create_delegate_tools(),  # 新增：delegate 子 Agent 工具
         *create_vision_tools(),  # 新增：Vision 图片分析工具
+        *create_scheduler_tools(),  # 时间触发:到点调工具(可选 notify 主动触达)
+        *create_trigger_tools(),  # 事件触发:订阅 MCP server 更新 → 主动找你
         create_tool_search(),
     ]
 

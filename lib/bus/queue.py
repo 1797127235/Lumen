@@ -112,3 +112,21 @@ class MessageBus:
         # 放入 None 唤醒 consume_inbound
         with contextlib.suppress(asyncio.QueueFull):
             self._inbound.put_nowait(None)
+
+
+# -- 全局单例 --
+# 主动送达层(lib/proactive/delivery.py)等后台组件需要拿到 bus 发布 InboundMessage,
+# 但它们不在 startup 的 lifespan 作用域内。startup 创建 MessageBus 时调 set_bus() 注册,
+# 其他地方用 get_bus() 取。
+_bus: MessageBus | None = None
+
+
+def set_bus(bus: MessageBus) -> None:
+    """注册全局 MessageBus 单例(startup 调用)。"""
+    global _bus
+    _bus = bus
+
+
+def get_bus() -> MessageBus | None:
+    """取全局 MessageBus 单例(未注册时返回 None,调用方自行兜底)。"""
+    return _bus
