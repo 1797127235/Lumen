@@ -637,6 +637,11 @@ def create_shell_tools() -> list[ToolDef]:
             name="shell",
             description=(
                 "在系统 shell 中执行命令并返回输出。\n\n"
+                "平台与 shell 环境：\n"
+                "- Windows：默认使用 cmd.exe。PowerShell 语法（$()、Get-Date 等）需用 powershell -Command 包裹\n"
+                "- Linux/macOS：默认使用 /bin/sh\n"
+                '- 需要 PowerShell 时：powershell -Command "你的命令"\n'
+                "- 需要 cmd.exe 时：直接写命令即可\n\n"
                 "适用场景：安装依赖、运行测试、启动服务、查看进程、git 操作、系统管理。\n\n"
                 "⚠️ 不适用场景（有专用工具，不要用 shell 替代）：\n"
                 "- 搜索文件内容 → 用 file_grep\n"

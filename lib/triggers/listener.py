@@ -213,7 +213,7 @@ class TriggerManager:
         for it in new_worth:
             seen_ids.add(it["id"])
 
-        content = f"【订阅更新】{sub.server_name} 有 {len(new_worth)} 条值得看的新内容。" f"帮我看看,简要告诉我重点。"
+        content = f"【订阅更新】{sub.server_name} 有 {len(new_worth)} 条值得看的新内容。帮我看看,简要告诉我重点。"
         from lib.proactive.delivery import deliver
 
         delivered = await deliver(

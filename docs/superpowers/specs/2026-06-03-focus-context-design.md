@@ -30,7 +30,7 @@
 ## 当前关注
 
 - Agent 记忆系统设计
-- PydanticAI 用法
+- 自研 Agent 框架
 - RSSHub 集成
 ```
 

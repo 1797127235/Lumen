@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from lib.metrics import record
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -84,8 +85,20 @@ async def deliver(
                 source_id=source_id,
                 chat_id=chat_id,
             )
+            await record(
+                "proactive.deliveries",
+                1.0,
+                labels={"channel": channel_name, "outcome": "success", "source": source},
+                user_id=user_id,
+            )
         except Exception as exc:
             logger.error("送达 %s 失败", channel_name, source=source, source_id=source_id, error=str(exc))
+            await record(
+                "proactive.deliveries",
+                1.0,
+                labels={"channel": channel_name, "outcome": "failure", "source": source},
+                user_id=user_id,
+            )
 
     # ── 扩展点:未来接入 QQ/微信 ──
     # 在上面的 channels 字典里加 "qq": qq_chat_id / "wechat": wx_chat_id 即可,

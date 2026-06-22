@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, cast
 
+from lib.metrics import record
 from lib.tools._base import ToolDef
 from shared.logging import get_logger
 
@@ -112,20 +114,37 @@ class ToolRegistry:
         """执行工具，自动合总会话上下文。"""
         tool = self._tools.get(name)
         if tool is None:
+            await record("tool.calls", 1.0, labels={"tool_name": name, "status": "not_found"})
             return f"❌ 工具 '{name}' 不存在"
         if tool.execute is None:
+            await record("tool.calls", 1.0, labels={"tool_name": name, "status": "no_executor"})
             return f"❌ 工具 '{name}' 没有执行函数"
 
         merged: dict[str, Any] = {**self._context, **arguments}
         if not _tool_defines_parameter(tool, _PROGRESS_DESCRIPTION_FIELD):
             merged.pop(_PROGRESS_DESCRIPTION_FIELD, None)
 
+        # 工具执行计时：埋在此处同时覆盖主 agent（_execute_tool）和 worker agent（run_worker_agent）
+        started = time.perf_counter()
+        status = "ok"
         try:
             result = await tool.execute(merged, ctx)
             return str(result)
         except Exception as exc:
+            status = "error"
             logger.exception("工具执行出错", tool=name)
             return f"❌ 执行失败: {exc}"
+        finally:
+            try:
+                duration_ms = (time.perf_counter() - started) * 1000
+                await record(
+                    "tool.duration_ms",
+                    duration_ms,
+                    labels={"tool_name": name, "status": status},
+                )
+                await record("tool.calls", 1.0, labels={"tool_name": name, "status": status})
+            except Exception:
+                pass
 
     def register(
         self,

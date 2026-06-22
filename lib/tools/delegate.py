@@ -215,8 +215,8 @@ def _parse_args(raw: Any) -> dict[str, Any]:
 def _emit_progress_from_event(event: Any, emit: Any, step_log: list[str] | None = None) -> None:
     """从 child 的 stream event 提取进度文本并通过 emit 发出。
 
-    PydanticAI event_kind 值：function_tool_call / function_tool_result / part_start /
-    part_delta / agent_run_result（见 event_handlers.py EVENT_HANDLERS 映射）。
+    event_kind 值：function_tool_call / function_tool_result / part_start /
+    part_delta / agent_run_result。
 
     Args:
         step_log: 可选的步骤日志列表，用于收集中间步骤供收尾总结使用。

@@ -25,7 +25,7 @@ POST /api/memory/upload-resume  (multipart: file, user_id)
 5. `memory.sync_projections()` → memory.md / skills.md / experiences.md
 6. 返回 `{"ok": true, "events": 5}`
 
-**不用的**：PydanticAI Agent、PydanticAI tools、LumenDeps
+**不用的**：PydanticAI Agent（已弃用）、PydanticAI tools（已弃用）、LumenDeps（已弃用）
 
 ## 前端
 

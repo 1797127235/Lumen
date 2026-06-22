@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
+from lib.metrics import record
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -81,6 +83,8 @@ class LLMClient:
                 await on_content_delta({"content_delta": chunk})
             return LLMResponse(content=collected or None)
 
+        started = time.perf_counter()
+        status = "ok"
         try:
             resp = await self.client.post("/chat/completions", json=payload)
             resp.raise_for_status()
@@ -88,7 +92,10 @@ class LLMClient:
             error_text = exc.response.text
             lower = error_text.lower()
             if any(kw in lower for kw in _CONTEXT_LENGTH_KEYWORDS):
+                status = "context_overflow"
+                await record("llm.context_overflow", 1.0, labels={"model": self.model})
                 raise ContextLengthError(error_text) from exc
+            status = "error"
             raise
 
         data = resp.json()
@@ -108,15 +115,32 @@ class LLMClient:
                 )
             )
 
+        usage = {
+            "input": raw_usage.get("prompt_tokens", 0),
+            "output": raw_usage.get("completion_tokens", 0),
+            "cache_read": raw_usage.get("prompt_cache_hit_tokens", 0),
+            "cache_write": raw_usage.get("prompt_cache_miss_tokens", 0),
+        }
+
+        # ── metrics 埋点：LLM 调用 token / 耗时 ──
+        # fire-and-forget，绝不阻塞 LLM 流程
+        latency_ms = (time.perf_counter() - started) * 1000
+        model_label = {"model": self.model}
+        await record("llm.call_duration_ms", latency_ms, labels={**model_label, "status": status})
+        await record("llm.calls", 1.0, labels={**model_label, "status": status})
+        if usage["input"]:
+            await record("llm.tokens.input", float(usage["input"]), labels=model_label)
+        if usage["output"]:
+            await record("llm.tokens.output", float(usage["output"]), labels=model_label)
+        if usage["cache_read"]:
+            await record("llm.tokens.cache_read", float(usage["cache_read"]), labels=model_label)
+        if usage["cache_write"]:
+            await record("llm.tokens.cache_write", float(usage["cache_write"]), labels=model_label)
+
         return LLMResponse(
             content=message.get("content"),
             tool_calls=tool_calls,
-            usage={
-                "input": raw_usage.get("prompt_tokens", 0),
-                "output": raw_usage.get("completion_tokens", 0),
-                "cache_read": raw_usage.get("prompt_cache_hit_tokens", 0),
-                "cache_write": raw_usage.get("prompt_cache_miss_tokens", 0),
-            },
+            usage=usage,
         )
 
     async def _chat_stream(self, payload: dict[str, Any]) -> AsyncIterator[str]:

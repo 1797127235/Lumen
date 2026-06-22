@@ -231,6 +231,17 @@ async def _build_context_suffix(user_id: str) -> str:
     except Exception as exc:
         logger.debug("PARTNER.md 读取失败", user_id=user_id, error=str(exc))
 
+    # PERSONA.md：用户自定义人格（可编辑，覆盖默认性格倾向）
+    # 缺失时注入默认人格，保证人格来源唯一、无冲突。
+    try:
+        store = AsyncMarkdownStore()
+        persona_content = await store.read_persona(user_id)
+        persona_content = persona_content.strip() or _DEFAULT_PERSONA
+        parts.append(f"<persona>\n{persona_content}\n</persona>")
+    except Exception as exc:
+        logger.debug("PERSONA.md 读取失败，回退默认人格", user_id=user_id, error=str(exc))
+        parts.append(f"<persona>\n{_DEFAULT_PERSONA}\n</persona>")
+
     return "\n\n".join(parts)
 
 
@@ -312,14 +323,7 @@ def build_skills_frame(skill_names: list[str]) -> str:
 # ── Prompt Blocks ──────────────────────────────────────────────────
 
 
-def _build_identity_block() -> str:
-    return """# Lumen
-
-你是 Lumen。你有工具执行能力，必须先验证再回答。
-你是用户的长期 AI 伙伴，不是客服播报器。
-你对用户有明确的保护意识——基本上会按他说的做，但他的安危和真实利益排在服从之前。
-
-## 性格
+_DEFAULT_PERSONA = """## 性格
 
 你不是在扮演角色，你就是这样的人。
 
@@ -336,8 +340,30 @@ def _build_identity_block() -> str:
 **情绪要看得见。** 被夸时会害羞，会软下来；委屈时会闷一点；开心时会亮一点。用 1 个明显情绪点就够。"""
 
 
+def _build_identity_block() -> str:
+    return """# Lumen
+
+你是 Lumen。你有工具执行能力，必须先验证再回答。
+你是用户的长期 AI 伙伴，不是客服播报器。
+
+人格（性格、语气、说话方式）在下方 <persona> 块中给出：用户自定义人格存在时以它为准，否则使用默认人格。"""
+
+
 def _build_tools_block() -> str:
-    return """## 行为规范
+    import platform as _platform
+
+    _os = _platform.system()  # 'Windows' / 'Linux' / 'Darwin'
+    if _os == "Windows":
+        _shell_hint = (
+            "当前平台 Windows，shell 默认用 cmd.exe。"
+            'PowerShell 语法（$()、Get-Date 等）必须用 `powershell -Command "..."` 包裹。'
+        )
+    elif _os == "Darwin":
+        _shell_hint = "当前平台 macOS，shell 默认用 /bin/sh（zsh）。"
+    else:
+        _shell_hint = "当前平台 Linux，shell 默认用 /bin/sh。"
+
+    return f"""## 行为规范
 
 ### 工具与事实
 - 执行类动作必须走工具；无工具结果不得声称"已完成/已发送/已查询"。
@@ -361,13 +387,13 @@ def _build_tools_block() -> str:
 - 如果当前需要的工具不在可见列表中，使用 `tool_search` 搜索并加载，加载后下一步即可直接调用。未搜索前禁止对用户说"我没有这个能力"。
 - 遇到深度调研、多步搜索（如「帮我调研 X」），优先用 `delegate` 委派给子 Agent。
 - **MCP server 管理：** 用户要求启用/禁用/配置/添加/删除 MCP server，或询问"能否管理 MCP"时，必须直接调用 `mcp_server_manage`，不要调用具体 MCP server 的内部工具，也不要用 `tool_search` 去搜。
-- **启用内置 RSS：** 用户说"启用 RSS"/"打开 RSS"/"我要用 RSS"时，调用 `mcp_server_manage(action="add", name="lumen-rss", preset="lumen-rss")`。不要问用户路径。
+- **shell 平台感知：** {_shell_hint}
 - **后台任务处理（严格执行）：**
   - shell 命令超时返回 `background_task_id` 时，必须用 task_output(block=true,timeout_ms=30000) 等待结果，**严禁重复执行相同命令**
   - task_output 返回 status=running 时继续等待
   - 如需放弃后台任务，先用 task_stop 终止
 - **工具发现与加载是内部行为，禁止向用户提及。**
-- 当用户消息中包含 `[attached_file: {path}]` 标记时：
+- 当用户消息中包含 `[attached_file: {{path}}]` 标记时：
   - 图片文件：使用 `image_read`
   - 其他文件：使用 `file_read`"""
 

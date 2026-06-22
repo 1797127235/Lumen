@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { stat } from '@tauri-apps/plugin-fs'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
-import MoodStrip from '../components/MoodStrip'
+
 import { useChatSession, type AttachmentMeta } from '../lib/chatSession'
 import { parseThinkSegments } from '../lib/thinkSegments'
 
@@ -41,7 +41,6 @@ export default function Chat() {
 
   return (
     <div className="mx-auto flex h-full max-w-[680px] flex-col px-md pt-xl pb-xl">
-      <MoodStrip />
       <div className="scroll-auto-hide flex min-h-0 flex-1 flex-col gap-xl overflow-y-auto">
         {messages.length === 0 && !streaming ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-md ink-fade-in">

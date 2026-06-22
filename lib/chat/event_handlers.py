@@ -1,4 +1,4 @@
-"""PydanticAI Agent 流事件处理器"""
+"""Agent 流事件处理器"""
 
 from __future__ import annotations
 

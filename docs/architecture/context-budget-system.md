@@ -18,7 +18,7 @@ Tool handler 返回 str（完整内容）
     ↓
 wrap_with_* 中间件链（此时内容完整，可落盘）
     ↓
-PydanticAI 框架包装为 ToolReturnPart（已进入消息流）
+工具返回结果（已进入消息流）
     ↓
 session.py _truncate_tool_returns_in_messages（此时只能看到 ToolReturnPart.content）
     ↓
@@ -182,7 +182,7 @@ Tool handler 返回 str
 │  Layer 0: 工具中间件 — 结果落盘（唯一能拿到完整内容的地方）     │
 │  wrap_with_result_budget → 完整内容写文件 → 替换为 preview      │
 │  位置: _middleware.py (factory.py 中间件链)                      │
-│  时机: handler 返回后，PydanticAI 包装前                         │
+│  时机: handler 返回后，消息流包装前                         │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 1: 单轮总量预算                                          │
 │  event_handlers.py agent_run_result → 检查本轮总量 → 额外落盘   │
@@ -258,11 +258,10 @@ async def budgeted(args: dict[str, Any], ctx, _orig=orig, _name=t.name):
 但更干净的做法是：让中间件函数内部统一 `deps = ctx.deps`，一次性改完。
 所有中间件（logging / budget / failure_degradation / result_budget）都走这个模式。
 
-**注意**：`ToolReturn`（pydantic_ai.messages.ToolReturn）是工具返回的结构化包装，
-`ToolReturnPart`（同模块）是消息流中的 part 类型。两者不同：
-- handler 通过 `tool_ok()` / `tool_error()` 返回 `ToolReturn`
-- PydanticAI 将 `ToolReturn.return_value` 包装为 `ToolReturnPart.content` 进入消息流
-- 中间件看到的是 handler 的原始返回值（`ToolReturn` 或 `str`），不是 `ToolReturnPart`
+**注意**：工具返回值经过处理后进入消息流：
+- handler 通过 `tool_ok()` / `tool_error()` 返回结果
+- 返回值被包装为消息流中的 content 进入消息流
+- 中间件看到的是 handler 的原始返回值（`str`）
 
 ```python
 # lib/tools/_middleware.py — 新增
@@ -684,7 +683,7 @@ def prune_old_tool_results(
 
 **集成到 ProcessHistory**（core/agent.py）：
 
-PydanticAI 的 `ProcessHistory` 通过 `_run_history_processor` 分发，**同时支持同步和异步函数**
+`ProcessHistory` 通过 `_run_history_processor` 分发，**同时支持同步和异步函数**
 （用 `is_async_callable` 检测，同步函数会通过 `run_in_executor` 执行）。
 `prune_old_tool_results` 是纯同步函数（无 LLM 调用），直接传同步函数即可：
 

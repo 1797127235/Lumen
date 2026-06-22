@@ -39,8 +39,8 @@ __all__ = [
     "SchedulerEngine",
     "TaskSpec",
     "TaskStore",
-    "get_scheduler_engine",
     "get_engine",
+    "get_scheduler_engine",
 ]
 
 _engine: SchedulerEngine | None = None

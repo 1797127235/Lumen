@@ -31,8 +31,9 @@ _RUN_INTERVAL_SECONDS = 86400  # 24 小时
 
 # ── 条目解析 ──────────────────────────────────────────────────────
 
-# 匹配: - 2026-06-03 — [category] content
-_ENTRY_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2})\s+—\s+\[([^\]]+)\]\s+(.*)$")
+# 匹配: - 2026-06-03 — [category] content 或 - 2026-06-03 14:25 — [category] content
+# 向后兼容:日期段可选地带时分(分钟)或时分秒
+_ENTRY_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?)\s+—\s+\[([^\]]+)\]\s+(.*)$")
 
 
 def _parse_entry(line: str) -> tuple[str, str, str] | None:
@@ -45,6 +46,24 @@ def _parse_entry(line: str) -> tuple[str, str, str] | None:
 
 def _is_stale_tag(category: str) -> bool:
     return category.endswith("?stale")
+
+
+def _parse_entry_date(date_str: str) -> datetime | None:
+    """解析条目时间戳，兼容旧日期格式和新时分格式。
+
+    支持三种格式：
+    - "2026-06-14"（旧）
+    - "2026-06-14 23:05"（新，分钟粒度）
+    - "2026-06-14 23:05:08"（新，秒级）
+
+    解析失败返回 None，调用方应原样保留该行。
+    """
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
 
 
 # ── 整理逻辑 ──────────────────────────────────────────────────────
@@ -76,9 +95,8 @@ def housekeep_memory(content: str, now: datetime | None = None) -> tuple[str, in
 
         # 已经 stale 的 intent，再过 30 天删除
         if _is_stale_tag(category):
-            try:
-                entry_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
-            except ValueError:
+            entry_date = _parse_entry_date(date_str)
+            if entry_date is None:
                 result_lines.append(line)
                 continue
             days_since = (now - entry_date).days
@@ -90,9 +108,8 @@ def housekeep_memory(content: str, now: datetime | None = None) -> tuple[str, in
             result_lines.append(line)
             continue
 
-        try:
-            entry_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
-        except ValueError:
+        entry_date = _parse_entry_date(date_str)
+        if entry_date is None:
             result_lines.append(line)
             continue
 

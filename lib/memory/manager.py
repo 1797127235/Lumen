@@ -5,20 +5,67 @@
 - Provider 工具路由
 - 生命周期钩子转发
 - 写入镜像
+- 断线重连（pending 队列 + 后台 reconcile）
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import contextlib
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from lib.memory.builtin_provider import BuiltinMemoryProvider
 from lib.memory.context_fence import build_memory_context_block, sanitize_context
 from lib.memory.provider import MemoryProvider
+from lib.metrics import record
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 重连策略：初始 2 分钟，指数退避，封顶 30 分钟
+_RECONCILE_INITIAL_S = 120
+_RECONCILE_MAX_S = 1800
+_RECONCILE_MULTIPLIER = 2
+_RECONCILE_IDLE_S = 300  # 队列为空时等待 5 分钟
+
+
+@dataclass
+class PendingProvider:
+    """待激活的 provider 配置。"""
+
+    name: str
+    provider_type: str
+    config: dict[str, Any]
+    provider: MemoryProvider
+    retry_count: int = 0
+    next_retry_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_error: str = ""
+
+    def schedule_next_retry(self) -> None:
+        """计算下一次重试时间（指数退避）。"""
+        self.retry_count += 1
+        delay = min(
+            _RECONCILE_INITIAL_S * (_RECONCILE_MULTIPLIER ** (self.retry_count - 1)),
+            _RECONCILE_MAX_S,
+        )
+        self.next_retry_at = datetime.now(UTC) + timedelta(seconds=delay)
+
+    @property
+    def is_due(self) -> bool:
+        """是否到达重试时间。"""
+        return self.next_retry_at <= datetime.now(UTC)
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为 API 响应格式。"""
+        return {
+            "name": self.name,
+            "provider_type": self.provider_type,
+            "retry_count": self.retry_count,
+            "next_retry_at": self.next_retry_at.isoformat(),
+            "last_error": self.last_error,
+        }
 
 
 class MemoryManager:
@@ -44,8 +91,120 @@ class MemoryManager:
     def __init__(self) -> None:
         self._providers: dict[str, MemoryProvider] = {}
         self._builtin: BuiltinMemoryProvider | None = None
+        self._pending: list[PendingProvider] = []
+        self._reconcile_task: asyncio.Task[None] | None = None
         # 内置 provider 自动注册
         self._register_builtin(BuiltinMemoryProvider())
+
+    # ── Reconciler 生命周期 ──
+
+    def start_reconciler(self) -> None:
+        """启动后台 reconcile 循环。"""
+        if self._reconcile_task is not None:
+            return
+        self._reconcile_task = asyncio.create_task(self._reconcile_loop())
+        logger.info("Provider reconciler 已启动")
+
+    def stop_reconciler(self) -> None:
+        """停止后台 reconcile 循环。"""
+        if self._reconcile_task is not None:
+            self._reconcile_task.cancel()
+            self._reconcile_task = None
+            logger.info("Provider reconciler 已停止")
+
+    # ── Pending 队列管理 ──
+
+    def add_pending(
+        self,
+        name: str,
+        provider_type: str,
+        config: dict[str, Any],
+        provider: MemoryProvider,
+        error: str = "",
+    ) -> None:
+        """将启动时失败的 provider 加入待激活队列。"""
+        if any(p.name == name for p in self._pending):
+            return
+        self._pending.append(
+            PendingProvider(
+                name=name,
+                provider_type=provider_type,
+                config=config,
+                provider=provider,
+                last_error=error,
+            )
+        )
+        logger.info("Provider 加入待激活队列", name=name, provider_type=provider_type)
+
+    def get_pending_providers(self) -> list[dict[str, Any]]:
+        """查询待激活队列状态。"""
+        return [p.to_dict() for p in self._pending]
+
+    async def reconcile_now(self) -> dict[str, Any]:
+        """手动触发一次 reconcile，返回结果。"""
+        return await self._try_activate_pending()
+
+    async def _reconcile_loop(self) -> None:
+        """后台循环：定期重试 pending providers。"""
+        while True:
+            try:
+                if not self._pending:
+                    await asyncio.sleep(_RECONCILE_IDLE_S)
+                    continue
+
+                # 找到最近的重试时间，等待或立即执行
+                next_retry = min(p.next_retry_at for p in self._pending)
+                now = datetime.now(UTC)
+
+                if next_retry > now:
+                    delay = min((next_retry - now).total_seconds(), 60)
+                    await asyncio.sleep(delay)
+                    continue
+
+                await self._try_activate_pending()
+                await asyncio.sleep(5)  # 短暂等待避免频繁重试
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("reconcile_loop 异常", error=str(exc))
+                await asyncio.sleep(30)
+
+    async def _try_activate_pending(self) -> dict[str, Any]:
+        """尝试激活所有到期的 pending providers。"""
+        due_items = [p for p in self._pending if p.is_due]
+        activated: list[str] = []
+        failed: list[dict[str, str]] = []
+
+        for pending in due_items:
+            try:
+                if await pending.provider.is_available():
+                    self.add_provider(pending.provider, instance_name=pending.name)
+                    self._pending.remove(pending)
+                    activated.append(pending.name)
+                    logger.info(
+                        "Provider 重连成功，已激活",
+                        name=pending.name,
+                        retry_count=pending.retry_count,
+                    )
+                else:
+                    pending.schedule_next_retry()
+            except Exception as exc:
+                pending.last_error = str(exc)
+                pending.schedule_next_retry()
+                failed.append({"name": pending.name, "error": str(exc)})
+                logger.debug(
+                    "Provider 重连失败",
+                    name=pending.name,
+                    error=str(exc),
+                    retry_count=pending.retry_count,
+                )
+
+        return {
+            "activated": activated,
+            "failed": failed,
+            "pending_count": len(self._pending),
+        }
 
     # ── Provider 管理 ──
 
@@ -323,6 +482,11 @@ class MemoryManager:
         metadata: dict | None = None,
     ) -> None:
         """builtin 写入时转发给所有外部 provider（跳过 builtin 自身）。"""
+        # metrics 埋点：统一在 on_memory_write funnel 计数，覆盖 memory_save + update_profile 两路
+        # 绝不让观测拖垮业务：失败静默忽略
+        with contextlib.suppress(Exception):
+            await record("memory.writes", 1.0, labels={"target": target, "action": action})
+
         for name, provider in self._providers.items():
             if name == "builtin":
                 continue
@@ -345,6 +509,7 @@ class MemoryManager:
                 logger.warning("initialize 失败", provider=provider.display_name, error=str(exc))
 
     async def shutdown_all(self) -> None:
+        self.stop_reconciler()
         for provider in self._providers.values():
             try:
                 await provider.shutdown()

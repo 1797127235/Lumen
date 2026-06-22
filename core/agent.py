@@ -14,6 +14,7 @@ from core.config import get_settings, load_user_config
 from lib.agent.types import AgentContext
 from lib.bus.event_bus import ToolCallCompleted, ToolCallStarted
 from lib.llm.client import ContextLengthError, LLMClient, LLMResponse, ToolCall
+from lib.metrics import record
 from lib.tools._registry import ToolRegistry, get_tool_registry
 from shared.logging import get_logger
 
@@ -67,6 +68,12 @@ async def run_agent(
                     conversation_id=ctx.conversation_id,
                     total_messages=total,
                 )
+                await record(
+                    "react.context_overflow",
+                    1.0,
+                    labels={"outcome": "exhausted"},
+                    conversation_id=ctx.conversation_id,
+                )
                 return AgentResult(content="上下文过长，请尝试新建对话。")
             logger.warning(
                 "ContextLengthError，裁剪重试",
@@ -104,6 +111,12 @@ async def _run_react_loop(
     for iteration in range(_MAX_ITERATIONS):
         visible, schemas = _visible_tool_schemas(registry, ctx.conversation_id)
         logger.info("[ReAct] 第%d轮，可见工具=%d", iteration + 1, len(visible))
+        await record(
+            "react.iteration",
+            1.0,
+            labels={"iteration": str(iteration + 1)},
+            conversation_id=ctx.conversation_id,
+        )
 
         response = await _call_llm(
             messages,
@@ -114,35 +127,6 @@ async def _run_react_loop(
         _accumulate(response)
 
         if not response.tool_calls:
-            # ── 首轮事实验证护栏 ──
-            # 模型第一轮直接回答（无工具调用）时，如果用户问的是事实型问题，
-            # 注入一条提醒让模型再想一次：是否需要先 web_search 验证。
-            # 模型仍然可以选择不查（重复回答），但这给了它一次自我纠正的机会。
-            if iteration == 0 and not tool_chain:
-                user_msg = ""
-                for m in reversed(messages):
-                    if m.get("role") == "user":
-                        user_msg = str(m.get("content", ""))
-                        break
-                if _looks_like_fact_question(user_msg):
-                    logger.info(
-                        "[ReAct] 事实型问题未走工具，注入验证提醒",
-                        user_preview=user_msg[:60],
-                        conversation_id=ctx.conversation_id,
-                    )
-                    messages.append(_build_assistant_message(response))
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "你刚才的回答没有经过工具验证。如果回答中包含具体人名、"
-                                "作品名、事件细节等事实性内容，且你不是 100% 确定，"
-                                "请立即使用 web_search 验证后再回答。"
-                                "如果这确实是稳定知识或日常闲聊，直接重复你的回答即可。"
-                            ),
-                        }
-                    )
-                    continue
             _log_usage(total_usage, ctx.conversation_id)
             return AgentResult(content=response.content or "", tool_chain=tool_chain)
 
@@ -199,6 +183,12 @@ async def _run_react_loop(
 
     # 达到最大轮次，强制最终回答
     logger.warning("[ReAct] 达到最大轮次，强制最终回答")
+    await record(
+        "react.max_iterations_reached",
+        1.0,
+        labels={"max_iterations": str(_MAX_ITERATIONS)},
+        conversation_id=ctx.conversation_id,
+    )
     messages.append({"role": "user", "content": "请基于已有信息直接回答用户，不要再调用任何工具。"})
     response = await _call_llm(
         messages,
@@ -231,34 +221,6 @@ def _visible_tool_schemas(
 def _is_tool_failure(result: str) -> bool:
     text = str(result or "").lstrip()
     return text.startswith("❌") or "[BUDGET]" in text or "[LOOP_GUARD]" in text or "Unknown tool name" in text
-
-
-def _looks_like_fact_question(text: str) -> bool:
-    """简单启发式：判断用户消息是否像事实型问题。"""
-    if not text:
-        return False
-    text = text.strip()
-    if len(text) <= 4:
-        return False
-    indicators = {
-        "吗",
-        "？",
-        "?",
-        "什么",
-        "谁",
-        "哪",
-        "多少",
-        "几",
-        "什么时候",
-        "何时",
-        "为什么",
-        "怎么",
-        "如何",
-        "是否",
-        "能不能",
-        "可不可以",
-    }
-    return any(indicator in text for indicator in indicators)
 
 
 def _log_usage(total: dict[str, int], conversation_id: str | None, *, scope: str = "aggregate") -> None:

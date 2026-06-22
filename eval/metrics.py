@@ -1,7 +1,7 @@
 """评分函数 — token F1 / EM / LLM judge。
 
 直接复用 LongMemEval 的 scoring 逻辑，LLM 调用改为 career-os 的
-`create_model()` + PydanticAI Agent。
+`create_model()` + 自研 Agent。
 """
 
 from __future__ import annotations

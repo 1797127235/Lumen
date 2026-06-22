@@ -28,16 +28,17 @@ def build_messages(
 ) -> list[dict[str, Any]]:
     """构建完整的 messages 列表。
 
-    顺序：system → history → context_frame(user) → user message
+    顺序：system → context_frame(user) → history → user message
+    context_frame 放在 history 之前，确保 system prompt + context_frame 被缓存。
     """
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
-    # 历史消息（已 sanitize 的干净历史）
-    messages.extend(history)
-
-    # Context frame（运行时注入，不持久化到 messages 但通过 llm_context_frame 存入 session）
+    # Context frame（运行时注入，放在 history 之前确保被缓存）
     if context_frame.strip():
         messages.append({"role": "user", "content": context_frame})
+
+    # 历史消息（已 sanitize 的干净历史）
+    messages.extend(history)
 
     # 当前用户消息
     user_content = _build_user_content(current_message, media)

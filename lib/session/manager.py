@@ -198,6 +198,8 @@ class Session:
                 messages = _align_to_user_boundary(messages)
             if not messages:
                 return []
+            # 限制返回的消息数量
+            messages = messages[-max_messages:]
         elif max_messages <= 0:
             messages = []
         else:

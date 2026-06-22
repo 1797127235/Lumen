@@ -2,13 +2,21 @@
   "enabledPlugins": {
     "agent-orchestration@claude-code-workflows": true,
     "superpowers@claude-plugins-official": false,
-    "everything-claude-code@everything-claude-code": false
+    "everything-claude-code@everything-claude-code": false,
+    "code-simplifier@claude-plugins-official": true,
+    "code-refactoring@claude-code-workflows": true
   },
   "extraKnownMarketplaces": {
     "claude-code-workflows": {
       "source": {
         "source": "github",
         "repo": "wshobson/agents"
+      }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
       }
     }
   }

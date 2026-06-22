@@ -380,7 +380,7 @@ def wrap_tool(handler, name, risk):
 
 ## 参考
 
-- PydanticAI ToolReturn 设计：[pydantic-ai profiles](https://github.com/pydantic/pydantic-ai/blob/efd468f3692f9115f58e3233e82065d97d3799f6/pydantic_ai_slim/pydantic_ai/profiles/openai.py)
+- PydanticAI ToolReturn 设计（历史参考）：[pydantic-ai profiles](https://github.com/pydantic/pydantic-ai/blob/efd468f3692f9115f58e3233e82065d97d3799f6/pydantic_ai_slim/pydantic_ai/profiles/openai.py)
 - OpenAI Agents SDK 工具集：[agents/tool.py](https://github.com/openai/openai-agents-python/blob/fedc809afd5abb492df21c8e6bf365653b06c21f/src/agents/tool.py)
 - LangChain 工具生态：[langchain-community tools](https://github.com/langchain-ai/langchain-community/tree/main/libs/community/langchain_community/tools)
 - Aider 编辑模式：[editblock_prompts.py](https://github.com/Aider-AI/aider/blob/main/aider/coders/editblock_prompts.py)

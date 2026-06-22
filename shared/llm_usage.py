@@ -23,9 +23,9 @@ def _first(details: dict, keys: list[str]) -> int:
 
 
 def extract_usage(u) -> dict:
-    """将 PydanticAI RunUsage 标准化为统一字典。
+    """将 LLM usage 标准化为统一字典。
 
-    优先读 RunUsage 标准字段（Anthropic / OpenAI 原生接口），
+    优先读标准字段（Anthropic / OpenAI 原生接口），
     无值时按 _CACHE_READ/WRITE_KEYS 遍历 details（provider 特定字段）。
     """
     cache_read = u.cache_read_tokens or _first(u.details, _CACHE_READ_KEYS)

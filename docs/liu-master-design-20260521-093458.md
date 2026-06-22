@@ -376,7 +376,7 @@ UI Scope: YES | DX Scope: NO
 | SQLite async queries | `core/db.py` |
 | FTS5 search (memory recall) | `lib/memory/search.py`, `lib/memory/searcher.py` |
 
-**What already exists:** Complete memory pipeline, Agent call infrastructure, SQLite migration pattern, PydanticAI Agent with DI, Tauri spawn pattern for background tasks.
+**What already exists:** Complete memory pipeline, Agent call infrastructure, SQLite migration pattern, 自研 Agent with DI, Tauri spawn pattern for background tasks.
 
 **What is genuinely new:** Tauri dynamic timer, energy model (Python port), two-stage Judge, MessageDeduper, 3 new tables, mood inference module, TauriNotificationChannel, system scheduler integration.
 

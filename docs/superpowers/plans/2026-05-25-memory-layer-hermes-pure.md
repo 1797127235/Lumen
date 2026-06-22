@@ -45,7 +45,7 @@
 
 ### 记忆作用域与会话语义（Lumen 多渠道）
 
-Lumen 不是请求-响应式 web 服务，而是一个常驻的 asyncio 进程：`MessageBus`（inbound 队列）→ `AgentRunner._run_loop()` → pydantic-ai Agent → `EventBus` 流式输出 → 各 channel（web SSE / telegram / cli）。FastAPI 只是 web 这一个 channel 的传输层。这决定了记忆层的作用域与冻结语义：
+Lumen 不是请求-响应式 web 服务，而是一个常驻的 asyncio 进程：`MessageBus`（inbound 队列）→ `AgentRunner._run_loop()` → 自研 Agent → `EventBus` 流式输出 → 各 channel（web SSE / telegram / cli）。FastAPI 只是 web 这一个 channel 的传输层。这决定了记忆层的作用域与冻结语义：
 
 1. **文件按 `user_id`，召回与会话生命周期按 `session_key`**：
    - `memory.md` / `about_you.md` 是伙伴对"你"的记忆，**跨渠道共享一份**，路径维度是 `user_id`（无论你从 web 还是 telegram 说话，都是同一份）。

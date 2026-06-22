@@ -139,8 +139,8 @@ async def _memory_add(args: dict[str, Any], ctx: Any = None, *, conversation_id:
         await _store.append_partner_rule(user_id, content)
     else:
         # target == "user"：写入 USER.md
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        entry = f"- {date_str} — [user] {content}"
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+        entry = f"- {timestamp} — [user] {content}"
         # USER.md 直接追加，不经过 append_memory_entry 的章节逻辑
         import os
         import tempfile
@@ -301,8 +301,9 @@ async def _memory_replace_remove(
     return tool_ok(result_msg, target=target, action=action)
 
 
-# 匹配记忆条目前缀的正则: "- 2026-05-26 — [category] "
-_MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2} — \[[^\]]+\] ")
+# 匹配记忆条目前缀的正则: "- 2026-05-26 — [category] " 或 "- 2026-05-26 14:25 — [category] "
+# 向后兼容:日期段可选地带时分(分钟)或时分秒
+_MATCH_ENTRY_PREFIX = re.compile(r"^- \d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)? — \[[^\]]+\] ")
 
 
 def create_memory_tools() -> list[ToolDef]:

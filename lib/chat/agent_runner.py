@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from core.agent import AgentResult, get_agent_generation, run_agent
 from core.db import get_async_session_maker
@@ -15,6 +16,7 @@ from lib.bus.event_bus import (
 )
 from lib.bus.queue import InboundMessage, MessageBus, OutboundMessage
 from lib.chat.persistence import ensure_conversation, persist_turn, save_user_message
+from lib.metrics import record
 from lib.session import get_session_manager
 from shared.logging import bind_chat_context, get_logger, unbind_chat_context
 from shared.path_utils import find_project_root
@@ -110,6 +112,9 @@ class AgentRunner:
             self._active_turns[session_key] = current_task
 
         # ── Phase 0: TurnStarted ──
+        # turn 计时起点：从这里到 finally 块覆盖所有路径（成功/取消/异常）
+        turn_started = time.perf_counter()
+        turn_outcome = "error"  # 默认值，正常完成会覆盖
         self._event_bus.emit(
             TurnStarted(
                 channel=msg.channel,
@@ -297,9 +302,11 @@ class AgentRunner:
                         content=result.content,
                     )
                 )
+                turn_outcome = "success"
 
             except asyncio.CancelledError:
                 logger.info("Turn cancelled", session_key=session_key)
+                turn_outcome = "cancelled"
                 await db.rollback()
                 await self._bus.publish_outbound(
                     OutboundMessage(
@@ -310,6 +317,7 @@ class AgentRunner:
                 )
             except Exception:
                 logger.exception("生成 AI 回复失败")
+                turn_outcome = "error"
                 await db.rollback()
                 await self._bus.publish_outbound(
                     OutboundMessage(
@@ -319,6 +327,22 @@ class AgentRunner:
                     )
                 )
             finally:
+                # ── metrics：turn 完成（覆盖所有 outcome）──
+                # finally 是唯一保证在所有路径都执行的出口
+                turn_duration_ms = (time.perf_counter() - turn_started) * 1000
+                try:
+                    await record(
+                        "turn.duration_ms",
+                        turn_duration_ms,
+                        labels={"channel": msg.channel, "outcome": turn_outcome},
+                    )
+                    await record(
+                        "turn.completed",
+                        1.0,
+                        labels={"channel": msg.channel, "outcome": turn_outcome},
+                    )
+                except Exception:
+                    pass  # 绝不让观测拖垮业务
                 self._active_turns.pop(session_key, None)
                 unbind_chat_context()
 
@@ -345,27 +369,29 @@ async def _build_context_frame(
 ) -> str:
     """构建 context frame（参照 akashic-agent）。
 
-    Phase 1 后只包含动态内容：日期、L1 近期对话、L2 外部召回、
-    skills、deferred hint。L0 + PARTNER.md 已移入 system prompt。
+    只包含动态内容：日期、L2 外部召回、skills、deferred hint。
+    L0 + PARTNER.md 已移入 system prompt。
+    L1 近期对话已移除，依赖 MEMORY.md 保持跨对话连续性。
     """
     from datetime import datetime
 
     from lib.memory import get_memory_manager
-    from lib.memory.snapshot import build_recent_context
     from lib.tools.factory import build_deferred_tools_hint
 
-    timestamp = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.now()
+    hour = now.hour
+    if hour < 6:
+        period = "凌晨"
+    elif hour < 12:
+        period = "上午"
+    elif hour < 18:
+        period = "下午"
+    else:
+        period = "晚上"
+    timestamp = now.strftime(f"%Y-%m-%d {period}")
     manager = get_memory_manager()
 
-    parts: list[str] = [f"当前日期：{timestamp}"]
-
-    # L1：近期对话上下文（snapshot.py 已退化为 L1-only）
-    try:
-        recent_ctx = await build_recent_context(user_id)
-        if recent_ctx.strip():
-            parts.append(f"# 近期相关对话\n\n{recent_ctx}")
-    except Exception:
-        logger.debug("build_recent_context failed", user_id=user_id)
+    parts: list[str] = [f"当前时间：{timestamp}（以此时此刻为准，记忆中的时间信息可能过时）"]
 
     # Skills 内容
     if skills_frame.strip():

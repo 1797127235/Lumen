@@ -192,3 +192,17 @@ async def reload_memory_provider(name: str) -> dict[str, Any]:
         manager.add_provider(provider, instance_name=cfg.name)
         return {"reloaded": True, "name": name}
     return {"reloaded": False, "reason": "unavailable"}
+
+
+@router.get("/memory/providers/pending")
+async def list_pending_providers() -> list[dict[str, Any]]:
+    """查询待激活队列状态。"""
+    manager = get_memory_manager()
+    return manager.get_pending_providers()
+
+
+@router.post("/memory/providers/reconcile")
+async def reconcile_providers() -> dict[str, Any]:
+    """手动触发一次 reconcile，尝试激活待激活的 providers。"""
+    manager = get_memory_manager()
+    return await manager.reconcile_now()

@@ -61,9 +61,7 @@ async def _list(args: dict[str, Any], ctx: Any = None):
     lines = [f"事件订阅(共 {len(subs)} 个):"]
     for s in subs:
         label = s.name or s.id
-        lines.append(
-            f"• [{label}] server={s.server_name} " f"event={s.event_filter or '(全部)'} → 主动推送(已配置渠道)"
-        )
+        lines.append(f"• [{label}] server={s.server_name} event={s.event_filter or '(全部)'} → 主动推送(已配置渠道)")
     return tool_ok("\n".join(lines))
 
 

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lumen 观测站</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    /* 与主前端 design tokens 对齐的暖色调（见 src/index.css @theme） */
+    :root {
+      --bg: oklch(0.18 0.010 60);
+      --surface: oklch(0.22 0.012 60);
+      --surface-elevated: oklch(0.27 0.015 60);
+      --border: oklch(0.40 0.014 60);
+      --text: oklch(0.94 0.015 60);
+      --text-muted: oklch(0.72 0.012 60);
+      --text-subtle: oklch(0.55 0.010 60);
+      --ink: oklch(0.78 0.140 75);
+      --success: oklch(0.74 0.090 150);
+      --danger: oklch(0.68 0.150 25);
+    }
+    html { color-scheme: dark; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "JetBrains Mono Variable", ui-monospace, "LXGW WenKai Screen", monospace;
+    }
+    .font-han { font-family: "LXGW WenKai Screen", serif; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .kpi {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .range-btn {
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: all 0.15s;
+      color: var(--text-muted);
+      background: var(--surface-elevated);
+    }
+    .range-btn:hover { color: var(--text); }
+    .range-btn.active {
+      background: var(--ink);
+      color: var(--bg);
+    }
+    .ink-progress {
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--ink), transparent);
+      background-size: 50% 100%;
+      background-repeat: no-repeat;
+      animation: progress 1.5s ease-in-out infinite;
+    }
+    @keyframes progress {
+      0% { background-position: -50% 0; }
+      100% { background-position: 150% 0; }
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 6px 12px; text-align: left; }
+    th { color: var(--text-subtle); font-weight: normal; font-size: 12px; border-bottom: 1px solid var(--border); }
+    td { border-bottom: 1px solid var(--border); font-size: 14px; }
+    .text-danger { color: var(--danger); }
+    .text-success { color: var(--success); }
+    .text-ink { color: var(--ink); }
+    .text-muted { color: var(--text-muted); }
+    .text-subtle { color: var(--text-subtle); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-[1100px] mx-auto px-4 py-8">
+    <!-- 标题 + 时间窗切换 -->
+    <header class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="font-han text-3xl text-ink">Lumen 观测站</h1>
+        <p class="text-sm text-muted mt-1">运行指标 · token 用量 · 延迟 · 工具调用</p>
+      </div>
+      <div class="flex gap-1" id="range-buttons">
+        <button class="range-btn" data-range="1h">1h</button>
+        <button class="range-btn active" data-range="24h">24h</button>
+        <button class="range-btn" data-range="7d">7d</button>
+        <button class="range-btn" data-range="30d">30d</button>
+        <button id="refresh" class="range-btn" title="刷新">↻</button>
+      </div>
+    </header>
+
+    <div id="loading" class="ink-progress mb-8 hidden"></div>
+    <div id="error" class="mb-4 p-3 rounded text-danger text-sm hidden"></div>
+
+    <!-- KPI 网格 -->
+    <div id="kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8"></div>
+
+    <!-- 错误率提示 -->
+    <div id="error-banner" class="mb-6 p-3 rounded text-sm hidden"></div>
+
+    <!-- 图表区 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <div class="card">
+        <h2 class="font-han text-lg text-ink mb-3">Token 用量</h2>
+        <div style="height: 240px;"><canvas id="usageChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2 class="font-han text-lg text-ink mb-3">延迟分布 (ms)</h2>
+        <div style="height: 240px;"><canvas id="latencyChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <h2 class="font-han text-lg text-ink mb-3">工具调用排行</h2>
+      <div style="height: 280px;"><canvas id="toolChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2 class="font-han text-lg text-ink mb-3">工具明细</h2>
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>工具</th>
+              <th class="text-right">调用数</th>
+              <th class="text-right">错误</th>
+              <th class="text-right">平均耗时</th>
+            </tr>
+          </thead>
+          <tbody id="tool-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer class="mt-8 text-center text-subtle text-xs">
+      Lumen Observatory · 数据来自 <code>/api/metrics/*</code> · 单文件零构建
+    </footer>
+  </div>
+
+<script>
+// ═══════════════════════════════════════════
+//  状态
+// ═══════════════════════════════════════════
+
+let currentRange = '24h';
+let usageChart = null;
+let latencyChart = null;
+let toolChart = null;
+
+const COLORS = {
+  ink: 'oklch(0.78 0.140 75)',
+  inkSoft: 'oklch(0.88 0.060 80)',
+  success: 'oklch(0.74 0.090 150)',
+  danger: 'oklch(0.68 0.150 25)',
+  textMuted: 'oklch(0.72 0.012 60)',
+  border: 'oklch(0.40 0.014 60)',
+};
+
+// Chart.js 全局样式
+Chart.defaults.color = COLORS.textMuted;
+Chart.defaults.borderColor = COLORS.border;
+Chart.defaults.font.family = '"JetBrains Mono Variable", ui-monospace, monospace';
+Chart.defaults.font.size = 11;
+
+// ═══════════════════════════════════════════
+//  工具函数
+// ═══════════════════════════════════════════
+
+function fmtNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+function shortTs(ts) {
+  // "2026-06-21" → "06-21"; "2026-06-21T14:00:00" → "06-21 14:00"
+  if (ts.includes('T')) {
+    const [date, time] = ts.split('T');
+    return date.slice(5) + ' ' + time.slice(0, 5);
+  }
+  return ts.slice(5);
+}
+
+async function api(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+function bucket4Range(range) {
+  return (range === '1h' || range === '24h') ? 'hour' : 'day';
+}
+
+// ═══════════════════════════════════════════
+//  渲染
+// ═══════════════════════════════════════════
+
+function renderKpis(s) {
+  const html = `
+    <div class="kpi">
+      <div class="text-xs text-muted">输入 token</div>
+      <div class="text-xl mt-1">${fmtNum(s.input_tokens)}</div>
+      <div class="text-xs text-subtle mt-1">输出 ${fmtNum(s.output_tokens)}</div>
+    </div>
+    <div class="kpi">
+      <div class="text-xs text-muted">估算成本</div>
+      <div class="text-xl mt-1">$${s.estimated_cost_usd.toFixed(4)}</div>
+      <div class="text-xs text-subtle mt-1">LLM 调用 ${s.llm_calls} 次</div>
+    </div>
+    <div class="kpi">
+      <div class="text-xs text-muted">对话轮次</div>
+      <div class="text-xl mt-1">${s.turns}</div>
+      <div class="text-xs text-subtle mt-1">平均延迟 ${s.avg_turn_latency_ms.toFixed(0)}ms</div>
+    </div>
+    <div class="kpi">
+      <div class="text-xs text-muted">工具调用</div>
+      <div class="text-xl mt-1">${s.tool_calls}</div>
+      <div class="text-xs text-subtle mt-1">主动送达 ${s.deliveries} · 记忆写入 ${s.memory_writes}</div>
+    </div>
+  `;
+  document.getElementById('kpis').innerHTML = html;
+
+  // 错误率提示
+  const banner = document.getElementById('error-banner');
+  if (s.error_rate > 0) {
+    const danger = s.error_rate > 0.1;
+    banner.className = `mb-6 p-3 rounded text-sm ${danger ? 'text-danger' : 'text-muted'}`;
+    banner.style.border = `1px solid ${danger ? COLORS.danger : COLORS.border}`;
+    let txt = `错误率 ${(s.error_rate * 100).toFixed(1)}% · 错误 ${s.error_turns}/${s.turns} 轮`;
+    if (s.context_overflows > 0) txt += ` · 上下文溢出 ${s.context_overflows} 次`;
+    banner.textContent = txt;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+
+function renderUsageChart(data) {
+  const ctx = document.getElementById('usageChart');
+  if (usageChart) usageChart.destroy();
+
+  if (!data.points || data.points.length === 0) {
+    if (usageChart) usageChart.destroy();
+    usageChart = null;
+    return;
+  }
+
+  const labels = data.points.map(p => shortTs(p.ts));
+  usageChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '输入',
+          data: data.points.map(p => p.input || 0),
+          borderColor: COLORS.ink,
+          backgroundColor: COLORS.ink + '33',
+          tension: 0.3,
+          fill: true,
+        },
+        {
+          label: '输出',
+          data: data.points.map(p => p.output || 0),
+          borderColor: COLORS.success,
+          backgroundColor: COLORS.success + '33',
+          tension: 0.3,
+          fill: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        y: { ticks: { callback: fmtNum } },
+      },
+    },
+  });
+}
+
+function renderLatencyChart(data) {
+  const ctx = document.getElementById('latencyChart');
+  if (latencyChart) latencyChart.destroy();
+
+  if (!data.points || data.points.length === 0) {
+    latencyChart = null;
+    return;
+  }
+
+  const labels = data.points.map(p => shortTs(p.ts));
+  latencyChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Turn', data: data.points.map(p => p.turn || 0), borderColor: COLORS.ink, tension: 0.3, fill: false },
+        { label: 'LLM', data: data.points.map(p => p.llm || 0), borderColor: COLORS.success, tension: 0.3, fill: false },
+        { label: 'Tool', data: data.points.map(p => p.tool || 0), borderColor: COLORS.inkSoft, tension: 0.3, fill: false },
+        { label: 'HTTP', data: data.points.map(p => p.http || 0), borderColor: COLORS.danger, tension: 0.3, fill: false, borderWidth: 1 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+    },
+  });
+}
+
+function renderToolChart(data) {
+  const ctx = document.getElementById('toolChart');
+  if (toolChart) toolChart.destroy();
+
+  if (!data.items || data.items.length === 0) {
+    toolChart = null;
+    return;
+  }
+
+  const items = data.items.slice(0, 12);
+  toolChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: items.map(t => t.tool_name),
+      datasets: [{
+        label: '调用次数',
+        data: items.map(t => t.calls),
+        backgroundColor: COLORS.ink,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+    },
+  });
+
+  // 明细表
+  const rows = data.items.map(t => `
+    <tr>
+      <td>${t.tool_name}</td>
+      <td class="text-right">${t.calls}</td>
+      <td class="text-right ${t.errors > 0 ? 'text-danger' : 'text-subtle'}">${t.errors}</td>
+      <td class="text-right text-muted">${t.avg_duration_ms.toFixed(0)}ms</td>
+    </tr>
+  `).join('');
+  document.getElementById('tool-table').innerHTML = rows;
+}
+
+// ═══════════════════════════════════════════
+//  加载
+// ═══════════════════════════════════════════
+
+async function loadData() {
+  const loading = document.getElementById('loading');
+  const error = document.getElementById('error');
+  loading.classList.remove('hidden');
+  error.classList.add('hidden');
+
+  const bucket = bucket4Range(currentRange);
+  try {
+    const [summary, usage, latency, tools] = await Promise.all([
+      api(`/api/metrics/summary?range=${currentRange}`),
+      api(`/api/metrics/usage?range=${currentRange}&bucket=${bucket}`),
+      api(`/api/metrics/latency?range=${currentRange}&bucket=${bucket}`),
+      api(`/api/metrics/tools?range=${currentRange}`),
+    ]);
+    renderKpis(summary);
+    renderUsageChart(usage);
+    renderLatencyChart(latency);
+    renderToolChart(tools);
+  } catch (e) {
+    error.textContent = `加载失败：${e.message}`;
+    error.classList.remove('hidden');
+  } finally {
+    loading.classList.add('hidden');
+  }
+}
+
+// ═══════════════════════════════════════════
+//  事件
+// ═══════════════════════════════════════════
+
+document.getElementById('range-buttons').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-range]');
+  if (btn) {
+    document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRange = btn.dataset.range;
+    loadData();
+  }
+});
+
+document.getElementById('refresh').addEventListener('click', loadData);
+
+// 启动
+loadData();
+// 每 30s 自动刷新
+setInterval(loadData, 30000);
+</script>
+</body>
+</html>

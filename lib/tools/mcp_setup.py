@@ -22,14 +22,14 @@ def _serialize_args(args: Any) -> list[str]:
     return []
 
 
-def _resolve_lumen_rss_preset(args: dict[str, Any]) -> dict[str, Any]:
-    """如果用户指定 preset='lumen-rss'，自动填充内置 RSS server 的配置。"""
-    if args.get("preset") != "lumen-rss":
+def _resolve_lumen_feed_preset(args: dict[str, Any]) -> dict[str, Any]:
+    """如果用户指定 preset='lumen-feed'，自动填充内置 Feed MCP server 的配置。"""
+    preset = args.get("preset")
+    if preset not in ("lumen-feed", "lumen-rss"):
         return args
     resolved = dict(args)
-    resolved.setdefault("transport", "stdio")
-    resolved.setdefault("command", r"C:\Users\liu\AppData\Local\Programs\Python\Python312\python.exe")
-    resolved.setdefault("args", [r"E:\MyHub\Lumen\mcp_servers\rss\server.py"])
+    resolved.setdefault("transport", "sse")
+    resolved.setdefault("url", "http://127.0.0.1:8765/sse")
     resolved.setdefault("enabled", True)
     resolved.setdefault("auto_approve", True)
     resolved.setdefault("read_only", False)
@@ -63,7 +63,7 @@ async def _tool_mcp_server_manage(args: dict[str, Any], ctx: Any = None) -> str:
     )
     from lib.tools.mcp.models import McpServerConfig
 
-    args = _resolve_lumen_rss_preset(args)
+    args = _resolve_lumen_feed_preset(args)
     action = args.get("action", "list").strip().lower()
 
     if action == "list":
@@ -179,13 +179,13 @@ def create_mcp_setup_tools() -> list[ToolDef]:
                 "- update: 更新已有 server 的字段\n"
                 "- remove: 删除 server\n"
                 "- test: 测试连接状态\n\n"
-                "Lumen 内置 lumen-rss 的最简启用方式:\n"
-                "action='add', name='lumen-rss', preset='lumen-rss'\n\n"
-                "完整手动配置示例（Windows）:\n"
-                "action='add', name='lumen-rss', transport='stdio', "
-                "command='C:\\\\Users\\\\liu\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe', "
-                "args=['E:\\\\MyHub\\\\Lumen\\\\mcp_servers\\\\rss\\\\server.py'], enabled=true, auto_approve=true, read_only=false\n\n"
-                "如果用户只说'启用 RSS'而没有给出路径，优先用 preset='lumen-rss'。"
+                "Lumen 内置 lumen-feed 的最简启用方式:\n"
+                "action='add', name='lumen-feed', preset='lumen-feed'\n\n"
+                "完整手动配置示例（SSE）:\n"
+                "action='add', name='lumen-feed', transport='sse', "
+                "url='http://127.0.0.1:8765/sse', enabled=true, auto_approve=true, read_only=false\n\n"
+                "注意：使用前需先启动 feed server：python apps/feed/server.py\n\n"
+                "如果用户只说'启用 RSS'而没有给出路径，优先用 preset='lumen-feed'。"
             ),
             input_schema={
                 "type": "object",
@@ -238,8 +238,8 @@ def create_mcp_setup_tools() -> list[ToolDef]:
                     },
                     "preset": {
                         "type": "string",
-                        "enum": ["lumen-rss"],
-                        "description": "内置 server 预设。设为 'lumen-rss' 时自动填充 RSS server 的配置",
+                        "enum": ["lumen-feed", "lumen-rss"],
+                        "description": "内置 server 预设。设为 'lumen-feed' 时自动填充 Feed MCP server (apps/feed) 的 SSE 配置；'lumen-rss' 保留为兼容别名",
                     },
                 },
                 "required": ["action"],

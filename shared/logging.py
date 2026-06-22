@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import time
 import uuid
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
@@ -178,6 +179,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # 生成或提取 request_id
         request_id = request.headers.get(REQUEST_ID_HEADER, str(uuid.uuid4())[:8])
         request_id_var.set(request_id)
+        started = time.perf_counter()
 
         # 清空并绑定上下文
         clear_contextvars()
@@ -193,11 +195,33 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
-            log.info("request_completed", status_code=response.status_code)
+            duration_ms = (time.perf_counter() - started) * 1000
+            log.info("request_completed", status_code=response.status_code, duration_ms=round(duration_ms, 2))
+            # metrics 埋点：HTTP 请求耗时 + 计数（顺手补上一致缺失的 duration）
+            # 延迟导入打破 shared ↔ lib.metrics 循环（shared 是底层模块）
+            from lib.metrics import record
+
+            await record(
+                "http.request_duration_ms",
+                duration_ms,
+                labels={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": str(response.status_code),
+                },
+            )
             response.headers[REQUEST_ID_HEADER] = request_id
             return response
         except Exception as exc:
-            log.error("request_failed", error=str(exc))
+            duration_ms = (time.perf_counter() - started) * 1000
+            log.error("request_failed", error=str(exc), duration_ms=round(duration_ms, 2))
+            from lib.metrics import record
+
+            await record(
+                "http.request_duration_ms",
+                duration_ms,
+                labels={"method": request.method, "path": request.url.path, "status": "error"},
+            )
             raise
 
 

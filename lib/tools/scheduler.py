@@ -53,7 +53,7 @@ async def _schedule(args: dict[str, Any], ctx: Any = None):
 
     mode_hint = "\n跑完会主动推送结果给你(经你已配置的渠道)。" if want_notify else "\n(静默模式:跑完只记日志,不打扰你)"
     return tool_ok(
-        f"已注册定时任务「{task.name or task.id}」\n" f"trigger={trigger} when={when}\n到点调用工具: {tool}{mode_hint}",
+        f"已注册定时任务「{task.name or task.id}」\ntrigger={trigger} when={when}\n到点调用工具: {tool}{mode_hint}",
         task_id=task.id,
     )
 

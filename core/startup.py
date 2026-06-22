@@ -53,6 +53,14 @@ async def lifespan(app: FastAPI):
 
     await migrate_md_files()
 
+    # ── 注册 MetricsRecorder 单例 ──
+    # 在 DB 初始化之后、任何业务组件启动之前注入，确保后续所有埋点都能写入。
+    # recorder 自带 try/except 兜底，即使 DB 异常也不阻断启动。
+    from lib.metrics import MetricsRecorder, set_recorder
+
+    set_recorder(MetricsRecorder())
+    logger.info("MetricsRecorder initialized")
+
     applied = apply_user_config(get_settings())
     if applied:
         logger.info("config.json 覆盖", keys=list(applied.keys()))
@@ -123,11 +131,22 @@ async def lifespan(app: FastAPI):
                     provider_type=cfg.provider_type,
                 )
             else:
+                # 加入待激活队列，后台定期重试
+                manager.add_pending(
+                    name=cfg.name,
+                    provider_type=cfg.provider_type,
+                    config=cfg.config,
+                    provider=provider,
+                    error="启动时 is_available() 返回 False",
+                )
                 logger.warning(
-                    "记忆 provider 不可用，跳过",
+                    "记忆 provider 不可用，加入待激活队列",
                     name=cfg.name,
                     provider_type=cfg.provider_type,
                 )
+
+        # 启动后台 reconciler，定期重试 pending providers
+        manager.start_reconciler()
 
     # ── 初始化 SessionManager（Agent 历史层）──
     from lib.session import init_session_manager

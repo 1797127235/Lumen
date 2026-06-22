@@ -162,6 +162,7 @@ _MD_CHAR_LIMITS: dict[str, int] = {
     "memory": 2200,
     "about_you": 1375,
     "partner": 800,
+    "persona": 1500,
 }
 
 # Prompt injection 检测模式
@@ -261,6 +262,9 @@ class AsyncMarkdownStore:
     def _partner_path(self, user_id: str) -> Path:
         return self._user_dir(user_id) / "PARTNER.md"
 
+    def _persona_path(self, user_id: str) -> Path:
+        return self._user_dir(user_id) / "PERSONA.md"
+
     def _lock_path(self, user_id: str) -> Path:
         return self._user_dir(user_id) / ".lock"
 
@@ -317,8 +321,8 @@ class AsyncMarkdownStore:
             logger.warning("MEMORY.md 追加被拒绝", user_id=user_id, reason=reason)
             return
 
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        entry = f"- {date_str} — [{category}] {text}\n"
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+        entry = f"- {timestamp} — [{category}] {text}\n"
 
         async with self._locks[user_id]:
             lock_fd = await asyncio.to_thread(_acquire_file_lock, self._lock_path(user_id))
@@ -462,6 +466,28 @@ class AsyncMarkdownStore:
                     logger.warning("PARTNER.md 超限时丢弃旧规则", user_id=user_id, limit=limit)
 
                 await self._write_atomic(self._partner_path(user_id), new_content)
+            finally:
+                await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
+
+    async def read_persona(self, user_id: str) -> str:
+        """读取 PERSONA.md（人格设定）。"""
+        return await self._read(self._persona_path(user_id))
+
+    async def write_persona(self, user_id: str, content: str) -> None:
+        """覆写 PERSONA.md（原子写入 + 安全扫描 + 字符限制）。"""
+        safe, reason = _scan_memory_content(content)
+        if not safe:
+            logger.warning("PERSONA.md 写入被拒绝", user_id=user_id, reason=reason)
+            return
+
+        async with self._locks[user_id]:
+            lock_fd = await asyncio.to_thread(_acquire_file_lock, self._lock_path(user_id))
+            try:
+                limit = _MD_CHAR_LIMITS["persona"]
+                if len(content) > limit:
+                    content = _truncate_to_limit(content, limit)
+                    logger.warning("PERSONA.md 超限截断", user_id=user_id, limit=limit)
+                await self._write_atomic(self._persona_path(user_id), content)
             finally:
                 await asyncio.to_thread(_release_file_lock, lock_fd, self._lock_path(user_id))
 

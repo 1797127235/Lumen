@@ -165,7 +165,7 @@ async def _skills_prompt(ctx: RunContext[LumenDeps]) -> str:
     return ""
 ```
 
-`ctx` 参数保留（PydanticAI 装饰器要求签名），但不再读取 `ctx.deps`。
+`ctx` 参数保留（装饰器要求签名），但不再读取 `ctx.deps`。
 
 ---
 

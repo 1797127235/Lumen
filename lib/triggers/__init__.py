@@ -36,7 +36,7 @@ from lib.bus.queue import MessageBus
 from lib.triggers.listener import TriggerManager
 from lib.triggers.store import SubscriptionStore
 
-__all__ = ["TriggerManager", "SubscriptionSpec", "SubscriptionStore", "get_manager"]
+__all__ = ["SubscriptionSpec", "SubscriptionStore", "TriggerManager", "get_manager"]
 
 _manager: TriggerManager | None = None
 

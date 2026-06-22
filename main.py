@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -16,7 +16,7 @@ from server.routes.health import router as health_router
 from server.routes.mcp import router as mcp_router
 from server.routes.memory import router as memory_router
 from server.routes.memory_providers import router as memory_providers_router
-from server.routes.partner import router as partner_router
+from server.routes.metrics import router as metrics_router
 from server.routes.providers import router as providers_router
 from shared.logging import RequestLoggingMiddleware, get_logger
 
@@ -51,9 +51,21 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 
 app.include_router(providers_router, prefix="/api")
-app.include_router(partner_router, prefix="/api")
 app.include_router(mcp_router)
 app.include_router(commands_router, prefix="/api")
+app.include_router(metrics_router, prefix="/api")
+
+
+# ── 观测站：独立 HTML 单页，纯 Chart.js + Tailwind CDN，零构建 ──
+# 必须在 dist/ 静态挂载之前注册（否则会被 / 捕获）。
+# 与主 React 前端完全解耦：主前端不维护也能用，主力 Telegram 渠道随时打开浏览器查看。
+_observatory_html = (Path(__file__).parent / "observatory" / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/observatory", include_in_schema=False)
+async def observatory() -> Response:
+    """Lumen 观测站 — 单文件 HTML，fetch /api/metrics/* 渲染图表。"""
+    return Response(content=_observatory_html, media_type="text/html; charset=utf-8")
 
 
 # ── 静态文件托管：dist/ 存在时始终挂载 ──

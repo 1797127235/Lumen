@@ -43,7 +43,13 @@ async def _get_profile_text(user_id: str) -> tuple[str, int]:
     # 合并两个文件的内容
     parts = []
     if memory_content.strip():
-        parts.append(f"## 记忆 (MEMORY.md)\n\n{memory_content}")
+        # 过滤掉 [transient] 标签条目：transient 是一次性临时状态，
+        # 不应进入 USER.md 画像（否则会被 L0 冻结快照每轮注入，污染时间/状态判断）
+        memory_lines = memory_content.splitlines()
+        kept_lines = [line for line in memory_lines if "[transient]" not in line]
+        filtered_memory = "\n".join(kept_lines).strip()
+        if filtered_memory:
+            parts.append(f"## 记忆 (MEMORY.md)\n\n{filtered_memory}")
     if user_content.strip():
         # 过滤掉 frontmatter 和 AI 生成的画像文本，只保留原始条目
         lines = user_content.splitlines()
@@ -196,7 +202,7 @@ async def _generate_understanding(profile_text: str, existing: str) -> str:
 2. **禁止比喻、升华、人格包装**：不写"骨子里""本质上""始终是那个搭建浮桥的人"这类表述
 3. **禁止推测**：只陈述 MEMORY.md 中明确出现的事实，不 infer 用户没说过的东西
 4. **每条必须带 [来源: 日期 category]**：让用户能追溯到原始记忆
-5. **分组**：用 `## 稳定事实`、`## 偏好`、`## 意图`、`## 临时状态` 等章节
+5. **分组**：用 `## 稳定事实`、`## 偏好`、`## 意图` 等章节（**不要建"临时状态"章节——临时状态不进画像**）
 6. **宁缺毋滥**：不确定的、证据不足的、重复的，一律不写
 7. **忽略标记为"（待填写）"的字段**：那是占位符，不是真实数据
 8. **模式洞察**：从 bullet 中提炼 0-3 条跨维度模式，每条用一句话概括，不要重复 bullet 内容
