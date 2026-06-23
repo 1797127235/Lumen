@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_db
 from lib.metrics.models import MetricEvent
+from lib.models_dev import get_all_pricing
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -59,8 +60,7 @@ async def get_metrics_summary(
 ) -> dict[str, Any]:
     """KPI 卡片数据：总 token / 估算成本 / 对话数 / 平均延迟 / 错误率。
 
-    cost 估算用 models.dev 定价的粗近似（输入 + 输出 token 按通用价 0.5/1.5 USD/1M），
-    真实定价需要 provider + model 解析，留作后续增强。
+    成本计算：按 model label 分组，从 models.dev 查询真实定价。
     """
     since = _parse_range(range)
 
@@ -78,11 +78,51 @@ async def get_metrics_summary(
         totals[name] = float(total_val or 0)
         counts[name] = int(cnt or 0)
 
-    # 估算成本（粗近似，单位 USD）
-    input_tokens = totals.get("llm.tokens.input", 0)
-    output_tokens = totals.get("llm.tokens.output", 0)
-    # 通用价：input $0.5/1M, output $1.5/1M（仅占位，真实定价见 models_dev.py）
-    estimated_cost = (input_tokens * 0.5 + output_tokens * 1.5) / 1_000_000
+    # 按 model 分组统计 token 用量（用于精确计算成本）
+    token_stmt = (
+        select(
+            MetricEvent.name,
+            MetricEvent.labels_json,
+            func.sum(MetricEvent.value).label("total"),
+        )
+        .where(
+            MetricEvent.name.in_(
+                (
+                    "llm.tokens.input",
+                    "llm.tokens.output",
+                    "llm.tokens.cache_read",
+                    "llm.tokens.cache_write",
+                )
+            ),
+            MetricEvent.created_at >= since,
+        )
+        .group_by(MetricEvent.name, MetricEvent.labels_json)
+    )
+    token_rows = (await db.execute(token_stmt)).all()
+
+    # 按 model 聚合 token
+    model_tokens: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for name, labels_json, total in token_rows:
+        try:
+            labels = json.loads(labels_json or "{}")
+        except json.JSONDecodeError:
+            labels = {}
+        model = labels.get("model", "unknown")
+        short_name = name.split(".")[-1]  # input / output / cache_read / cache_write
+        model_tokens[model][short_name] = float(total or 0)
+
+    # 从 models.dev 获取定价并计算成本
+    pricing = await get_all_pricing()
+    estimated_cost = 0.0
+    for model, tokens in model_tokens.items():
+        model_pricing = pricing.get(model)
+        if model_pricing:
+            estimated_cost += (
+                tokens.get("input", 0) * model_pricing.input
+                + tokens.get("output", 0) * model_pricing.output
+                + tokens.get("cache_read", 0) * model_pricing.cache_read
+                + tokens.get("cache_write", 0) * model_pricing.cache_write
+            ) / 1_000_000
 
     turn_total = counts.get("turn.completed", 0)
     error_turns = 0
@@ -106,8 +146,8 @@ async def get_metrics_summary(
 
     return {
         "range": range,
-        "input_tokens": int(input_tokens),
-        "output_tokens": int(output_tokens),
+        "input_tokens": int(totals.get("llm.tokens.input", 0)),
+        "output_tokens": int(totals.get("llm.tokens.output", 0)),
         "cache_read_tokens": int(totals.get("llm.tokens.cache_read", 0)),
         "cache_write_tokens": int(totals.get("llm.tokens.cache_write", 0)),
         "estimated_cost_usd": round(estimated_cost, 4),

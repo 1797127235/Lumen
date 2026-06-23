@@ -76,7 +76,7 @@ class AboutYouResponse(BaseModel):
 
 
 @router.get("/me", response_model=MemoryContent)
-async def get_my_memory(user_id: str = Query("demo_user")) -> MemoryContent:
+async def get_my_memory(user_id: str = Query("me")) -> MemoryContent:
     """读取 MEMORY.md 全文。"""
     _validate_user_id(user_id)
     try:
@@ -90,7 +90,7 @@ async def get_my_memory(user_id: str = Query("demo_user")) -> MemoryContent:
 @router.put("/me")
 async def put_my_memory(
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """保存完整 MEMORY.md。"""
     _validate_user_id(user_id)
@@ -105,7 +105,7 @@ async def put_my_memory(
 
 
 @router.get("/partner", response_model=MemoryContent)
-async def get_partner_rules(user_id: str = Query("demo_user")) -> MemoryContent:
+async def get_partner_rules(user_id: str = Query("me")) -> MemoryContent:
     """读取 PARTNER.md（AI 协作规则）。"""
     _validate_user_id(user_id)
     try:
@@ -119,7 +119,7 @@ async def get_partner_rules(user_id: str = Query("demo_user")) -> MemoryContent:
 @router.put("/partner")
 async def put_partner_rules(
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """保存完整 PARTNER.md。"""
     _validate_user_id(user_id)
@@ -134,7 +134,7 @@ async def put_partner_rules(
 
 
 @router.get("/persona", response_model=MemoryContent)
-async def get_persona(user_id: str = Query("demo_user")) -> MemoryContent:
+async def get_persona(user_id: str = Query("me")) -> MemoryContent:
     """读取 PERSONA.md（人格设定）。"""
     _validate_user_id(user_id)
     try:
@@ -148,7 +148,7 @@ async def get_persona(user_id: str = Query("demo_user")) -> MemoryContent:
 @router.put("/persona")
 async def put_persona(
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """保存完整 PERSONA.md。"""
     _validate_user_id(user_id)
@@ -163,7 +163,7 @@ async def put_persona(
 
 
 @router.get("/stats", response_model=MemoryStats)
-async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
+async def get_memory_stats(user_id: str = Query("me")) -> MemoryStats:
     _validate_user_id(user_id)
     ensure_memory_dirs(user_id)
     path = str(memory_dir(user_id))
@@ -178,7 +178,7 @@ async def get_memory_stats(user_id: str = Query("demo_user")) -> MemoryStats:
 
 
 @router.post("/reset", response_model=MemoryResetResponse)
-async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse:
+async def reset_memory(user_id: str = Query("me")) -> MemoryResetResponse:
     """清空 MEMORY.md 和 USER.md。"""
     _validate_user_id(user_id)
     try:
@@ -191,7 +191,7 @@ async def reset_memory(user_id: str = Query("demo_user")) -> MemoryResetResponse
 
 
 @router.get("/understanding", response_model=AboutYouResponse)
-async def get_ai_understanding(user_id: str = Query("demo_user")) -> AboutYouResponse:
+async def get_ai_understanding(user_id: str = Query("me")) -> AboutYouResponse:
     """获取 AI 综合画像（USER.md）。"""
     _validate_user_id(user_id)
     try:
@@ -203,7 +203,7 @@ async def get_ai_understanding(user_id: str = Query("demo_user")) -> AboutYouRes
 
 
 @router.post("/understanding/refresh")
-async def refresh_ai_understanding(user_id: str = Query("demo_user")) -> dict:
+async def refresh_ai_understanding(user_id: str = Query("me")) -> dict:
     """手动触发 AI 画像重新生成。"""
     _validate_user_id(user_id)
     try:
@@ -219,7 +219,7 @@ async def refresh_ai_understanding(user_id: str = Query("demo_user")) -> dict:
 @router.post("/understanding/correct")
 async def correct_ai_understanding(
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """用户手动纠正 AI 画像文本（直接覆写 USER.md）。"""
     _validate_user_id(user_id)
@@ -241,7 +241,7 @@ async def correct_ai_understanding(
 @router.post("/tell")
 async def tell_ai(
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """用户主动告诉 AI，追加到 MEMORY.md。"""
     _validate_user_id(user_id)
@@ -270,7 +270,7 @@ async def tell_ai(
 
 @router.get("/search")
 async def search_memories(
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
     query: str = Query(...),
 ) -> list[MemoryItemOut]:
     """搜索 MEMORY.md（简单文本匹配）。"""
@@ -308,14 +308,14 @@ async def search_memories(
 
 
 @router.get("/list", response_model=list[MemoryItemOut])
-async def list_memories(user_id: str = Query("demo_user")) -> list[MemoryItemOut]:
+async def list_memories(user_id: str = Query("me")) -> list[MemoryItemOut]:
     """已退役：返回空列表。"""
     _validate_user_id(user_id)
     return []
 
 
 @router.delete("/{event_id}")
-async def delete_memory(event_id: str, user_id: str = Query("demo_user")) -> dict:
+async def delete_memory(event_id: str, user_id: str = Query("me")) -> dict:
     """已退役：返回 404。"""
     _validate_user_id(user_id)
     raise HTTPException(status_code=404, detail="逐条删除已退役，请使用全文编辑")
@@ -325,7 +325,7 @@ async def delete_memory(event_id: str, user_id: str = Query("demo_user")) -> dic
 async def update_memory(
     event_id: str,
     body: dict[str, Any],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """已退役：返回 404。"""
     _validate_user_id(user_id)
@@ -336,7 +336,7 @@ async def update_memory(
 async def review_memory(
     event_id: str,
     body: dict[str, str],
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """已退役：返回 404。"""
     _validate_user_id(user_id)
@@ -346,7 +346,7 @@ async def review_memory(
 @router.get("/observations")
 async def get_observations(
     days: int = Query(7),
-    user_id: str = Query("demo_user"),
+    user_id: str = Query("me"),
 ) -> dict:
     """已退役：返回空观察。"""
     _validate_user_id(user_id)
@@ -359,7 +359,7 @@ async def get_observations(
 
 
 @router.post("/rebuild")
-async def rebuild_memory(user_id: str = Query("demo_user")) -> dict:
+async def rebuild_memory(user_id: str = Query("me")) -> dict:
     """已退役：新架构无需重建，直接返回成功。"""
     _validate_user_id(user_id)
     return {"message": "新架构无需重建", "user_id": user_id}

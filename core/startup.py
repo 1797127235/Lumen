@@ -110,8 +110,21 @@ async def lifespan(app: FastAPI):
         provider_configs = load_memory_provider_configs()
         discovered = discover_providers()
 
+        # 设计约束：最多 1 个外部 provider（软限制）。
+        # config.json 的 memory_providers 仍是数组（向前兼容），但运行时只启用
+        # 第一个 enabled=True 的外部配置，后续的 enabled 配置忽略并记 warning。
+        # builtin（文件记忆 MEMORY.md）始终保留，不受此限制影响——外部 provider 是叠加。
+        external_taken = False
+
         for cfg in provider_configs:
             if not cfg.enabled:
+                continue
+            if external_taken:
+                logger.warning(
+                    "已有一个外部记忆 provider，忽略后续配置（设计约束：最多 1 个外部 provider）",
+                    name=cfg.name,
+                    provider_type=cfg.provider_type,
+                )
                 continue
             if cfg.provider_type not in discovered:
                 logger.warning(
@@ -123,6 +136,9 @@ async def lifespan(app: FastAPI):
             provider = load_provider(cfg.provider_type, config=cfg.config)
             if provider is None:
                 continue
+            # 无论成功注册还是进 pending，都占用唯一名额
+            # （否则 pending 会被 reconciler 后台激活，最终出现 2 个并存）
+            external_taken = True
             if await provider.is_available():
                 manager.add_provider(provider, instance_name=cfg.name)
                 logger.info(

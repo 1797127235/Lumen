@@ -60,7 +60,7 @@ export async function updateConfig(data: {
   return res.json()
 }
 
-export async function listConversations(userId = "demo_user", limit = 50): Promise<LumenConversation[]> {
+export async function listConversations(userId = "me", limit = 50): Promise<LumenConversation[]> {
   const res = await fetch(`${BASE_URL}/chat/history?user_id=${userId}&limit=${limit}`)
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.status}`)
   return res.json()
@@ -68,14 +68,14 @@ export async function listConversations(userId = "demo_user", limit = 50): Promi
 
 export async function getConversationMessages(
   conversationId: string,
-  userId = "demo_user",
+  userId = "me",
 ): Promise<LumenMessage[]> {
   const res = await fetch(`${BASE_URL}/chat/${conversationId}?user_id=${userId}`)
   if (!res.ok) throw new Error(`Failed to get messages: ${res.status}`)
   return res.json()
 }
 
-export async function deleteConversation(conversationId: string, userId = "demo_user"): Promise<void> {
+export async function deleteConversation(conversationId: string, userId = "me"): Promise<void> {
   const res = await fetch(`${BASE_URL}/chat/${conversationId}?user_id=${userId}`, { method: "DELETE" })
   if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`)
 }
@@ -83,7 +83,7 @@ export async function deleteConversation(conversationId: string, userId = "demo_
 export async function renameConversation(
   conversationId: string,
   title: string,
-  userId = "demo_user",
+  userId = "me",
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/chat/${conversationId}`, {
     method: "PATCH",
@@ -106,7 +106,7 @@ export interface SendOptions {
 }
 
 export async function sendMessage(opts: SendOptions): Promise<void> {
-  const { message, conversationId, userId = "demo_user", signal } = opts
+  const { message, conversationId, userId = "me", signal } = opts
 
   const res = await fetch(`${BASE_URL}/chat`, {
     method: "POST",

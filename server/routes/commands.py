@@ -77,7 +77,7 @@ async def execute_command(req: CommandExecuteRequest, db: AsyncSession = Depends
 
     # ensure_conversation 真实签名：(db, user_id, conversation_id, user_input)
     if cmd == "new":
-        result = await ensure_conversation(db, "demo_user", None, "")
+        result = await ensure_conversation(db, "me", None, "")
         if isinstance(result, str):
             return CommandExecuteResponse(ok=False, error=result)
         await db.commit()

@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["akasha"])
 
 
-def _get_akasha_store(user_id: str = "demo_user") -> AkashaStore | None:
+def _get_akasha_store(user_id: str = "me") -> AkashaStore | None:
     """获取当前启用的 akasha provider 的 sidecar store。"""
     from lib.memory.builtins.akasha.config import resolve_akasha_db_path
 

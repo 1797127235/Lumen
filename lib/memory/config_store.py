@@ -31,6 +31,16 @@ def load_memory_provider_configs() -> list[MemoryProviderConfig]:
     return [MemoryProviderConfig(**item) for item in _ensure_list(raw)]
 
 
+def get_enabled_external_providers() -> list[MemoryProviderConfig]:
+    """返回所有 enabled=True 的外部 provider 配置。
+
+    设计约束：最多 1 个外部 provider 并存。
+    本函数供 API 路由在 create/update 时校验是否已有其他 enabled 配置。
+    builtin 不走 config，不在此列。
+    """
+    return [cfg for cfg in load_memory_provider_configs() if cfg.enabled]
+
+
 def save_memory_provider_configs(configs: list[MemoryProviderConfig]) -> None:
     """覆盖保存整个记忆 Provider 配置列表。"""
     data = {key: val for key, val in (("memory_providers", [cfg.model_dump() for cfg in configs]),) if val}

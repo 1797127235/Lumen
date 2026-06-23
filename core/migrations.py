@@ -25,7 +25,7 @@ async def migrate_sqlite(conn) -> None:
         # ── data_sources: 用户数据源连接（Phase 2b）──
         """CREATE TABLE IF NOT EXISTS data_sources (
             id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            user_id TEXT NOT NULL DEFAULT 'me',
             name TEXT NOT NULL,
             type TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
@@ -42,7 +42,7 @@ async def migrate_sqlite(conn) -> None:
         # ── external_items: 外部数据文档索引（Phase 2a/2b）──
         """CREATE TABLE IF NOT EXISTS external_items (
             id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            user_id TEXT NOT NULL DEFAULT 'me',
             data_source_id TEXT,
             connector_type TEXT,
             source_id TEXT NOT NULL,
@@ -62,7 +62,7 @@ async def migrate_sqlite(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_external_items_data_source ON external_items (data_source_id)",
         "CREATE INDEX IF NOT EXISTS ix_external_items_user ON external_items (user_id)",
         # 幂等加列（SQLite ALTER TABLE ADD COLUMN）
-        "ALTER TABLE external_items ADD COLUMN user_id TEXT NOT NULL DEFAULT 'demo_user'",
+        "ALTER TABLE external_items ADD COLUMN user_id TEXT NOT NULL DEFAULT 'me'",
         "ALTER TABLE external_items ADD COLUMN data_source_id TEXT",
         "ALTER TABLE external_items ADD COLUMN connector_type TEXT",
         "ALTER TABLE external_items ADD COLUMN external_id TEXT",
@@ -127,7 +127,7 @@ async def migrate_sqlite(conn) -> None:
         # ── Lumen 伙伴系统 ──
         """CREATE TABLE IF NOT EXISTS lumen_thoughts (
             id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            user_id TEXT NOT NULL DEFAULT 'me',
             content TEXT NOT NULL,
             source_event_ids TEXT,
             judge_score REAL,
@@ -141,7 +141,7 @@ async def migrate_sqlite(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_lumen_thoughts_user ON lumen_thoughts (user_id)",
         "CREATE INDEX IF NOT EXISTS ix_lumen_thoughts_sent ON lumen_thoughts (user_id, sent_at)",
         """CREATE TABLE IF NOT EXISTS lumen_state (
-            user_id TEXT NOT NULL DEFAULT 'demo_user',
+            user_id TEXT NOT NULL DEFAULT 'me',
             mood TEXT NOT NULL DEFAULT 'calm'
                 CHECK(mood IN ('calm','curious','tender','reflective','energized')),
             mood_intensity REAL DEFAULT 0.5,
@@ -152,7 +152,7 @@ async def migrate_sqlite(conn) -> None:
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id)
         )""",
-        "INSERT OR IGNORE INTO lumen_state (user_id, mood) VALUES ('demo_user', 'calm')",
+        "INSERT OR IGNORE INTO lumen_state (user_id, mood) VALUES ('me', 'calm')",
     ]:
         try:
             await conn.execute(text(sql))

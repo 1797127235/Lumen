@@ -28,14 +28,14 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
-    user_id: str = "demo_user"
+    user_id: str = "me"
     attachments: list[str] = []
 
 
 class ConversationUpdate(BaseModel):
     title: str | None = None
     is_pinned: bool | None = None
-    user_id: str = "demo_user"
+    user_id: str = "me"
 
 
 class ConversationSummary(BaseModel):
@@ -89,7 +89,7 @@ async def send_message(req: ChatRequest, request: Request):
 
 @router.get("/history", response_model=list[ConversationSummary])
 async def get_chat_history(
-    user_id: str = Query("demo_user"), limit: int = Query(20, le=100), db: AsyncSession = Depends(get_db)
+    user_id: str = Query("me"), limit: int = Query(20, le=100), db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
         select(Conversation)
@@ -130,7 +130,7 @@ async def get_chat_history(
 
 @router.get("/{conversation_id}", response_model=list[MessageItem])
 async def get_conversation_messages(
-    conversation_id: str, user_id: str = Query("demo_user"), db: AsyncSession = Depends(get_db)
+    conversation_id: str, user_id: str = Query("me"), db: AsyncSession = Depends(get_db)
 ):
     conv = await db.get(Conversation, conversation_id)
     if not conv:
@@ -155,9 +155,7 @@ async def get_conversation_messages(
 
 
 @router.delete("/{conversation_id}")
-async def delete_conversation(
-    conversation_id: str, user_id: str = Query("demo_user"), db: AsyncSession = Depends(get_db)
-):
+async def delete_conversation(conversation_id: str, user_id: str = Query("me"), db: AsyncSession = Depends(get_db)):
     conv = await db.get(Conversation, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")

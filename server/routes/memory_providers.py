@@ -19,6 +19,7 @@ from lib.memory import (
 )
 from lib.memory.config_store import (
     add_memory_provider_config,
+    get_enabled_external_providers,
     load_memory_provider_configs,
     remove_memory_provider_config,
     update_memory_provider_config,
@@ -103,13 +104,29 @@ async def list_installed_providers() -> list[InstalledProviderResponse]:
 
 @router.post("/memory/providers", response_model=MemoryProviderResponse)
 async def create_memory_provider(body: MemoryProviderCreate) -> MemoryProviderResponse:
-    """添加并保存一个 provider 配置。"""
+    """添加并保存一个 provider 配置。
+
+    设计约束：最多 1 个外部 provider 并存。
+    若新配置 enabled=True 且已有其他 enabled 配置，拒绝（需先禁用旧的）。
+    """
     discovered = discover_providers()
     if body.provider_type not in discovered:
         raise HTTPException(
             status_code=400,
             detail=f"未找到 provider 插件: {body.provider_type}",
         )
+
+    if body.enabled:
+        existing_enabled = get_enabled_external_providers()
+        # 允许覆盖同名（热重载场景），但拒绝已有不同名字的 enabled 配置
+        if any(c.name != body.name for c in existing_enabled):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "已有外部记忆 provider 处于启用状态（设计约束：最多 1 个）。"
+                    f"当前已启用：{[c.name for c in existing_enabled]}。请先禁用或删除现有 provider。"
+                ),
+            )
 
     config = MemoryProviderConfig(
         name=body.name,
@@ -123,7 +140,10 @@ async def create_memory_provider(body: MemoryProviderCreate) -> MemoryProviderRe
 
 @router.put("/memory/providers/{name}", response_model=MemoryProviderResponse)
 async def update_memory_provider(name: str, body: MemoryProviderUpdate) -> MemoryProviderResponse:
-    """更新 provider 配置。"""
+    """更新 provider 配置。
+
+    若本次更新会启用（enabled=True）且已有其他 enabled 的外部 provider，拒绝。
+    """
     patch: dict[str, Any] = {}
     if body.provider_type is not None:
         patch["provider_type"] = body.provider_type
@@ -131,6 +151,18 @@ async def update_memory_provider(name: str, body: MemoryProviderUpdate) -> Memor
         patch["enabled"] = body.enabled
     if body.config is not None:
         patch["config"] = body.config
+
+    # 启用前校验：是否已有其他 enabled 的外部 provider
+    if body.enabled is True:
+        existing_enabled = get_enabled_external_providers()
+        if any(c.name != name for c in existing_enabled):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "已有外部记忆 provider 处于启用状态（设计约束：最多 1 个）。"
+                    f"当前已启用：{[c.name for c in existing_enabled]}。请先禁用或删除现有 provider。"
+                ),
+            )
 
     updated = update_memory_provider_config(name, patch)
     if updated is None:
@@ -172,13 +204,33 @@ async def test_memory_provider(name: str) -> TestResponse:
 
 @router.post("/memory/providers/{name}/reload")
 async def reload_memory_provider(name: str) -> dict[str, Any]:
-    """重新加载 provider 实例。"""
+    """重新加载 provider 实例。
+
+    设计约束：最多 1 个外部 provider 并存。
+    reload 时若运行时已有其他外部 provider 实例（非本 name），拒绝。
+    """
     configs = load_memory_provider_configs()
     cfg = next((c for c in configs if c.name == name), None)
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"未找到 provider 配置: {name}")
 
     manager = get_memory_manager()
+
+    # reload 前检查运行时是否已有其他外部 provider 实例（防止 reload 引入第二个并存）
+    other_running = [
+        (p.instance_name or p.name)
+        for p in manager.providers
+        if p.name != "builtin" and (p.instance_name or p.name) != name
+    ]
+    if other_running and cfg.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "运行时已有其他外部 provider 实例（设计约束：最多 1 个）。"
+                f"当前运行：{other_running}。请先卸载或禁用。"
+            ),
+        )
+
     manager.remove_provider(name)
 
     if not cfg.enabled:

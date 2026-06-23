@@ -78,11 +78,11 @@ class MemoryManager:
         manager.add_provider(external_provider, instance_name="honcho-prod")
 
         # 会话启动时（按 chat_id 缓存）
-        system_prompt = base_prompt + await manager.build_system_prompt(user_id="demo_user")
+        system_prompt = base_prompt + await manager.build_system_prompt(user_id="me")
 
         # 每轮动态上下文
         context = await manager.build_context(
-            user_id="demo_user",
+            user_id="me",
             user_input="...",
             session_key="web:abc123",
         )
@@ -219,6 +219,11 @@ class MemoryManager:
 
         builtin 始终唯一；外部 provider 用 instance_name 区分，同名覆盖便于热重载。
         instance_name 为空时 fallback 到 provider.name。
+
+        设计约束：最多 1 个外部 provider 并存（软限制）。
+        本方法本身不强制此约束——约束在 startup（只启用第一个 enabled 配置）
+        和 memory_providers API（create/update/reload 校验）层强制。
+        本方法保留无限制注册能力，供单元测试和单实例热重载使用。
         """
         if provider.name == "builtin":
             assert isinstance(provider, BuiltinMemoryProvider)
