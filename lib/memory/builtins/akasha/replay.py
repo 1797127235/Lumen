@@ -199,7 +199,15 @@ class AkashaReplayRuntime:
         if current_key and activation_items:
             trigger = next((item.message for item in items if item.message.role == "user"), items[0].message)
             ts = parse_ts_unix(trigger.ts)
-            self._store.upsert_edges(activation_edge_updates(current_key, activation_items, ts))
+            self._store.upsert_edges(
+                activation_edge_updates(
+                    current_key,
+                    activation_items,
+                    ts,
+                    query_residual=1.0,
+                    reinforce_boost=1.0,
+                )
+            )
             self._store.insert_activation_events(_activation_events(trigger, activation_items))
         return current_key
 

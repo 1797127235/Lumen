@@ -20,6 +20,7 @@ from shared.logging import get_logger
 
 from .config import AkashaConfig, load_akasha_config, resolve_akasha_db_path
 from .core import (
+    DEFAULT_REINFORCE_BOOST,
     AkashaActivationSnapshot,
     AkashaCandidate,
     AkashaNode,
@@ -35,7 +36,9 @@ from .core import (
     graph_seed_keys_from_snapshot,
     idf_table_is_stale,
     load_idf_from_db,
+    local_residual,
     parse_turn_key,
+    reinforced_activation_items,
     set_idf_table,
     turn_key,
 )
@@ -108,6 +111,8 @@ class AkashaEngine:
         self._message_embeddings: dict[str, np.ndarray] = {}
         self._message_turn_keys: dict[str, str] = {}
         self._message_index = build_dense_message_index({})
+        self._pending_reinforce: dict[str, float] = {}
+        self._prev_activation: dict[str, list[AkashaCandidate]] = {}
         self._load_graph_cache()
         self._init_idf_table()
 
@@ -275,6 +280,10 @@ class AkashaEngine:
         """返回指定 session 的下一个 turn seq。"""
         return self._store.next_turn_seq(session_key)
 
+    def set_pending_reinforce(self, session_key: str, boost: float = DEFAULT_REINFORCE_BOOST) -> None:
+        """标记指定 session 的下一轮为 reinforce（通常由 reinforce_memory 工具调用）。"""
+        self._pending_reinforce[session_key] = max(1.0, float(boost))
+
     async def commit_turn(
         self,
         session_key: str,
@@ -290,6 +299,9 @@ class AkashaEngine:
 
         now_iso = datetime.now(UTC).isoformat()
         now_ts = datetime.now(UTC).timestamp()
+
+        # 取本轮 reinforce 标记（由 reinforce_memory 工具提前设置）
+        reinforce_boost = self._pending_reinforce.pop(session_key, 1.0)
 
         # embed user + assistant
         embeddings = await self._embedder.embed([user_msg, assistant_msg])
@@ -319,8 +331,10 @@ class AkashaEngine:
         )
 
         activation_candidates: list[AkashaCandidate] = []
+        query_residual = 1.0
         if prior_nodes:
             query_vec = np.array(user_emb, dtype=np.float32)
+            query_residual = self._compute_query_residual(query_vec, current_turn_key)
             graph_seed_keys = graph_seed_keys_from_snapshot(
                 query_vec,
                 prior_snapshot,
@@ -339,6 +353,14 @@ class AkashaEngine:
             )
             # 过滤掉当前 turn（理论上不会命中，但防御性处理）
             activation_candidates = [c for c in activation_candidates if c.key != current_turn_key]
+
+        # reinforce 时把上一轮激活也加回来，避免当前轮没命中就丢失强化目标
+        prev_items = self._prev_activation.get(session_key, [])
+        edge_items = reinforced_activation_items(
+            activation_candidates,
+            prev_items,
+            reinforce_boost,
+        )
 
         user_key = self._upsert_message(
             SourceMessage(
@@ -379,12 +401,36 @@ class AkashaEngine:
             self._message_index = build_dense_message_index(self._message_embeddings)
 
         # 写入共激活边并更新被激活旧节点状态
-        if activation_candidates and user_key:
-            edge_updates = activation_edge_updates(user_key, activation_candidates, now_ts)
+        if edge_items and user_key:
+            edge_updates = activation_edge_updates(
+                user_key,
+                edge_items,
+                now_ts,
+                query_residual=query_residual,
+                reinforce_boost=reinforce_boost,
+            )
             self._store.upsert_edges(edge_updates)
-            self._store.update_activation_batch(activation_updates(activation_candidates, prior_nodes, now_ts))
+            self._store.update_activation_batch(activation_updates(edge_items, prior_nodes, now_ts))
             # 刷新本地缓存以反映边和节点状态变化
             self._load_graph_cache()
+
+        # 记录本轮激活，供下一轮 reinforce 使用
+        if activation_candidates:
+            self._prev_activation[session_key] = list(activation_candidates)
+
+    def _compute_query_residual(self, query_vec: np.ndarray, current_key: str) -> float:
+        """ν_turn = 1 − max_{j<i} cos(query, prior_j)²；当前 turn 自身排除。"""
+        with self._lock:
+            embeddings = [
+                node.embedding for key, node in self._nodes.items() if key != current_key and node.embedding.size > 0
+            ]
+        if not embeddings:
+            return 1.0
+        prior = np.stack(embeddings).astype(np.float32)
+        norms = np.linalg.norm(prior, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        prior = prior / norms
+        return local_residual(query_vec, prior)
 
     def _upsert_message(self, message: SourceMessage, embedding: list[float]) -> str:
         """写入/更新单个消息节点。"""

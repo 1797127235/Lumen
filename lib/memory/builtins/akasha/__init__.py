@@ -124,7 +124,7 @@ class Provider(MemoryProvider):
             logger.warning("Akasha sync_turn 失败", error=str(exc))
 
     async def get_tool_schemas(self) -> list[dict]:
-        """暴露 akasha_recall 工具。"""
+        """暴露 akasha_recall 与 reinforce_memory 工具。"""
         return [
             {
                 "name": "akasha_recall",
@@ -144,17 +144,38 @@ class Provider(MemoryProvider):
                     },
                     "required": ["query"],
                 },
-            }
+            },
+            {
+                "name": "reinforce_memory",
+                "description": "显式强化下一轮写入的相关记忆（提升共激活边权重，抑制非激活突触以防止 hub 节点）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "boost": {
+                            "type": "number",
+                            "description": "强化倍数，>=1.0，默认 3.0",
+                            "default": 3.0,
+                        },
+                    },
+                    "required": [],
+                },
+            },
         ]
 
     async def handle_tool_call(self, tool_name: str, args: dict, **kwargs: Any) -> str:
-        """处理 akasha_recall 工具调用。"""
-        if tool_name != "akasha_recall":
-            return f'{{"error": "Tool {tool_name} not found"}}'
-        query = args.get("query", "")
+        """处理 akasha_recall / reinforce_memory 工具调用。"""
         session_id = kwargs.get("session_id", "")
-        text = await self.prefetch(query, session_id=session_id)
-        return text or "未找到相关记忆。"
+        if tool_name == "akasha_recall":
+            query = args.get("query", "")
+            text = await self.prefetch(query, session_id=session_id)
+            return text or "未找到相关记忆。"
+        if tool_name == "reinforce_memory":
+            if self._engine is None or not session_id:
+                return '{"error": "Akasha engine not initialized or session missing"}'
+            boost = float(args.get("boost", 3.0))
+            self._engine.set_pending_reinforce(session_id, boost=boost)
+            return f'{{"ok": true, "boost": {max(1.0, boost)}, "message": "下一轮记忆写入将强化相关连接"}}'
+        return f'{{"error": "Tool {tool_name} not found"}}'
 
     async def shutdown(self) -> None:
         if self._engine is not None:
