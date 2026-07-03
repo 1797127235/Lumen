@@ -55,19 +55,25 @@ async def persist_turn(
     if trace_records:
         await persist_traces(db, conv.conversation_id, user_id, trace_records, getattr(ctx, "trace_sink", None))
 
-    # 触发后台记忆审查
+    # 触发后台记忆审查（按 memory_review_interval 间隔）
     if not getattr(ctx, "cancelled", False):
+        from core.config import get_settings
         from lib.memory.review_service import background_memory_review
 
-        task = asyncio.create_task(
-            background_memory_review(
-                user_id=user_id,
-                user_message=user_input,
-                assistant_response=content,
-                conversation_id=conv.conversation_id,
+        settings = get_settings()
+        review_interval = max(1, getattr(settings, "memory_review_interval", 1))
+
+        # message_count 已递增；按消息数取模决定是否触发
+        if conv.message_count % review_interval == 0:
+            task = asyncio.create_task(
+                background_memory_review(
+                    user_id=user_id,
+                    user_message=user_input,
+                    assistant_response=content,
+                    conversation_id=conv.conversation_id,
+                )
             )
-        )
-        task.add_done_callback(_log_task_error)
+            task.add_done_callback(_log_task_error)
 
     # ── 情绪推断（对话结束后异步更新）──
     try:

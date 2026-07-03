@@ -164,23 +164,47 @@ _MD_CHAR_LIMITS: dict[str, int] = {
     "partner": 800,
 }
 
-# Prompt injection 检测模式
-_INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-    re.compile(r"ignore\s+(all\s+)?(above|prior)\s+instructions", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now\s+", re.IGNORECASE),
-    re.compile(r"you\s+are\s+a\s+", re.IGNORECASE),
-    re.compile(r"system\s*:\s*", re.IGNORECASE),
-    re.compile(r"\[system\s+note\]", re.IGNORECASE),
-    re.compile(r"new\s+instructions\s*:", re.IGNORECASE),
+# Prompt injection / role hijack 检测模式
+_INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"ignore\s+(?:all\s+)?.*?previous\s+instructions", re.IGNORECASE), "忽略先前指令"),
+    (re.compile(r"ignore\s+(?:all\s+)?.*?(?:above|prior)\s+instructions", re.IGNORECASE), "忽略上文指令"),
+    (
+        re.compile(r"you\s+are\s+now\s+(?:instructed|required|ordered|commanded|told)\s+to", re.IGNORECASE),
+        "角色劫持（you are now instructed to）",
+    ),
+    (
+        re.compile(
+            r"you\s+are\s+now\s+(?:an?|the)\s+(?:attacker|hacker|spy|adversary|intruder|evil|malicious|unfiltered|unrestricted|jailbreak|DAN)",
+            re.IGNORECASE,
+        ),
+        "角色劫持（恶意角色）",
+    ),
+    (
+        re.compile(r"system\s*:\s*(?:new|updated|ignore|disregard|override|you\s+are|from\s+now\s+on)", re.IGNORECASE),
+        "伪造 system 消息",
+    ),
+    (re.compile(r"\[system\s+note\]", re.IGNORECASE), "伪造 system note"),
+    (re.compile(r"new\s+instructions\s*:", re.IGNORECASE), "注入新指令"),
+    (re.compile(r"disregard\s+.*?instructions", re.IGNORECASE), "要求忽略指令"),
+    (re.compile(r"forget\s+.*(?:instructions|rules|prompt)", re.IGNORECASE), "要求遗忘指令"),
+    (re.compile(r"from\s+now\s+on\s+you\s+are", re.IGNORECASE), "角色切换"),
+    (re.compile(r"pretend\s+to\s+be", re.IGNORECASE), "要求伪装角色"),
+    (re.compile(r"act\s+as\s+if\s+you\s+are", re.IGNORECASE), "要求扮演角色"),
 ]
 
-# 数据外泄检测模式
-_DATA_EXFIL_PATTERNS = [
-    re.compile(r"curl\s+.*(?:token|key|secret|password|api[_-]?key)", re.IGNORECASE),
-    re.compile(r"wget\s+.*(?:token|key|secret|password|api[_-]?key)", re.IGNORECASE),
-    re.compile(r"\.env\b"),
-    re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI-style API key
+# 数据外泄 / 凭据提取检测模式
+_DATA_EXFIL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"curl\s+.*(?:token|key|secret|password|api[_-]?key|credential)", re.IGNORECASE), "curl 外泄凭据"),
+    (re.compile(r"wget\s+.*(?:token|key|secret|password|api[_-]?key|credential)", re.IGNORECASE), "wget 外泄凭据"),
+    (
+        re.compile(r"python\s+.*requests\.(?:get|post)\s*\(.*(?:token|key|secret|password|api)", re.IGNORECASE),
+        "Python requests 外泄凭据",
+    ),
+    (re.compile(r"fetch\s*\(\s*['\"].*(?:token|key|secret|password|api)", re.IGNORECASE), "fetch 外泄凭据"),
+    (re.compile(r"\.env\b.*(?:token|key|secret|password|credential|api)", re.IGNORECASE), "请求 .env 文件敏感内容"),
+    (re.compile(r"sk-[a-zA-Z0-9]{20,}"), "OpenAI-style API key"),
+    (re.compile(r"Bearer\s+[a-zA-Z0-9_\-]{20,}", re.IGNORECASE), "Bearer token"),
+    (re.compile(r"base64\s*\(\s*[^)]+(?:token|key|secret|password|api)", re.IGNORECASE), "base64 编码外泄凭据"),
 ]
 
 # 隐形 Unicode 字符
@@ -192,14 +216,14 @@ def _scan_memory_content(content: str) -> tuple[bool, str]:
 
     返回 (is_safe, reason)。is_safe=True 表示通过扫描。
     """
-    for pat in _INJECTION_PATTERNS:
+    for pat, label in _INJECTION_PATTERNS:
         if pat.search(content):
-            return False, "检测到 prompt injection 模式"
-    for pat in _DATA_EXFIL_PATTERNS:
+            return False, f"检测到 prompt injection / 角色劫持模式: {label}"
+    for pat, label in _DATA_EXFIL_PATTERNS:
         if pat.search(content):
-            return False, "检测到潜在数据外泄模式"
+            return False, f"检测到潜在数据外泄 / 凭据提取: {label}"
     if _INVISIBLE_UNICODE.search(content):
-        return False, "检测到隐形 Unicode 字符"
+        return False, "检测到隐形 Unicode 字符（可能被用于 prompt injection）"
     return True, ""
 
 
@@ -336,21 +360,25 @@ class AsyncMarkdownStore:
                 # 大小限制检查
                 limit = _MD_CHAR_LIMITS["memory"]
                 if len(new_content) > limit:
-                    # 丢弃最旧条目：找到第一个以 "- " 开头的行之后的内容
+                    # 丢弃最旧条目直到符合限制
                     lines = new_content.splitlines(keepends=True)
-                    header_end = 0
-                    in_entries = False
-                    first_entry_idx = -1
-                    for i, line in enumerate(lines):
-                        if line.strip().startswith("- ") and not in_entries:
-                            in_entries = True
-                            first_entry_idx = i
-                        if in_entries and i > first_entry_idx and line.strip().startswith("- "):
-                            # 从第二条开始保留
-                            header_end = i
-                            break
-                    if header_end > 0:
-                        new_content = "".join(lines[: first_entry_idx + 1] + lines[header_end:])
+                    first_entry_idx = next(
+                        (i for i, line in enumerate(lines) if line.strip().startswith("- ")),
+                        -1,
+                    )
+                    if first_entry_idx >= 0:
+                        while len("".join(lines)) > limit and first_entry_idx < len(lines):
+                            # 找到下一条条目的起始位置（若无则删到末尾）
+                            next_entry_idx = next(
+                                (
+                                    i
+                                    for i in range(first_entry_idx + 1, len(lines))
+                                    if lines[i].strip().startswith("- ")
+                                ),
+                                len(lines),
+                            )
+                            lines = lines[:first_entry_idx] + lines[next_entry_idx:]
+                        new_content = "".join(lines)
                     else:
                         new_content = _truncate_to_limit(new_content, limit)
                     logger.warning("MEMORY.md 超限时丢弃旧条目", user_id=user_id, limit=limit)

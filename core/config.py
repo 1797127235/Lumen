@@ -12,6 +12,10 @@ from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shared.logging import get_logger
+
+logger = get_logger(__name__)
+
 # ── 目录常量 ────────────────────────────────────────
 
 # 用户运行时数据目录（SQLite / Chroma / config.json）
@@ -84,6 +88,10 @@ class Settings(BaseSettings):
     semantic_dedup_enabled: bool = False
     semantic_dedup_default_threshold: float = 0.85
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
+
+    # ── 后台记忆审查 ──
+    # 每隔多少条消息触发一次后台审查。1 = 每条消息都审（默认，保持旧行为）；10 = 每 10 条消息审一次
+    memory_review_interval: int = 1
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -183,11 +191,26 @@ def apply_user_config(settings: Settings, user_config: dict[str, Any] | None = N
         "embedding_api_key",
         "embedding_base_url",
         "telegram_chat_id",
+        "memory_review_interval",
     )
 
     for key in _CONFIG_KEYS:
         val = cfg.get(key)
-        if val is not None and val != "" and getattr(settings, key, None) != val:
+        if val is None or val == "":
+            continue
+
+        # 类型校验/转换
+        if key == "memory_review_interval":
+            try:
+                val = int(val)
+            except (TypeError, ValueError):
+                logger.warning("memory_review_interval 配置无效，忽略", value=val)
+                continue
+            if val < 1:
+                logger.warning("memory_review_interval 必须 >= 1，忽略", value=val)
+                continue
+
+        if getattr(settings, key, None) != val:
             setattr(settings, key, val)
             # key 字段脱敏
             if "key" in key.lower():

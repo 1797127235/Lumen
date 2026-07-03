@@ -1,5 +1,8 @@
-"""Telegram Channel 模块。"""
+"""Telegram channel compatibility shim — re-exports the built-in provider."""
 
-from channels.telegram.channel import TelegramChannel
+from __future__ import annotations
 
-__all__ = ["TelegramChannel"]
+from channels.builtins.telegram import TelegramChannelProvider
+from channels.builtins.telegram.channel import TelegramChannel
+
+__all__ = ["TelegramChannel", "TelegramChannelProvider"]

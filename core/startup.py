@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -116,9 +115,9 @@ async def lifespan(app: FastAPI):
     # ═══════════════════════════════════════════════════════════
     #  新增：MessageBus + EventBus + Channels + AgentRunner
     # ═══════════════════════════════════════════════════════════
-    settings = get_settings()
-
-    from channels.web.web import WebChannel
+    from channels.config_store import load_channel_configs, migrate_legacy_channel_config
+    from channels.manager import ChannelManager
+    from channels.models import ChannelConfig
     from lib.bus.event_bus import EventBus
     from lib.bus.queue import MessageBus
     from lib.chat.agent_runner import AgentRunner
@@ -126,30 +125,29 @@ async def lifespan(app: FastAPI):
     bus = MessageBus()
     event_bus = EventBus()
 
-    # 启动 Channels（配置驱动）
-    channels = []
-    enable_web = os.getenv("LUMEN_ENABLE_WEB", "1") != "0"
+    # Channel 配置迁移（从旧 env/Settings 到 config.json["channels"]）
+    migrate_legacy_channel_config()
 
-    # WebChannel（配置驱动，默认启用）
-    if enable_web and getattr(settings, "enable_web", True):
-        web_channel = WebChannel(bus, event_bus)
-        await web_channel.start()
-        channels.append(web_channel)
+    # 启动 Channels（配置驱动 + 插件化）
+    channel_manager = ChannelManager(bus, event_bus)
+    channel_configs = load_channel_configs()
+
+    # 如果没有配置，默认启用 web channel（保证最小可启动）
+    if not channel_configs:
+        channel_configs = [
+            ChannelConfig(name="web", provider_type="web", enabled=True, config={}),
+        ]
+
+    channels = await channel_manager.start_channels(channel_configs)
+
+    # 把 web channel 暴露给 FastAPI 路由（取第一个 web 类型）
+    web_channel = next(
+        (c for c in channels if c.name == "web"),
+        None,
+    )
+    if web_channel is not None:
         app.state.web_channel = web_channel
-        logger.info("WebChannel enabled")
-
-    # TelegramChannel（TELEGRAM_BOT_TOKEN 存在时启用）
-    telegram_token = getattr(settings, "telegram_bot_token", None) or os.getenv("TELEGRAM_BOT_TOKEN")
-    if telegram_token:
-        from channels.telegram import TelegramChannel
-
-        tg_channel = TelegramChannel(telegram_token, bus, event_bus)
-        try:
-            await tg_channel.start()
-            channels.append(tg_channel)
-            logger.info("TelegramChannel enabled")
-        except Exception as e:
-            logger.error("TelegramChannel 启动失败（网络或 Token 问题），Web 端不受影响: %s", e)
+        logger.info("WebChannel exposed to HTTP routes")
 
     # CLI TUI 由 lumen.py 通过 --mode cli 管理，不在此处启动
     # 独立运行: cd lib/channels/cli && bun run dev
@@ -184,8 +182,7 @@ async def lifespan(app: FastAPI):
     await runner.stop()
     dispatch_task.cancel()
 
-    for channel in channels:
-        await channel.stop()
+    await channel_manager.stop_channels(channels)
 
     # 断开 MCP Servers
     with contextlib.suppress(Exception):

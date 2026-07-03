@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from core.config import get_settings
 from core.startup import lifespan
 from server.routes.akasha import router as akasha_router
+from server.routes.channels import router as channels_router
 from server.routes.chat import router as chat_router
 from server.routes.commands import router as commands_router
 from server.routes.config import router as config_router
@@ -52,6 +53,7 @@ app.include_router(config_router, prefix="/api")
 
 app.include_router(providers_router, prefix="/api")
 app.include_router(partner_router, prefix="/api")
+app.include_router(channels_router, prefix="/api")
 app.include_router(mcp_router)
 app.include_router(commands_router, prefix="/api")
 

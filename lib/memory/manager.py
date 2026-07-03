@@ -58,7 +58,7 @@ class MemoryManager:
     def add_provider(self, provider: MemoryProvider, *, instance_name: str = "") -> None:
         """注册 provider。
 
-        builtin 始终唯一；外部 provider 用 instance_name 区分，同名覆盖便于热重载。
+        builtin 始终唯一；外部 provider 最多一个，同名覆盖便于热重载。
         instance_name 为空时 fallback 到 provider.name。
         """
         if provider.name == "builtin":
@@ -70,6 +70,24 @@ class MemoryManager:
 
         key = instance_name or provider.name
         provider.instance_name = key
+
+        if key == "builtin":
+            logger.warning(
+                "外部 provider 不能使用 instance_name='builtin'，拒绝注册",
+                provider_type=provider.name,
+            )
+            return
+
+        # 最多一个外部 provider：如果已有外部 provider 且不是同名覆盖，则拒绝
+        existing_external = [name for name, p in self._providers.items() if p.name != "builtin"]
+        if existing_external and key not in self._providers:
+            logger.warning(
+                "已存在外部 memory provider，拒绝添加新的。" "Lumen 当前只支持一个外部 provider。",
+                existing=existing_external[0],
+                rejected=key,
+                provider_type=provider.name,
+            )
+            return
 
         # 同名覆盖（允许热重载）
         if key in self._providers:

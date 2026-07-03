@@ -47,7 +47,8 @@ def test_builtin_provider_always_present(manager):
     assert "builtin" in names
 
 
-def test_multiple_external_providers_allowed(manager):
+def test_only_one_external_provider_allowed(manager):
+    """Lumen 当前只支持一个外部 memory provider。"""
     p1 = FakeProvider("p1")
     p2 = FakeProvider("p2")
 
@@ -56,10 +57,11 @@ def test_multiple_external_providers_allowed(manager):
 
     names = [p.name for p in manager.providers]
     assert "p1" in names
-    assert "p2" in names
+    assert "p2" not in names
 
 
-def test_provider_override(manager):
+def test_provider_override_allowed(manager):
+    """同名覆盖允许（用于热重载）。"""
     p1 = FakeProvider("same")
     p2 = FakeProvider("same")
 
@@ -71,8 +73,8 @@ def test_provider_override(manager):
     assert providers[0] is p2
 
 
-def test_multiple_instances_of_same_type(manager):
-    """同名 provider type 用不同 instance_name 可以共存。"""
+def test_multiple_instances_of_same_type_rejected(manager):
+    """同名 provider type 用不同 instance_name 不能共存。"""
     p1 = FakeProvider("honcho")
     p2 = FakeProvider("honcho")
 
@@ -80,36 +82,19 @@ def test_multiple_instances_of_same_type(manager):
     manager.add_provider(p2, instance_name="honcho-dev")
 
     names = [p.display_name for p in manager.providers if p.name == "honcho"]
-    assert sorted(names) == ["honcho-dev", "honcho-prod"]
-
-    assert manager.get_provider("honcho-prod") is p1
-    assert manager.get_provider("honcho-dev") is p2
+    assert names == ["honcho-prod"]
+    assert manager.get_provider("honcho-dev") is None
 
 
-def test_on_memory_write_fanout(manager):
+async def test_on_memory_write_reaches_external_provider(manager):
     p1 = FakeProvider("p1")
-    p2 = FakeProvider("p2")
 
     manager.add_provider(p1)
-    manager.add_provider(p2)
-
-    # builtin 不应收到自己的写入事件；on_memory_write 内部已跳过 builtin
-    # 因此只有 p1, p2 收到
-
-
-async def test_on_memory_write_async(manager):
-    p1 = FakeProvider("p1")
-    p2 = FakeProvider("p2")
-
-    manager.add_provider(p1)
-    manager.add_provider(p2)
 
     await manager.on_memory_write("save", "memory", "test content", metadata={"user_id": "u1"})
 
     assert len(p1.writes) == 1
     assert p1.writes[0] == ("save", "memory", "test content", {"user_id": "u1"})
-    assert len(p2.writes) == 1
-    assert p2.writes[0] == ("save", "memory", "test content", {"user_id": "u1"})
 
 
 def test_remove_provider(manager):
