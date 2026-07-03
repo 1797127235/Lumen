@@ -1,7 +1,7 @@
 """MemoryManager — fan-out 编排器。
 
 进程级单例，维护内置 + 多个外部 provider，负责：
-- 上下文组装（L0 冻结快照 + L2 动态召回）
+- 上下文组装（L0 冻结快照 + L1 动态召回）
 - Provider 工具路由
 - 生命周期钩子转发
 - 写入镜像
@@ -130,7 +130,7 @@ class MemoryManager:
                 )
         return "\n\n".join(blocks)
 
-    # ── 动态上下文（L2） ──
+    # ── 动态上下文（L1） ──
 
     async def build_context(
         self,
@@ -139,11 +139,11 @@ class MemoryManager:
         *,
         session_key: str = "",
     ) -> str:
-        """每轮动态上下文：外部 provider prefetch（L2）+ 当前时间。
+        """每轮动态上下文：外部 provider prefetch（L1）+ 当前时间。
 
         以 <memory-context> 围栏注入，追加在消息序列里。
         不包含 about_you.md（L0 已在冻结 system prompt 里）；
-        L1 近期对话本就在消息历史中。
+        当前对话历史由 messages 承载。
         """
         parts: list[str] = []
 

@@ -132,7 +132,7 @@ class Provider(MemoryProvider):
             )
             return ""
 
-    # ── L2: 动态召回 ──
+    # ── L1: 动态召回 ──
 
     async def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
         """根据 query 从 Honcho 召回相关记忆上下文。"""

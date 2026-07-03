@@ -345,13 +345,12 @@ async def _build_context_frame(
 ) -> str:
     """构建 context frame（参照 akashic-agent）。
 
-    Phase 1 后只包含动态内容：日期、L1 近期对话、L2 外部召回、
-    skills、deferred hint。L0 + PARTNER.md 已移入 system prompt。
+    包含动态内容：日期、L1 外部召回、skills、deferred hint。
+    L0 + PARTNER.md 已移入 system prompt；当前对话历史由 messages 承载。
     """
     from datetime import datetime
 
     from lib.memory import get_memory_manager
-    from lib.memory.snapshot import build_recent_context
     from lib.tools.factory import build_deferred_tools_hint
 
     timestamp = datetime.now().strftime("%Y-%m-%d")
@@ -359,19 +358,11 @@ async def _build_context_frame(
 
     parts: list[str] = [f"当前日期：{timestamp}"]
 
-    # L1：近期对话上下文（snapshot.py 已退化为 L1-only）
-    try:
-        recent_ctx = await build_recent_context(user_id)
-        if recent_ctx.strip():
-            parts.append(f"# 近期相关对话\n\n{recent_ctx}")
-    except Exception:
-        logger.debug("build_recent_context failed", user_id=user_id)
-
     # Skills 内容
     if skills_frame.strip():
         parts.append(skills_frame)
 
-    # L2：外部 provider 动态召回
+    # L1：外部 provider 动态召回
     try:
         dynamic_ctx = await manager.build_context(
             user_id,

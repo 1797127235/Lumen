@@ -53,7 +53,7 @@ class MemoryProvider(ABC):
         return ""
 
     async def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """根据 query 预取相关记忆上下文（L2 动态召回）。"""
+        """根据 query 预取相关记忆上下文（L1 动态召回）。"""
         return ""
 
     async def queue_prefetch(self, query: str, *, session_id: str = "") -> None:  # noqa: B027

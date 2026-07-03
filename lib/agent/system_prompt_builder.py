@@ -2,7 +2,7 @@
 
 静态前缀（identity + rules + style + memory）作为稳定前缀，进入 KV cache。
 用户相关半稳定内容（L0 画像 + PARTNER.md）作为 context suffix，按 user 缓存。
-动态内容（skills / L2 / 日期）注入 context_frame（user message），不进入 system prompt。
+动态内容（skills / L1 / 日期）注入 context_frame（user message），不进入 system prompt。
 """
 
 from __future__ import annotations
@@ -259,7 +259,7 @@ def _evict_oldest_if_needed() -> None:
     logger.debug("system prompt cache evicted", key=oldest_key)
 
 
-# ── 文本工具（从 snapshot.py 迁移，避免跨模块依赖）────────────────────
+# ── 文本工具函数 ────────────────────────────────────────────────────
 
 
 def _strip_meta(text: str) -> str:

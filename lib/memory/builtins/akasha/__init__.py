@@ -84,7 +84,7 @@ class Provider(MemoryProvider):
         logger.info("Akasha engine 初始化完成", user_id=user_id, db_path=str(self._engine.db_path))
 
     async def system_prompt_block(self, **kwargs: Any) -> str:
-        """Akasha 不注入 L0，专注 L2 动态召回。"""
+        """Akasha 不注入 L0，专注 L1 动态召回。"""
         return ""
 
     async def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
