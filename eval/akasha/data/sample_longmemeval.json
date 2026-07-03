@@ -1,0 +1,89 @@
+[
+  {
+    "question_id": "sample_001",
+    "question_type": "single-session-preference",
+    "question": "我喜欢喝什么样的咖啡？",
+    "answer": "美式咖啡",
+    "question_date": "2026-01-02",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": ["2026-01-01"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "早上好"},
+        {"role": "assistant", "content": "早上好！今天打算做什么？"},
+        {"role": "user", "content": "我每天早上都要喝一杯美式咖啡，不然没精神"},
+        {"role": "assistant", "content": "美式咖啡确实提神，你是纯咖啡因党"},
+        {"role": "user", "content": "对，不喜欢加奶加糖"},
+        {"role": "assistant", "content": "明白了，纯粹口味"}
+      ]
+    ],
+    "answer_session_ids": ["s1"]
+  },
+  {
+    "question_id": "sample_002",
+    "question_type": "single-session-user",
+    "question": "我养了什么宠物？",
+    "answer": "金毛犬",
+    "question_date": "2026-01-03",
+    "haystack_session_ids": ["s2"],
+    "haystack_dates": ["2026-01-02"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "周末带狗去公园了"},
+        {"role": "assistant", "content": "什么品种的狗？"},
+        {"role": "user", "content": "一只金毛犬，今年三岁了"},
+        {"role": "assistant", "content": "金毛性格很好，很适合家庭养"},
+        {"role": "user", "content": "是啊，特别温顺"}
+      ]
+    ],
+    "answer_session_ids": ["s2"]
+  },
+  {
+    "question_id": "sample_003",
+    "question_type": "knowledge-update",
+    "question": "我现在住在哪个城市？",
+    "answer": "上海",
+    "question_date": "2026-02-01",
+    "haystack_session_ids": ["s3", "s4"],
+    "haystack_dates": ["2026-01-05", "2026-01-28"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "最近想换工作"},
+        {"role": "assistant", "content": "你目前在哪里工作？"},
+        {"role": "user", "content": "我在北京一家互联网公司"},
+        {"role": "assistant", "content": "北京机会确实多"}
+      ],
+      [
+        {"role": "user", "content": "我月底要搬家了"},
+        {"role": "assistant", "content": "搬去哪里？"},
+        {"role": "user", "content": "要去上海，新 offer 在上海"},
+        {"role": "assistant", "content": "恭喜，上海也适合互联网行业"}
+      ]
+    ],
+    "answer_session_ids": ["s4"]
+  },
+  {
+    "question_id": "sample_004",
+    "question_type": "multi-session",
+    "question": "我喜欢的户外活动是什么？",
+    "answer": "爬山",
+    "question_date": "2026-01-10",
+    "haystack_session_ids": ["s5", "s6"],
+    "haystack_dates": ["2026-01-06", "2026-01-09"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "这周末天气不错"},
+        {"role": "assistant", "content": "有计划出去吗？"},
+        {"role": "user", "content": "想去爬山，已经很久没动了"},
+        {"role": "assistant", "content": "爬山挺好的，锻炼身体"}
+      ],
+      [
+        {"role": "user", "content": "昨天去西湖走了走"},
+        {"role": "assistant", "content": "西湖风景怎么样？"},
+        {"role": "user", "content": "很漂亮，但人有点多"},
+        {"role": "assistant", "content": "节假日确实人多"}
+      ]
+    ],
+    "answer_session_ids": ["s5"]
+  }
+]

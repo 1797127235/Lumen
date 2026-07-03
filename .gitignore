@@ -62,6 +62,9 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Eval run outputs
+eval/akasha/results/
+
 # mypy
 .mypy_cache/
 
